@@ -40,13 +40,14 @@
 ```
 
 - **MCP server**：TypeScript `@modelcontextprotocol/sdk`，Streamable HTTP transport。依 2026-07-28 spec 作為 OAuth resource server（`/.well-known/oauth-protected-resource`、401 `WWW-Authenticate`、RFC 8707 audience validation）；Authorization Server 外包給公司 IdP。
-- **驗證路徑分兩步**：Phase 1 先用 Claude Code static per-user bearer（~0.5 天）驗證工具設計；同 Phase 內補 full OAuth + 公網 HTTPS 上 claude.ai/Desktop（~1.5–3 天）。
+- **驗證路徑分兩條線**：核心線（Phase 1a）用 Claude Code static per-user bearer 驗證工具設計，無外部依賴；平行線（Phase 1b）補 full OAuth + 公網 HTTPS 上 claude.ai/Desktop，依賴 IdP 與資安核可，延誤不阻擋後續 Phase（見 §11）。
 - **change-set service**：be2 後端無 draft 機制，自建一層。POC 用 SQLite，production 化換 Postgres。
-- **確認頁**：獨立輕量 web 頁（列 diff、備註、批准鈕）。批准動作發生在 MCP 邊界之外，符合 draft-only pattern。沿用 trellis-poc 已驗證的 Batch Wizard Step2–4 設計（diff、動態計數、prod 字串解鎖、結果儀表板）。
+- **確認頁**：獨立輕量 web 頁（列 diff、備註、批准鈕）。批准動作發生在 MCP 邊界之外，符合 draft-only pattern。沿用 trellis-poc 已驗證的 Batch Wizard Step2–4 設計（diff、動態計數、prod 字串解鎖、結果儀表板）。**確認頁有自己的 SSO 登入**（同公司 IdP web flow），批准當下才取得新鮮的 user token 執行寫入 — 任何 user bearer token 都不落地存放（change_sets 表只存變更內容，不存 token）。
 
 ## 3. 身份與授權
 
 - **Identity continuity**：員工在 Claude client 完成 OAuth（公司 IdP）→ MCP server 拿 user-scoped token → 對 be2 gateway 用該使用者身份呼叫（token exchange / on-behalf-of，Phase 0 與 gateway team 確認機制；寫入帶 `modify_user`）。全程不得退化成 service account。
+- **兩個獨立的認證情境，token 皆即取即用、不落地**：(a) MCP tool call — client OAuth token 隨請求進來，當場 exchange 打 gateway；(b) 確認頁批准 — 使用者在確認頁完成 web SSO，批准當下用該次 session 的新鮮 token 執行。change-set 資料庫永不儲存 bearer token，因此 24h 批准窗口與 token TTL（≤1h）解耦。
 - **API-UI 權限等價性**：Phase 0 盤點目標 endpoints 的 API 層授權是否完整（用 kk-graph-v2 查影響面 + 實測低權限帳號打 API 應得 403）。不足處列入 gateway/後端補齊清單，未補齊的 endpoint 不上 MCP。
 - **權限變更同步**：token TTL 短（≤1h）+ 每次 tool call 即時驗 token；離職/降權由 IdP revoke 生效。
 
@@ -56,7 +57,7 @@
 
 | 層級 | 工具 | 說明 | Phase |
 |------|------|------|-------|
-| L0 | `be2_find_products` | 依 oid 清單/關鍵字查商品名稱、狀態、上下架 | 1 |
+| L0 | `be2_find_products` | 依 oid 清單查商品名稱、狀態、上下架（Phase 1 僅 oid 精確查詢；關鍵字搜尋待 Phase 0 確認有搜尋 endpoint 才開） | 1 |
 | L0 | `be2_get_product_plans` | 商品方案清單 + 各方案上下架狀態（packages + package-configs 合併） | 1 |
 | L0 | `be2_get_inventory_settings` | 庫存/場次設定查詢 | 1 |
 | L2 | `be2_create_changeset` | `{layer, action_type, items, note}` → changeset_id + diff 預覽（rich context：名稱+現況+目標） | 2 |
@@ -69,6 +70,7 @@ Phase 3 不加新工具，擴充 `action_type`：`shelf_toggle` → `inventory_s
 
 - 資料模型：`change_sets(id, user, layer, action_type, items_json, note, status, created_at)` + `change_set_results(batch_id, before/after snapshots, per-item status, trace_id)`。
 - 狀態機：`draft → pending_approval → approved → executing → done/partial/failed`（+ `rejected`、`expired`，24h 未批准自動過期）。
+- **批准時重新驗證現況**：確認頁載入與按下批准時都重新抓 be2 live state 重算 diff——pending 期間若有其他人/排程改過目標欄位（live state ≠ 建立時 snapshot），該項標記 `stale` 並以新 diff 要求使用者重新確認，不得拿舊 payload 盲目覆寫。no-op 略過判斷一律以執行當下的 live state 為準。
 - 執行採 trellis-poc Batch Wizard 標準 contract：`Promise.allSettled` 隔離失敗、已在目標狀態自動略過、per-item 錯誤 + trace id、結果可下載。
 - 批准人 = change-set 建立者本人（POC）；production 化可加第二人複核選項。
 
@@ -76,7 +78,12 @@ Phase 3 不加新工具，擴充 `action_type`：`shelf_toggle` → `inventory_s
 
 - **Rate amplification**：MCP server middleware 做 per-user + per-session 呼叫預算（如每 session 100 次 read、10 個 change-set/日），超額回 actionable error。
 - **Confused deputy**：MCP server 自身無高權 be2 帳號，一切用使用者 token — 低權使用者打高權 endpoint 得到 be2 原生 403。
-- **Prompt injection**：工具回傳的商品名稱/描述標示為 untrusted data（回傳 envelope 註明 `data_origin: be2_content`）；change-set 建立參數必須來自使用者訊息語境，工具回傳內容不得直接觸發寫入工具（eval 涵蓋此情境）。
+- **Prompt injection（縱深防禦，不只靠標示）**：
+  1. 工具回傳的商品名稱/描述標示為 untrusted data（回傳 envelope 註明 `data_origin: be2_content`）。
+  2. **Server-side scope binding**：`be2_create_changeset` 的 `items` 必須是本 session 內 L0 read tools 實際查詢過的 oid 子集（server 端記錄 session 已讀 oid 集合並驗證），拒絕未經查詢就出現的 oid — 被注入的指令無法憑空對任意商品建 change-set。
+  3. 單一 change-set 上限（如 200 items），超過需拆批。
+  4. 最終 backstop：人在確認頁看到含名稱與 diff 的完整清單才批准。
+  5. eval 涵蓋「工具回傳內容埋指令誘導建立 change-set」情境。
 
 ## 7. 可觀測性與稽核
 
@@ -116,7 +123,8 @@ Phase 3 不加新工具，擴充 `action_type`：`shelf_toggle` → `inventory_s
 | Phase | 內容 | 交付物 | 估時 |
 |-------|------|--------|------|
 | **0 盤點** | endpoint/權限等價性盤點（kk-graph-v2 + 低權帳號實測）、與 gateway team 確認 token exchange、IdP OAuth app 申請、工具清單 spec review（agy 交叉審） | 盤點報告 + 定版工具清單 | 3–5 天 |
-| **1 L0 唯讀** | MCP server + 3 個 read tools + OTel + 稽核 + rate budget；先 Claude Code bearer 驗證，再補 full OAuth 上 claude.ai/Desktop；agent eval 骨架進 CI | 員工可用 agent 查商品/方案/庫存狀態 | 1–2 週 |
+| **1a L0 唯讀（核心線）** | MCP server + 3 個 read tools + OTel + 稽核 + rate budget；Claude Code static per-user bearer（無外部依賴，先驗證工具設計與 eval）；agent eval 骨架進 CI | 先導使用者（技術同仁）可用 agent 查商品/方案/庫存狀態 | 1–2 週 |
+| **1b remote OAuth（平行線）** | full OAuth 2.1 + 公網 HTTPS ingress，上 claude.ai/Desktop。依賴 IdP 整合與資安核可 — **延誤不阻擋 Phase 2**（Phase 2 可先在 bearer 路徑交付） | 一般員工從 claude.ai/Desktop 連上 | 1.5–3 天（外部依賴解除後） |
 | **2 L2 change-set（上下架）** | change-set service + 確認頁 + `be2_create_changeset`（僅 `shelf_toggle`）+ before/after 稽核 + injection eval | 員工可用 agent 批次上下架（人批准生效），SIT 驗證後上 prod | 2–3 週 |
 | **3 L3 擴充+硬化** | `action_type` 擴充場次→庫存→價格（逐個過 review + eval）、告警、eval 全量進 CI、治理文件定版 | 三類批次任務全覆蓋 | 2–3 週 |
 
@@ -124,7 +132,9 @@ Phase 3 不加新工具，擴充 `action_type`：`shelf_toggle` → `inventory_s
 
 ## 12. 風險與待辦確認
 
-1. **token exchange 機制**：gateway 是否支援 on-behalf-of / 可接受 IdP token 換 be2 JWT — Phase 0 最大不確定性，若不支援需 gateway team 排程支援，Phase 1 前必須解。
+1. **token exchange 機制**：gateway 是否支援 on-behalf-of / 可接受 IdP token 換 be2 JWT — Phase 0 最大不確定性，若不支援需 gateway team 排程支援，Phase 1b 前必須解。Phase 1a 過渡做法：沿用 trellis-poc 驗證過的 user-bind（先導使用者以自己的 be2 帳號登入取得 user JWT，server 端保管、到期重 bind）— 仍是 user-scoped，不是 service account。
 2. **API-UI 權限等價性**：若盤點發現 API 層授權缺口且後端短期無法補，該 endpoint 延後上 MCP（不以 MCP 層權限檢查代替）。
 3. **claude.ai custom connector 公網需求**：MCP server 需公網 HTTPS，需資安核可的 ingress 方案（Phase 0 確認）。
 4. **確認頁 vs be2 UI 深連結**：本設計採獨立確認頁；若 be2 team 願意原生支援 change-set 批准介面，Phase 3 後可遷移。
+
+<!-- agy-peer-reviewed: 2026-08-06T16:11:09Z rounds=2 verdict=approved -->
