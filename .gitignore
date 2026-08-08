@@ -1,0 +1,17 @@
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Node / TS (be2-mcp server)
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# Logs / OS
+*.log
+.DS_Store
+
+# Playwright / scratch
+.playwright-mcp/
