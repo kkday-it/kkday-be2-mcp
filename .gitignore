@@ -15,3 +15,8 @@ build/
 
 # Playwright / scratch
 .playwright-mcp/
+.superpowers/
+
+# Data and test fixtures
+data/
+tests/fixtures/*.local.json
