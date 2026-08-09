@@ -46,3 +46,4 @@
 - `eval` — 跑 agent-eval 案例（需 `ANTHROPIC_API_KEY`；沒設會 SKIP，不算失敗）。
 - `bootstrap-user` — pilot 使用者登入 auth-service 換 be2 token，存進 server 端 SQLite store，印出一次性的 static bearer 供 `claude mcp add` 用（見 `docs/be2-mcp/phase1a-runbook.md`）。
 - `probe-sit` — 手動打 SIT `be2-220` 抓真實 endpoint 回應形狀，寫成 sanitized fixtures（絕不寫入 token）。
+- `probe-sit-write` — 手動、可逆地打 SIT `be2-220` 的 write endpoint（`scripts/probe-sit-write.ts`），解 `modify_user` 來源、merge-vs-replace、必填欄位；結果見 `docs/be2-mcp/sit-write-contracts.md`。**永不進 CI**，且需可寫帳號才能跑到底（目前 `.env` 帳號在寫入端點回 403，見該文件 blocker）。

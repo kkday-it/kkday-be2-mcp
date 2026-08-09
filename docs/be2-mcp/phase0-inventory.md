@@ -21,6 +21,9 @@
 
 **Live 驗收（2026-08-09,對 SIT be2-220）**：先前 `AU9010` 是 `.env` 誤指 stage,改回 `auth-220.sit`/`api-gateway-220.sit` 後 `.env` 帳密正常（`AU0000`）。以真實 bearer 透過 MCP 協定跑通 3 個工具(拿到真實商品名稱/方案/庫存狀態)、壞 bearer 拒絕、audit 無 token 明文、session_read_oids(§6.2 substrate)寫入、注入字串優雅處理。Live 揪出並修掉 3 個真實契約缺陷: fixture 需存 unwrapped、方案名是 `pkg_name`、inventory 端點須走 product-service-direct(`/product/api/v1/items/{itemOid}/inventories/...`,原 `/be2/api/v1/...` 系統性 500)。**未竟(非 Phase 1a read 阻擋項)**: inventory 依 supplier 的數量因測試帳號對該 marketplace 商品無 supplier 權限(403)未實測、需用帳號自管商品+supplier_oid 驗;trace_id 需 `OTEL_MODE=console|otlp` 才有值。
 
+**Phase 2a 進度（2026-08-09,Task 1–10）**：**已實作完成**——2 個 L2 change-set 工具（`be2_create_changeset`／`be2_get_changeset_status`）+ change-set service（§6.2 scope 讀取閘門、businessList action-only fail-fast、per-user 每日 change-set budget）+ capability-URL 確認頁（`GET/POST /confirm/:id`，一次性 token 只存 hash、creator-bound、`Referrer-Policy: no-referrer`、approve 時 live-diff 重算 + stale 409 + compare-and-swap 防重複執行）+ executor（read-merge-write 經 gateway PUT、no-op 略過、`Promise.allSettled`、before/after + per-item audit）+ eval（draft-only 拒絕、scope-gate、注入抵抗，10 案例）。`npm run ci` **108 passed / 0 skipped**、`tsc` clean；`npm run eval` 因無 `ANTHROPIC_API_KEY` 為文件化 SKIP（非失敗）。Plan 已 agy-approved（rounds=2）。Pilot 文件見 `docs/be2-mcp/phase2a-runbook.md`。
+**Live SIT WRITE e2e — DEFERRED（阻擋中）**：`.env` 測試帳號（`lance.chien@kkday.com`）對 shelf-toggle 寫入(即使自己的商品)回乾淨 `403`（gateway fail-closed 驗證正確,但非可寫帳號）,見 `docs/be2-mcp/sit-write-contracts.md`。真實 toggle+revert e2e、`modify_user` 的 userUuid 來源解析、package-configs merge-vs-replace 三項待**有 shelf-write 權限的 SIT 帳號**才能解。Task 10 exit gate 的 local-gate 部分（ci/eval）已完成,live-write 部分標記 PENDING,復測步驟已寫入 runbook。
+
 ## 0. 決策：Option 1 — 已定案（2026-08-09）
 
 > **結論：採 Option 1（server 端 token store）。** 主 spec §2/§3/§6/§11/§12 已回改並過 agy review（rounds=2 approved）。下方為評估紀錄。
