@@ -35,6 +35,10 @@ describe('computeShelfDiff', () => {
   it('throws DiffError when a product read returns an error (never silently undefined)', async () => {
     const boom = Object.assign(new Error('403'), { code: 'FORBIDDEN', status: 403 })
     const c = ctx({ '/products/bad/info': boom, '/product-configs/bad/switch': boom })
-    await expect(computeShelfDiff('shelf_toggle_product', [{ prod_oid: 'bad', target_is_active: false }], c)).rejects.toBeInstanceOf(DiffError)
+    const err = await computeShelfDiff('shelf_toggle_product', [{ prod_oid: 'bad', target_is_active: false }], c).catch(e => e)
+    expect(err).toBeInstanceOf(DiffError)
+    // Minor fix: DiffError carries a machine-readable code so toEnvelopeError surfaces it
+    // (previously `code` was undefined on the envelope error).
+    expect(err.code).toBe('DIFF_READ_FAILED')
   })
 })

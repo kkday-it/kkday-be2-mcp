@@ -21,6 +21,7 @@ import { inventorySettingsTool } from '../tools/inventorySettings.js'
 import { createChangesetTool, getChangesetStatusTool } from '../changeset/tools.js'
 import type { ToolDef } from '../tools/types.js'
 import type { L2ToolDef } from './l2Context.js'
+import { AppError } from '../errors.js'
 
 export interface ServerDeps { config: Config; db: Database.Database }
 
@@ -37,7 +38,22 @@ const L2_TOOLS: L2ToolDef[] = [createChangesetTool, getChangesetStatusTool]
 // decodes the JWT and returns `platformId` (right UUID *format*, wrong *value* — it is NOT the
 // user's be2 userUuid) purely so the executor has a syntactically valid string to send. DO NOT
 // treat this as correct; wire the real resolver before any live write path is used.
-function modifyUserFromPlaceholder(accessToken: string): string {
+// Fix 4: THROW by default instead of silently returning a wrong value. Writes are 403-blocked on
+// SIT right now anyway (no write-capable account, see Task 1), so this can only ever fire in a
+// dev/test context — but if a write-capable account is enrolled later without the real userUuid
+// resolver wired in, this turns "silently attribute the write to the wrong be2 user" into a loud,
+// documented failure instead. executeChangeSet (src/changeset/executor.ts) already has a
+// stuck-state guard around the call site (modifyUserFrom is invoked inside the same try block as
+// getFreshByHash, right after it) that catches this throw, marks the change-set 'failed' (not
+// stuck in 'executing'), audits it, and rethrows — see tests/changesetExecutor.test.ts.
+export function modifyUserFromPlaceholder(accessToken: string): string {
+  if (process.env.BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER !== '1') {
+    throw new AppError(
+      'MODIFY_USER_UNRESOLVED',
+      'modify_user resolver not wired (see docs/be2-mcp/sit-write-contracts.md); set BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER=1 to allow the dev placeholder',
+      500,
+    )
+  }
   const parts = accessToken.split('.')
   if (parts.length !== 3) return 'unknown'
   try {
@@ -65,6 +81,10 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     genId: randomUUID,
     genToken: () => randomBytes(24).toString('hex'),
     now: Date.now,
+    // Fix 1: the confirm_url (embedding the raw one-time approval token) never reaches the tool
+    // response / the model's context — it is printed to the be2-mcp SERVER's own stdout, which
+    // only the human running `npm run dev` sees. The agent has no way to read this terminal.
+    emitConfirmUrl: (id, url) => { console.log(`[be2-mcp] change-set ${id} awaiting approval: ${url}`) },
   }
 
   const transports = new Map<string, StreamableHTTPServerTransport>()

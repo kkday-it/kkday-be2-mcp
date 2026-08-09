@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { openDb } from '../src/store/db.js'
 import { ChangeSetStore } from '../src/changeset/store.js'
 import { ReadOidStore } from '../src/store/readOidStore.js'
@@ -7,7 +7,7 @@ import { createChangesetTool, businessListAllowsAction } from '../src/changeset/
 import type { L2ToolContext } from '../src/server/l2Context.js'
 import { z } from 'zod'
 
-function mkCtx(over: Partial<L2ToolContext> = {}): { ctx: L2ToolContext; store: ChangeSetStore; readOids: ReadOidStore } {
+function mkCtx(over: Partial<L2ToolContext> = {}): { ctx: L2ToolContext; store: ChangeSetStore; readOids: ReadOidStore; emitConfirmUrl: ReturnType<typeof vi.fn> } {
   const db = openDb(':memory:')
   const store = new ChangeSetStore(db, { now: () => 1000 })
   const readOids = new ReadOidStore(db, { now: () => 1000 })
@@ -17,12 +17,14 @@ function mkCtx(over: Partial<L2ToolContext> = {}): { ctx: L2ToolContext; store: 
     if (p.includes('/switch')) return { is_active: true }
     throw new Error(`unexpected ${p}`)
   } } as never
+  const emitConfirmUrl = vi.fn()
   const ctx: L2ToolContext = {
     gateway, accessToken: 'fake', userLabel: 'p@kkday.com', sessionId: 's1', bearerHash: 'bh',
-    businessList: [{ action: 'product_switch' }], readOids, changeSets: store, rateBudget,
-    baseUrl: 'http://127.0.0.1:8787', genId: () => 'cs1', genToken: () => 'tok-123', now: () => 1000, ...over,
+    businessList: ['product.product-sale-status.update'], readOids, changeSets: store, rateBudget,
+    baseUrl: 'http://127.0.0.1:8787', genId: () => 'cs1', genToken: () => 'tok-123', now: () => 1000,
+    emitConfirmUrl, ...over,
   }
-  return { ctx, store, readOids }
+  return { ctx, store, readOids, emitConfirmUrl }
 }
 
 describe('be2_create_changeset', () => {
@@ -37,14 +39,19 @@ describe('be2_create_changeset', () => {
     expect(env.errors[0]?.code).toBe('SCOPE_NOT_READ')
     expect(env.items).toEqual([])
   })
-  it('builds a pending change-set with diff + confirm_url + diff_version when oid was read', async () => {
-    const { ctx, store, readOids } = mkCtx()
+  it('builds a pending change-set with diff, WITHOUT confirm_url/token/diff_version in the tool response (Fix 1: token out-of-band)', async () => {
+    const { ctx, store, readOids, emitConfirmUrl } = mkCtx()
     readOids.record('s1', ['p1'])
     const env = await createChangesetTool.handler({ action_type: 'shelf_toggle_product', items: [{ prod_oid: 'p1', target_is_active: false }], note: 'n' }, ctx)
     const item = env.items[0] as Record<string, unknown>
     expect(item.changeset_id).toBe('cs1')
-    expect(item.confirm_url).toContain('http://127.0.0.1:8787/confirm/cs1?token=tok-123')
-    expect(item.diff_version).toBeDefined()
+    expect(item.status).toBe('pending_approval')
+    // The one-time approval token must never reach the model's context (agent has Bash/curl on
+    // loopback and could self-approve) — assert it is absent in every shape it could leak as.
+    expect(item).not.toHaveProperty('confirm_url')
+    expect(item).not.toHaveProperty('diff_version')
+    expect(item).not.toHaveProperty('token')
+    expect(JSON.stringify(item)).not.toContain('tok-123')
     const diff = (item.diff as { items: Array<Record<string, unknown>> }).items[0]
     expect(diff).toMatchObject({ prod_oid: 'p1', name: 'Prod A', current_is_active: true, target_is_active: false, no_op: false })
     const rec = store.get('cs1')!
@@ -52,6 +59,10 @@ describe('be2_create_changeset', () => {
     expect(rec.creatorLabel).toBe('p@kkday.com')
     expect(rec.approvalTokenHash).toBe(ChangeSetStore.hashToken('tok-123'))   // raw token NOT stored
     expect(env.data_origin).toBe('be2_content')
+    // The token is delivered out-of-band to the human via the injected emitConfirmUrl (wired to
+    // server stdout in app.ts) — never through the tool response the agent reads.
+    expect(emitConfirmUrl).toHaveBeenCalledTimes(1)
+    expect(emitConfirmUrl).toHaveBeenCalledWith('cs1', 'http://127.0.0.1:8787/confirm/cs1?token=tok-123')
   })
   it('businessList fail-fast blocks an action the user cannot do', async () => {
     const { ctx, readOids } = mkCtx({ businessList: [] })

@@ -5,11 +5,11 @@ import { computeShelfDiff, diffVersionHash } from './diff.js'
 import { makeEnvelope, toEnvelopeError } from '../tools/envelope.js'
 import type { ActionType, ChangeSetItem } from './types.js'
 
-// action_type -> businessList action code(s). Adjust the codes to the real businessList
-// shape after Task 1 (Phase 0 noted businessList = action list). Empty businessList = deny.
+// action_type -> businessList action code(s). businessList is 666 dot-notation strings
+// (e.g. "product.product-sale-status.update"), verified live against SIT be2-220.
 const ACTION_CODES: Record<ActionType, string[]> = {
-  shelf_toggle_product: ['product_switch', 'product_active'],
-  shelf_toggle_plan: ['package_config', 'package_switch'],
+  shelf_toggle_product: ['product.product-sale-status.update'],
+  shelf_toggle_plan: ['product.product-sale-status.update', 'product.bundle-package-sale-status.update'],
 }
 
 export function businessListAllowsAction(businessList: unknown[], actionType: ActionType): boolean {
@@ -73,11 +73,13 @@ export const createChangesetTool: L2ToolDef = {
         createdAt: ctx.now(),
       })
       const readOidsOut = [...new Set(items.flatMap(i => [i.prod_oid, i.pkg_oid].filter((x): x is string => !!x)))]
+      // Fix 1: the confirm_url (and the raw token it embeds) must NOT enter the model's context —
+      // deliver it out-of-band to the human instead. The tool response carries only the
+      // changeset_id, status, and diff (data for the agent to summarize to the human in chat).
+      ctx.emitConfirmUrl(id, `${ctx.baseUrl}/confirm/${id}?token=${token}`)
       return makeEnvelope([{
         changeset_id: id,
         status: 'pending_approval',
-        confirm_url: `${ctx.baseUrl}/confirm/${id}?token=${token}`,
-        diff_version: diffVersion,
         diff: { items: diff },
       }], [], readOidsOut)
     } catch (e) {

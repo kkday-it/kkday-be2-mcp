@@ -78,6 +78,16 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     // a 409 and never touches the gateway. This is what guarantees execute-exactly-once.
     const won = deps.changeSets.casStatus(rec.id, 'pending_approval', 'approved', deps.now())
     if (!won) { res.status(409).send('已被處理或已過期'); return }
+    // Fix 2: audit the human DECISION itself (governance event "human approved change-set X at
+    // T"), separate from the per-item audit rows executeChangeSet writes under tool=
+    // 'changeset.execute'. Without this, reject wrote zero audit rows and approve's decision
+    // moment had no trail distinct from the resulting writes.
+    deps.audit.record({
+      userLabel: rec.creatorLabel, sessionId: rec.sessionId,
+      clientInfo: 'confirm-page:' + String(req.headers['user-agent'] ?? '').slice(0, 80),
+      tool: 'changeset.approve', params: { changeset_id: rec.id, ip: req.ip },
+      status: 'ok', traceId: 'n/a', durationMs: 0,
+    })
     const out = await executeChangeSet(deps, rec.id)
     res.status(200).send(`<!doctype html><meta charset=utf-8><h1>執行結果:${esc(out.status)}</h1><pre>${esc(JSON.stringify(out.results, null, 2))}</pre>`)
   }))
@@ -90,6 +100,13 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     // rejecting a change-set that has already been approved/executed (or rejected) concurrently.
     const won = deps.changeSets.casStatus(rec.id, 'pending_approval', 'rejected', deps.now())
     if (!won) { res.status(409).send('已被處理或已過期'); return }
+    // Fix 2: same governance-event audit as approve, above.
+    deps.audit.record({
+      userLabel: rec.creatorLabel, sessionId: rec.sessionId,
+      clientInfo: 'confirm-page:' + String(req.headers['user-agent'] ?? '').slice(0, 80),
+      tool: 'changeset.reject', params: { changeset_id: rec.id, ip: req.ip },
+      status: 'ok', traceId: 'n/a', durationMs: 0,
+    })
     res.status(200).send('rejected')
   }))
   return r

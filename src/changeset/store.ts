@@ -90,7 +90,7 @@ export class ChangeSetStore {
   }
 
   getResults(id: string): ItemResult[] {
-    const rows = this.db.prepare('SELECT * FROM change_set_results WHERE changeset_id = ?').all(id) as Array<Record<string, unknown>>
+    const rows = this.db.prepare('SELECT * FROM change_set_results WHERE changeset_id = ? ORDER BY item_key').all(id) as Array<Record<string, unknown>>
     return rows.map(r => ({
       item_key: r.item_key as string,
       status: r.status as ItemResult['status'],

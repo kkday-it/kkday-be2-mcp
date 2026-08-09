@@ -20,9 +20,9 @@ function seed(store: ChangeSetStore, current: boolean, target: boolean) {
   return token
 }
 
-let server: Server, base: string, store: ChangeSetStore, live: { is_active: boolean }, putCalls: number
+let server: Server, base: string, store: ChangeSetStore, db: ReturnType<typeof openDb>, live: { is_active: boolean }, putCalls: number
 beforeEach(async () => {
-  const db = openDb(':memory:'); store = new ChangeSetStore(db, { now: () => 1000 }); live = { is_active: true }; putCalls = 0
+  db = openDb(':memory:'); store = new ChangeSetStore(db, { now: () => 1000 }); live = { is_active: true }; putCalls = 0
   const gateway = {
     // Delay on the live-state read inside liveDiff() — this is what widens the race window between
     // a request's initial `status === 'pending_approval'` check and its eventual status-transition
@@ -71,6 +71,26 @@ describe('confirm routes', () => {
     const token = seed(store, true, false)
     await http(base, 'POST', '/confirm/cs1/reject', { token })
     expect(store.get('cs1')!.status).toBe('rejected')
+  })
+
+  it('approve writes a route-level audit row for the human DECISION (Fix 2)', async () => {
+    const token = seed(store, true, false)
+    const g = await http(base, 'GET', `/confirm/cs1?token=${token}`)
+    const dv = /data-diff-version="([^"]+)"/.exec(g.text)![1]
+    await http(base, 'POST', '/confirm/cs1/approve', { token, diff_version: dv })
+    const rows = new AuditLog(db).recent()
+    const decision = rows.find(r => r.tool === 'changeset.approve')
+    expect(decision).toMatchObject({ userLabel: 'owner@kkday.com', status: 'ok' })
+    expect((decision!.params as { changeset_id?: string }).changeset_id).toBe('cs1')
+  })
+
+  it('reject writes a route-level audit row for the human DECISION (Fix 2)', async () => {
+    const token = seed(store, true, false)
+    await http(base, 'POST', '/confirm/cs1/reject', { token })
+    const rows = new AuditLog(db).recent()
+    const decision = rows.find(r => r.tool === 'changeset.reject')
+    expect(decision).toMatchObject({ userLabel: 'owner@kkday.com', status: 'ok' })
+    expect((decision!.params as { changeset_id?: string }).changeset_id).toBe('cs1')
   })
 
   it('double-approve is exactly-once: concurrent approves fire the gateway write only once', async () => {

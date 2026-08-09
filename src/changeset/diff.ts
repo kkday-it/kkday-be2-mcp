@@ -17,6 +17,9 @@ export function diffVersionHash(diff: DiffItem[]): string {
 // Throws DiffError if any requested oid could not be read (403/500/invalid) or resolved no
 // current state — we must NOT silently stage a change with current_is_active: undefined.
 export class DiffError extends Error {
+  // Machine-readable code so toEnvelopeError (src/tools/envelope.ts) surfaces something other
+  // than `undefined` for `code` on the resulting envelope error.
+  public code = 'DIFF_READ_FAILED'
   constructor(public keys: string[], message: string) {
     super(message)
   }

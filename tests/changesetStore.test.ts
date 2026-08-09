@@ -43,6 +43,16 @@ describe('ChangeSetStore', () => {
     s.recordResults('cs1', [{ item_key: '1', status: 'done', before: { is_active: true }, after: { is_active: false }, trace_id: 'tr' }])
     expect(s.getResults('cs1')).toEqual([{ item_key: '1', status: 'done', before: { is_active: true }, after: { is_active: false }, trace_id: 'tr', error_code: undefined, error_message: undefined }])
   })
+  it('getResults returns rows ordered by item_key regardless of insert order', () => {
+    const s = new ChangeSetStore(openDb(':memory:'), { now: () => 1000 })
+    s.create(rec())
+    s.recordResults('cs1', [
+      { item_key: 'z-last', status: 'done', trace_id: 'tr' },
+      { item_key: 'a-first', status: 'done', trace_id: 'tr' },
+      { item_key: 'm-mid', status: 'done', trace_id: 'tr' },
+    ])
+    expect(s.getResults('cs1').map(r => r.item_key)).toEqual(['a-first', 'm-mid', 'z-last'])
+  })
   it('hashToken is sha256 hex and stable', () => {
     expect(ChangeSetStore.hashToken('x')).toMatch(/^[0-9a-f]{64}$/)
     expect(ChangeSetStore.hashToken('x')).toBe(ChangeSetStore.hashToken('x'))

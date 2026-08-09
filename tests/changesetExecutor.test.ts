@@ -3,6 +3,7 @@ import { openDb } from '../src/store/db.js'
 import { ChangeSetStore } from '../src/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { executeChangeSet, type ExecutorDeps } from '../src/changeset/executor.js'
+import { AppError } from '../src/errors.js'
 
 function deps(gwState: Record<string, any>, over: Partial<ExecutorDeps> = {}): { deps: ExecutorDeps; store: ChangeSetStore } {
   const db = openDb(':memory:')
@@ -71,6 +72,16 @@ describe('executeChangeSet', () => {
     seedProduct(store, false)
     ;(d.tokenManager.getFreshByHash as ReturnType<typeof vi.fn>).mockRejectedValueOnce(Object.assign(new Error('reauth'), { code: 'REAUTH_REQUIRED' }))
     await expect(executeChangeSet(d, 'cs1')).rejects.toThrow()
+    expect(store.get('cs1')!.status).toBe('failed')
+  })
+  it('modifyUserFrom throw (Fix 4 guard tripped) -> change-set marked failed, NOT stuck in executing', async () => {
+    // Same early-throw guard as the token-refresh case above: modifyUserFrom is called right
+    // after getFreshByHash, inside the same try block. If the placeholder guard trips (env flag
+    // unset), the executor must not strand the change-set in 'executing' forever.
+    const { deps: d, store } = deps({ '/product/api/v1/product-configs/p1/switch': { is_active: true } },
+      { modifyUserFrom: () => { throw new AppError('MODIFY_USER_UNRESOLVED', 'modify_user resolver not wired', 500) } })
+    seedProduct(store, false)
+    await expect(executeChangeSet(d, 'cs1')).rejects.toThrow('modify_user resolver not wired')
     expect(store.get('cs1')!.status).toBe('failed')
   })
 })

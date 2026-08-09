@@ -28,6 +28,7 @@ export interface L2PipelineDeps extends PipelineDeps {
   genId: () => string
   genToken: () => string
   now: () => number
+  emitConfirmUrl: (changesetId: string, url: string) => void
 }
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean }
@@ -121,6 +122,7 @@ export function wrapL2Tool(tool: L2ToolDef, deps: L2PipelineDeps) {
       genId: deps.genId,
       genToken: deps.genToken,
       now: deps.now,
+      emitConfirmUrl: deps.emitConfirmUrl,
     }),
     (ctx, args) => tool.handler(args as never, ctx))
 }
