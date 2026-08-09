@@ -40,4 +40,15 @@ export class RateBudget {
         `Daily read budget exhausted (${this.perUserDay}/day) for this user. Try again tomorrow or contact the be2-mcp owner.`, 429)
     }
   }
+
+  consumeChangeset(userLabel: string, perDay = 10): void {
+    this.db.prepare('DELETE FROM rate_counters WHERE window_start < ?').run(this.now() - RETENTION_MS)
+    const day = new Date(this.now()).toISOString().slice(0, 10)
+    const key = `changeset:${userLabel}:${day}`
+    const n = this.bump(key)
+    if (n > perDay) {
+      throw new RateError('RATE_CHANGESET_DAY',
+        `Daily change-set budget exhausted (${perDay}/day). Try again tomorrow.`, 429)
+    }
+  }
 }
