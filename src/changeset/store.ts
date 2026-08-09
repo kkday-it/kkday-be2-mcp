@@ -58,6 +58,16 @@ export class ChangeSetStore {
       .run(status, decidedAt ?? null, id)
   }
 
+  // Atomic compare-and-swap: only transitions `from` -> `to` if the row is STILL `from` at the
+  // moment of the UPDATE (single statement, no read-then-write race window). Returns true iff this
+  // call won the transition. This is the primitive that makes approve/reject execute-exactly-once
+  // safe under concurrent requests (double-click, client retry) — see confirmRoutes.ts.
+  casStatus(id: string, from: ChangeSetStatus, to: ChangeSetStatus, decidedAt?: number): boolean {
+    const result = this.db.prepare('UPDATE change_sets SET status = ?, decided_at = COALESCE(?, decided_at) WHERE id = ? AND status = ?')
+      .run(to, decidedAt ?? null, id, from)
+    return result.changes === 1
+  }
+
   recordResults(id: string, results: ItemResult[]): void {
     const ins = this.db.prepare(`
       INSERT OR REPLACE INTO change_set_results (changeset_id, item_key, status, before_json, after_json, error_code, error_message, trace_id)

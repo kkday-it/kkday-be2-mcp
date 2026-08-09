@@ -20,10 +20,17 @@ function seed(store: ChangeSetStore, current: boolean, target: boolean) {
   return token
 }
 
-let server: Server, base: string, store: ChangeSetStore, live: { is_active: boolean }
+let server: Server, base: string, store: ChangeSetStore, live: { is_active: boolean }, putCalls: number
 beforeEach(async () => {
-  const db = openDb(':memory:'); store = new ChangeSetStore(db, { now: () => 1000 }); live = { is_active: true }
-  const gateway = { get: async (p: string) => p.includes('/info') ? { name: 'Prod A' } : { is_active: live.is_active }, put: async () => { live.is_active = false; return {} } } as never
+  const db = openDb(':memory:'); store = new ChangeSetStore(db, { now: () => 1000 }); live = { is_active: true }; putCalls = 0
+  const gateway = {
+    // Delay on the live-state read inside liveDiff() — this is what widens the race window between
+    // a request's initial `status === 'pending_approval'` check and its eventual status-transition
+    // call, letting a second concurrent approve's initial check run (and pass) before the first
+    // request transitions the status away from pending_approval.
+    get: async (p: string) => { if (p.includes('/info')) return { name: 'Prod A' }; await new Promise(r => setTimeout(r, 15)); return { is_active: live.is_active } },
+    put: async () => { putCalls++; live.is_active = false; return {} },
+  } as never
   const tokenManager = { getFreshByHash: async () => ({ accessToken: 'f', userLabel: 'owner@kkday.com', businessList: [] }) } as never
   const router = buildConfirmRouter({ changeSets: store, gateway, tokenManager, audit: new AuditLog(db, () => 1000), modifyUserFrom: () => 'U', now: () => 1000 })
   const app = express(); app.use(express.json()); app.use(router)
@@ -64,5 +71,35 @@ describe('confirm routes', () => {
     const token = seed(store, true, false)
     await http(base, 'POST', '/confirm/cs1/reject', { token })
     expect(store.get('cs1')!.status).toBe('rejected')
+  })
+
+  it('double-approve is exactly-once: concurrent approves fire the gateway write only once', async () => {
+    const token = seed(store, true, false)
+    const g = await http(base, 'GET', `/confirm/cs1?token=${token}`)
+    const dv = /data-diff-version="([^"]+)"/.exec(g.text)![1]
+    // Fire both approves concurrently (not sequentially-awaited) so both requests race past the
+    // status===pending_approval read before either finishes the async liveDiff() recompute — this
+    // is the actual race window a double-click / client retry would hit. Without the CAS fix, both
+    // requests pass the check, both call executeChangeSet, and the gateway PUT fires twice.
+    const [r1, r2] = await Promise.all([
+      http(base, 'POST', '/confirm/cs1/approve', { token, diff_version: dv }),
+      http(base, 'POST', '/confirm/cs1/approve', { token, diff_version: dv }),
+    ])
+    const statuses = [r1.status, r2.status].sort()
+    expect(statuses).toEqual([200, 409])
+    expect(store.get('cs1')!.status).toBe('done')
+    expect(putCalls).toBe(1) // the real gateway write happened exactly once
+  })
+
+  it('reject after approve/execute -> 409, status stays done (can\'t reject a done change-set)', async () => {
+    const token = seed(store, true, false)
+    const g = await http(base, 'GET', `/confirm/cs1?token=${token}`)
+    const dv = /data-diff-version="([^"]+)"/.exec(g.text)![1]
+    const approveRes = await http(base, 'POST', '/confirm/cs1/approve', { token, diff_version: dv })
+    expect(approveRes.status).toBe(200)
+    expect(store.get('cs1')!.status).toBe('done')
+    const rejectRes = await http(base, 'POST', '/confirm/cs1/reject', { token })
+    expect(rejectRes.status).toBe(409)
+    expect(store.get('cs1')!.status).toBe('done')
   })
 })

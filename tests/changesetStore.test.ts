@@ -47,4 +47,20 @@ describe('ChangeSetStore', () => {
     expect(ChangeSetStore.hashToken('x')).toMatch(/^[0-9a-f]{64}$/)
     expect(ChangeSetStore.hashToken('x')).toBe(ChangeSetStore.hashToken('x'))
   })
+  it('casStatus transitions only when current status matches `from`, and reports who won', () => {
+    const s = new ChangeSetStore(openDb(':memory:'), { now: () => 1000 })
+    s.create(rec({ status: 'pending_approval' }))
+    // wrong `from` (already 'approved', not 'pending_approval') -> no-op, returns false
+    expect(s.casStatus('cs1', 'approved', 'executing')).toBe(false)
+    expect(s.get('cs1')!.status).toBe('pending_approval')
+    // correct `from` -> transitions, returns true
+    expect(s.casStatus('cs1', 'pending_approval', 'approved', 2000)).toBe(true)
+    expect(s.get('cs1')!.status).toBe('approved')
+    expect(s.get('cs1')!.decidedAt).toBe(2000)
+    // second call with the same `from` no longer matches (status is now 'approved') -> false,
+    // simulating the loser of a concurrent CAS race
+    expect(s.casStatus('cs1', 'pending_approval', 'approved', 3000)).toBe(false)
+    expect(s.get('cs1')!.status).toBe('approved')
+    expect(s.get('cs1')!.decidedAt).toBe(2000)
+  })
 })

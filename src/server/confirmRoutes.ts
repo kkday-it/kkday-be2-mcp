@@ -1,4 +1,5 @@
 import express from 'express'
+import { timingSafeEqual } from 'node:crypto'
 import { ChangeSetStore } from '../changeset/store.js'
 import { computeShelfDiff, diffVersionHash } from '../changeset/diff.js'
 import { executeChangeSet, type ExecutorDeps } from '../changeset/executor.js'
@@ -36,9 +37,17 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
       if (!res.headersSent) res.status(500).send('internal error')
     }) }
   const tokenOf = (req: express.Request) => String(req.query.token ?? req.body?.token ?? '')
+  // Constant-time compare against the stored hash — avoids leaking timing information about how
+  // many leading hex chars of the token hash matched. Both sides are sha256 hex (64 chars) in
+  // practice, but a length mismatch is treated defensively as a non-match rather than thrown.
+  function hashesEqual(a: string, b: string): boolean {
+    const bufA = Buffer.from(a, 'hex'), bufB = Buffer.from(b, 'hex')
+    if (bufA.length !== bufB.length) return false
+    return timingSafeEqual(bufA, bufB)
+  }
   function load(id: string, token: string) {
     const rec = deps.changeSets.get(id)
-    if (!rec || rec.approvalTokenHash !== ChangeSetStore.hashToken(token)) return undefined
+    if (!rec || !hashesEqual(rec.approvalTokenHash, ChangeSetStore.hashToken(token))) return undefined
     return rec
   }
   async function liveDiff(rec: NonNullable<ReturnType<typeof deps.changeSets.get>>) {
@@ -62,7 +71,13 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     if (!rec || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
     const { diff, version } = await liveDiff(rec)
     if (version !== String(req.body?.diff_version)) { res.status(409).send(renderPage(rec.id, token, diff, version, '<p style="color:#b00">目標欄位在你檢視期間被改動,已重新載入最新狀態,請再次確認後批准。</p>')); return }
-    deps.changeSets.setStatus(rec.id, 'approved', deps.now())
+    // Atomic compare-and-swap: two concurrent approves (double-click / client retry) can both
+    // pass the `status === 'pending_approval'` check above (that read is stale by the time we
+    // get here, since liveDiff() awaits and yields the event loop). Only the request that wins
+    // the pending_approval -> approved transition may proceed to executeChangeSet; the loser gets
+    // a 409 and never touches the gateway. This is what guarantees execute-exactly-once.
+    const won = deps.changeSets.casStatus(rec.id, 'pending_approval', 'approved', deps.now())
+    if (!won) { res.status(409).send('已被處理或已過期'); return }
     const out = await executeChangeSet(deps, rec.id)
     res.status(200).send(`<!doctype html><meta charset=utf-8><h1>執行結果:${esc(out.status)}</h1><pre>${esc(JSON.stringify(out.results, null, 2))}</pre>`)
   }))
@@ -71,7 +86,10 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     res.setHeader('Referrer-Policy', 'no-referrer')
     const rec = load(String(req.params.id), tokenOf(req))
     if (!rec) { res.status(404).send('not found'); return }
-    deps.changeSets.setStatus(rec.id, 'rejected', deps.now())
+    // Same CAS discipline as approve: only a still-pending change-set can be rejected. Prevents
+    // rejecting a change-set that has already been approved/executed (or rejected) concurrently.
+    const won = deps.changeSets.casStatus(rec.id, 'pending_approval', 'rejected', deps.now())
+    if (!won) { res.status(409).send('已被處理或已過期'); return }
     res.status(200).send('rejected')
   }))
   return r
