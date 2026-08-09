@@ -23,10 +23,17 @@ export class AuthServiceClient {
     })
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
     if (!res.ok) {
-      const err = (body?.error ?? body) as Record<string, unknown>
+      // VERIFIED against live SIT be2-220 (2026-08-09): auth-service uses a
+      // {metadata:{status,desc}, data} envelope, including on error responses
+      // (e.g. HTTP 422 with metadata.status === 'AU9010'). Fall back to the
+      // legacy {error:{code,message}} shape, then a generic HTTP_{status}.
+      const metadata = body?.metadata as Record<string, unknown> | undefined
+      const legacyErr = body?.error as Record<string, unknown> | undefined
+      const code = metadata?.status ?? legacyErr?.code ?? `HTTP_${res.status}`
+      const message = metadata?.desc ?? legacyErr?.message ?? res.status
       // Message: code + generic text only. Never include request payloads (credentials).
-      throw new AuthError(String(err?.code ?? `HTTP_${res.status}`),
-        `auth-service ${method} ${path} failed: ${String(err?.message ?? res.status)}`, res.status)
+      throw new AuthError(String(code),
+        `auth-service ${method} ${path} failed: ${String(message)}`, res.status)
     }
     return (body as { data?: unknown }).data ?? body
   }
@@ -34,9 +41,10 @@ export class AuthServiceClient {
   async login(account: string, password: string, extra: { device?: string; otp?: string } = {}): Promise<{ authorizationCode: string }> {
     const data = await this.request('POST', '/api/v1/auth/be2/login', {
       json: { account, password, ...(extra.device ? { device: extra.device } : {}), ...(extra.otp ? { otp: extra.otp } : {}) },
-    }) as { authorizationCode?: string }
-    if (!data.authorizationCode) throw new AuthError('NO_AUTH_CODE', 'login response missing authorizationCode', 502)
-    return { authorizationCode: data.authorizationCode }
+    }) as { authorizationCode?: string; authorization_code?: string }
+    const authorizationCode = data.authorizationCode ?? data.authorization_code
+    if (!authorizationCode) throw new AuthError('NO_AUTH_CODE', 'login response missing authorizationCode', 502)
+    return { authorizationCode }
   }
 
   async exchangeCode(code: string): Promise<AuthTokens> {
@@ -48,8 +56,14 @@ export class AuthServiceClient {
   }
 
   private toTokens(data: unknown): AuthTokens {
-    const d = data as Partial<AuthTokens>
-    if (!d.accessToken || !d.refreshToken) throw new AuthError('BAD_TOKEN_RESPONSE', 'auth-service response missing tokens', 502)
-    return { accessToken: d.accessToken, refreshToken: d.refreshToken, businessList: d.businessList ?? [] }
+    // Success-payload key casing (camelCase vs snake_case) is UNVERIFIED against
+    // live SIT (login was blocked by stale credentials, see docs/be2-mcp/sit-contracts.md).
+    // Accept both until confirmed in Task 16.
+    const d = data as Record<string, unknown>
+    const accessToken = (d.accessToken ?? d.access_token) as string | undefined
+    const refreshToken = (d.refreshToken ?? d.refresh_token) as string | undefined
+    const businessList = (d.businessList ?? d.business_list ?? []) as unknown[]
+    if (!accessToken || !refreshToken) throw new AuthError('BAD_TOKEN_RESPONSE', 'auth-service response missing tokens', 502)
+    return { accessToken, refreshToken, businessList }
   }
 }
