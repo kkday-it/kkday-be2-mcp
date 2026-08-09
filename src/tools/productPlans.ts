@@ -37,20 +37,20 @@ export const productPlansTool: ToolDef<typeof inputShape> = {
   inputShape,
   async handler(args, ctx) {
     const oid = encodeURIComponent(args.prod_oid)
-    try {
-      const [pkgsRaw, cfgRaw] = await Promise.all([
-        ctx.gateway.get(`/product/api/v1/drafts/products/${oid}/packages`, ctx.accessToken),
-        ctx.gateway.get(`/product/api/v1/products/${oid}/package-configs`, ctx.accessToken),
-      ])
-      const cfg = normalizePackageConfigs(cfgRaw)
-      const items = extractPackages(pkgsRaw).map(p => ({
-        pkg_oid: p.pkg_oid, item_oid: p.item_oid, name: p.name,
-        is_active: cfg.get(p.pkg_oid)?.is_active,
-      }))
-      const readOids = [args.prod_oid, ...items.flatMap(i => [i.pkg_oid, i.item_oid].filter((x): x is string => !!x))]
-      return makeEnvelope(items, [], readOids)
-    } catch (e) {
-      return makeEnvelope([], [toEnvelopeError(args.prod_oid, e)])
+    const [pkgsResult, cfgResult] = await Promise.allSettled([
+      ctx.gateway.get(`/product/api/v1/drafts/products/${oid}/packages`, ctx.accessToken),
+      ctx.gateway.get(`/product/api/v1/products/${oid}/package-configs`, ctx.accessToken),
+    ])
+    if (pkgsResult.status === 'rejected') {
+      return makeEnvelope([], [toEnvelopeError(args.prod_oid, pkgsResult.reason)])
     }
+    const cfg = cfgResult.status === 'fulfilled' ? normalizePackageConfigs(cfgResult.value) : new Map()
+    const items = extractPackages(pkgsResult.value).map(p => ({
+      pkg_oid: p.pkg_oid, item_oid: p.item_oid, name: p.name,
+      is_active: cfg.get(p.pkg_oid)?.is_active,
+    }))
+    const readOids = [args.prod_oid, ...items.flatMap(i => [i.pkg_oid, i.item_oid].filter((x): x is string => !!x))]
+    const errors = cfgResult.status === 'rejected' ? [toEnvelopeError(args.prod_oid, cfgResult.reason)] : []
+    return makeEnvelope(items, errors, readOids)
   },
 }
