@@ -30,4 +30,25 @@ export class GatewayClient {
     }
     return (body as { data?: unknown }).data ?? body
   }
+
+  async put(path: string, accessToken: string, body: unknown): Promise<unknown> {
+    let res: Response
+    try {
+      res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method: 'PUT',
+        headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json', 'content-type': 'application/json', 'x-auth-id': 'be2' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      })
+    } catch (e) {
+      throw new GatewayError('GATEWAY_UNREACHABLE', `PUT ${path} failed: ${(e as Error).name}`, 502)
+    }
+    const b = (await res.json().catch(() => ({}))) as Record<string, unknown>
+    if (!res.ok) {
+      const err = (b?.error ?? b) as Record<string, unknown>
+      throw new GatewayError(String(err?.code ?? `HTTP_${res.status}`),
+        `PUT ${path} -> ${res.status}: ${String(err?.message ?? 'gateway error')}`, res.status)
+    }
+    return (b as { data?: unknown }).data ?? b
+  }
 }
