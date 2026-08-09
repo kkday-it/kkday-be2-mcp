@@ -15,7 +15,9 @@ const auth = new AuthServiceClient({ baseUrl: cfg.authsvcUrl, serviceKey: cfg.se
 
 function saveFixture(name: string, body: unknown) {
   mkdirSync('tests/fixtures', { recursive: true })
-  const json = JSON.stringify(body, null, 2)
+  // Save UNWRAPPED, matching what GatewayClient.get() actually hands to tools (body.data ?? body).
+  const unwrapped = (body as { data?: unknown })?.data ?? body
+  const json = JSON.stringify(unwrapped, null, 2)
   if (/eyJ[A-Za-z0-9_-]{20,}/.test(json)) throw new Error(`fixture ${name} appears to contain a JWT — refusing to write`)
   writeFileSync(`tests/fixtures/${name}.json`, json)
   console.log(`fixture written: tests/fixtures/${name}.json`)

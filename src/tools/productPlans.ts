@@ -21,7 +21,8 @@ function extractPackages(raw: unknown): Array<{ pkg_oid: string; item_oid?: stri
   return (list as any[]).filter(p => p?.pkg_oid).map(p => ({
     pkg_oid: String(p.pkg_oid),
     item_oid: p.item_oid ? String(p.item_oid) : undefined,
-    name: typeof p.name === 'string' ? p.name : undefined,
+    // Real SIT shape (drafts/products/{oid}/packages) uses `pkg_name`; `name` kept as a fallback.
+    name: typeof p.pkg_name === 'string' ? p.pkg_name : (typeof p.name === 'string' ? p.name : undefined),
   }))
 }
 

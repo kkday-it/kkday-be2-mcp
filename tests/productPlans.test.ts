@@ -16,7 +16,8 @@ function ctxWith(routes: Record<string, unknown | Error>): ToolContext {
   }
 }
 
-const pkgs = [{ pkg_oid: 'k1', item_oid: 'i1', name: '標準方案', supplier_oid_list: [0] }]
+// Real SIT shape: the packages list uses `pkg_name`, not `name` (Finding B).
+const pkgs = [{ pkg_oid: 'k1', item_oid: 'i1', pkg_name: '標準方案', supplier_oid_list: [0] }]
 
 describe('normalizePackageConfigs', () => {
   it('handles config_data object form', () => {

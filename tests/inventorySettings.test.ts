@@ -17,12 +17,7 @@ function ctxWith(routes: Record<string, unknown | Error>): ToolContext {
   }
 }
 
-const inv = {
-  supplierOid: 's1',
-  itemInventory: [{ date: '2026-08-10', quantity: 10 }],
-  itemSupplierMapping: [{ supplier_oid: 's1', is_default: true }],
-  itemCalendarRule: { big: 'blob', that: 'should not pass through' },
-}
+const status = { is_processing: false, previous_status: null, previous_msg: '', previous_time: null }
 
 describe('be2_get_inventory_settings', () => {
   it('validates year_month format', () => {
@@ -31,55 +26,68 @@ describe('be2_get_inventory_settings', () => {
     expect(schema.safeParse({ item_oid: 'i1', year_month: '2026-08' }).success).toBe(true)
     expect(schema.safeParse({ item_oid: 'i1' }).success).toBe(true)
   })
-  it('fetches inventory + status, returns trimmed item', async () => {
+
+  it('no supplier_oid -> status only, no quantities call, no error', async () => {
     const env = await inventorySettingsTool.handler({ item_oid: 'i1' },
-      ctxWith({ '/inventory/status': { has_inventory: true }, '/inventory': inv }))
+      ctxWith({ '/inventories/status': status }))
+    expect(env.items).toHaveLength(1)
     const item = env.items[0] as Record<string, unknown>
     expect(item.item_oid).toBe('i1')
-    expect(item.inventory_status).toEqual({ has_inventory: true })
-    expect(item.inventories).toEqual([{ date: '2026-08-10', quantity: 10 }])
-    expect(JSON.stringify(item)).not.toContain('should not pass through')
-  })
-  it('passes supplier_oid and year_month through as query', async () => {
-    let seen: Record<string, string> | undefined
-    const env = await inventorySettingsTool.handler({ item_oid: 'i1', supplier_oid: 's9', year_month: '2026-09' },
-      ctxWith({ '/inventory/status': {}, '/inventory': (q: Record<string, string>) => { seen = q; return inv } }))
+    expect(item.is_processing).toBe(false)
+    expect(item.previous_status).toBeNull()
+    expect(item).not.toHaveProperty('inventories')
     expect(env.errors).toEqual([])
-    expect(seen).toEqual({ supplier_oid: 's9', year_month: '2026-09' })
+    expect(env.read_oids).toEqual(['i1'])
   })
-  it('gateway failure -> envelope error, no throw', async () => {
-    const env = await inventorySettingsTool.handler({ item_oid: 'bad' }, ctxWith({}))
-    expect(env.items).toEqual([])
-    expect(env.errors[0]!.key).toBe('bad')
+
+  it('supplier_oid given -> fetches quantities too, merges into item', async () => {
+    let seenQuery: Record<string, string> | undefined
+    const env = await inventorySettingsTool.handler({ item_oid: 'i1', supplier_oid: 's9', year_month: '2026-09' },
+      ctxWith({
+        '/inventories/status': status,
+        '/inventories/s9': (q: Record<string, string>) => { seenQuery = q; return { itemInventory: [{ date: '2026-09-01', quantity: 5 }] } },
+      }))
+    expect(env.errors).toEqual([])
+    expect(seenQuery).toEqual({ year_month: '2026-09' })
+    const item = env.items[0] as Record<string, unknown>
+    expect(item.inventories).toEqual([{ date: '2026-09-01', quantity: 5 }])
   })
-  it('inventory (main) call rejects -> fatal, empty items, one error keyed by item_oid', async () => {
-    const boom = Object.assign(new Error('GET inventory -> 500'), { status: 500 })
+
+  it('supplier_oid given but quantities call fails (403) -> status still returned, non-fatal error recorded', async () => {
+    const boom = Object.assign(new Error('GET inventories/s9 -> 403'), { status: 403 })
+    const env = await inventorySettingsTool.handler({ item_oid: 'i1', supplier_oid: 's9' },
+      ctxWith({ '/inventories/status': status, '/inventories/s9': boom }))
+    expect(env.items).toHaveLength(1)
+    const item = env.items[0] as Record<string, unknown>
+    expect(item.item_oid).toBe('i1')
+    expect(item.is_processing).toBe(false)
+    expect(item).not.toHaveProperty('inventories')
+    expect(env.errors).toHaveLength(1)
+    expect(env.errors[0]).toMatchObject({ key: 'i1', status: 403 })
+    expect(env.read_oids).toEqual(['i1'])
+  })
+
+  it('status call rejects -> fatal, empty items, one error keyed by item_oid', async () => {
+    const boom = Object.assign(new Error('GET inventories/status -> 500'), { status: 500 })
     const env = await inventorySettingsTool.handler({ item_oid: 'i1' },
-      ctxWith({ '/inventory/status': { has_inventory: true }, '/inventory': boom }))
+      ctxWith({ '/inventories/status': boom }))
     expect(env.items).toEqual([])
     expect(env.errors).toHaveLength(1)
     expect(env.errors[0]).toMatchObject({ key: 'i1', status: 500 })
     expect(env.read_oids).toEqual([])
   })
-  it('inventory succeeds but status rejects -> degraded item still returned, non-fatal error recorded', async () => {
-    const boom = Object.assign(new Error('GET inventory/status -> 503'), { status: 503 })
-    const env = await inventorySettingsTool.handler({ item_oid: 'i1' },
-      ctxWith({ '/inventory/status': boom, '/inventory': inv }))
-    expect(env.items).toHaveLength(1)
-    const item = env.items[0] as Record<string, unknown>
-    expect(item.item_oid).toBe('i1')
-    expect(item.inventory_status).toBeUndefined()
-    expect(item.inventories).toEqual([{ date: '2026-08-10', quantity: 10 }])
-    expect(env.errors).toHaveLength(1)
-    expect(env.errors[0]).toMatchObject({ key: 'i1', status: 503 })
-    expect(env.read_oids).toEqual(['i1'])
+
+  it('gateway failure with no routes configured -> envelope error, no throw', async () => {
+    const env = await inventorySettingsTool.handler({ item_oid: 'bad' }, ctxWith({}))
+    expect(env.items).toEqual([])
+    expect(env.errors[0]!.key).toBe('bad')
   })
 })
 
-describe.skipIf(!existsSync('tests/fixtures/inventory.json'))('fixture: real SIT shape', () => {
-  it('trims the captured fixture without throwing', () => {
-    const fx = JSON.parse(readFileSync('tests/fixtures/inventory.json', 'utf8'))
-    const out = trimInventory('fx', fx, {})
+describe.skipIf(!existsSync('tests/fixtures/inventory-status.json'))('fixture: real SIT shape', () => {
+  it('trims the captured status fixture without throwing', () => {
+    const fx = JSON.parse(readFileSync('tests/fixtures/inventory-status.json', 'utf8'))
+    const out = trimInventory('fx', fx)
     expect(out.item_oid).toBe('fx')
   })
 })
