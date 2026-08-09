@@ -1,5 +1,5 @@
 import express from 'express'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, randomBytes } from 'node:crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import type Database from 'better-sqlite3'
@@ -11,25 +11,60 @@ import { AuthServiceClient } from '../auth/authServiceClient.js'
 import { GatewayClient } from '../gateway/client.js'
 import { AuditLog } from '../audit/auditLog.js'
 import { RateBudget } from '../limits/rateBudget.js'
+import { ChangeSetStore } from '../changeset/store.js'
 import { requestContext } from './requestContext.js'
-import { wrapTool, type PipelineDeps } from './toolPipeline.js'
+import { wrapTool, wrapL2Tool, type PipelineDeps, type L2PipelineDeps } from './toolPipeline.js'
+import { buildConfirmRouter } from './confirmRoutes.js'
 import { findProductsTool } from '../tools/findProducts.js'
 import { productPlansTool } from '../tools/productPlans.js'
 import { inventorySettingsTool } from '../tools/inventorySettings.js'
+import { createChangesetTool, getChangesetStatusTool } from '../changeset/tools.js'
 import type { ToolDef } from '../tools/types.js'
+import type { L2ToolDef } from './l2Context.js'
 
 export interface ServerDeps { config: Config; db: Database.Database }
 
 const TOOLS: ToolDef[] = [findProductsTool as ToolDef, productPlansTool as ToolDef, inventorySettingsTool as ToolDef]
+const L2_TOOLS: L2ToolDef[] = [createChangesetTool, getChangesetStatusTool]
+
+// PLACEHOLDER — Task 1's SIT write-contract probe (docs/be2-mcp/sit-write-contracts.md #1)
+// found the real `modify_user` be2 expects on writes is a distinct be2 userUuid (e.g.
+// `24c66807-352e-41da-8a28-53b482ba7f4e`) that is NOT any claim in the access-token JWT —
+// resolving it requires an auth-service call (candidate: verify response, or
+// `auth/be2/token/sub-user`) that is still unconfirmed, and the only SIT account available is
+// 403-blocked on shelf-toggle writes so the resolution can't be validated end-to-end yet
+// (Task 1 finding #4, BLOCKER). Until that's resolved with a write-capable SIT account, this
+// decodes the JWT and returns `platformId` (right UUID *format*, wrong *value* — it is NOT the
+// user's be2 userUuid) purely so the executor has a syntactically valid string to send. DO NOT
+// treat this as correct; wire the real resolver before any live write path is used.
+function modifyUserFromPlaceholder(accessToken: string): string {
+  const parts = accessToken.split('.')
+  if (parts.length !== 3) return 'unknown'
+  try {
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as { platformId?: string }
+    return payload.platformId ?? 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
 
 export function buildApp({ config, db }: ServerDeps): express.Express {
   const store = new TokenStore(db)
-  const deps: PipelineDeps = {
-    tokenManager: new TokenManager(store, new AuthServiceClient({ baseUrl: config.authsvcUrl, serviceKey: config.serviceKey })),
-    rateBudget: new RateBudget(db),
-    audit: new AuditLog(db),
-    gateway: new GatewayClient({ baseUrl: config.gatewayUrl }),
-    readOids: new ReadOidStore(db),
+  const tokenManager = new TokenManager(store, new AuthServiceClient({ baseUrl: config.authsvcUrl, serviceKey: config.serviceKey }))
+  const rateBudget = new RateBudget(db)
+  const audit = new AuditLog(db)
+  const gateway = new GatewayClient({ baseUrl: config.gatewayUrl })
+  const readOids = new ReadOidStore(db)
+  const changeSets = new ChangeSetStore(db)
+
+  const deps: PipelineDeps = { tokenManager, rateBudget, audit, gateway, readOids }
+  const l2Deps: L2PipelineDeps = {
+    ...deps,
+    changeSets,
+    baseUrl: `http://127.0.0.1:${config.port}`,
+    genId: randomUUID,
+    genToken: () => randomBytes(24).toString('hex'),
+    now: Date.now,
   }
 
   const transports = new Map<string, StreamableHTTPServerTransport>()
@@ -44,12 +79,21 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
       server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputShape },
         wrapTool(tool, deps) as never)
     }
+    for (const tool of L2_TOOLS) {
+      server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputShape },
+        wrapL2Tool(tool, l2Deps) as never)
+    }
     return server
   }
 
   const app = express()
   app.use(express.json())
   app.get('/healthz', (_req, res) => { res.status(200).send('ok') })
+  app.use(buildConfirmRouter({
+    changeSets, gateway, tokenManager, audit,
+    modifyUserFrom: modifyUserFromPlaceholder,
+    now: Date.now,
+  }))
 
   app.all('/mcp', (req, res) => {
     void (async () => {

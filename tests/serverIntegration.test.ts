@@ -60,12 +60,14 @@ describe('MCP server integration', () => {
     const bad = mcpClient('be2mcp_' + 'f'.repeat(48))
     await expect(bad.client.connect(bad.transport)).rejects.toThrow()
   })
-  it('initializes and lists exactly the 3 L0 tools', async () => {
+  it('initializes and lists all 5 tools (3 L0 read + 2 L2 change-set)', async () => {
     const { client, transport } = mcpClient(BEARER)
     await client.connect(transport)
     const { tools } = await client.listTools()
-    expect(tools.map(t => t.name).sort()).toEqual(
-      ['be2_find_products', 'be2_get_inventory_settings', 'be2_get_product_plans'])
+    expect(tools.map(t => t.name).sort()).toEqual([
+      'be2_create_changeset', 'be2_find_products', 'be2_get_changeset_status',
+      'be2_get_inventory_settings', 'be2_get_product_plans',
+    ])
     await client.close()
   })
   it('tool call flows through pipeline: gateway unreachable -> envelope error + audit row', async () => {
