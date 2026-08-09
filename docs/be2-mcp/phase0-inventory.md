@@ -28,6 +28,10 @@
 - **唯一未竟(非阻擋)**:用我們自己的 `GatewayClient.put` 跑一次真 200。stage 嘗試卡在 `.env` `STAGE_AUTHSVC_SERVICE_KEY` 為空(login 過、換碼 AU9997)。補齊 stage service key、或給 220 一個可寫商品即可收尾。詳見 `docs/be2-mcp/sit-write-contracts.md`。
 - Task 10 exit gate:local-gate（ci/eval 108 passed）已完成;live-write 標 PENDING(契約已雙證,僅差最後一次我方程式的真 200)。
 
+**Phase 2b 進度（2026-08-09,Task 1–7）**：**已實作完成**——SSO 確認頁 web app 取代 Phase 2a 的一次性 capability-URL:`web_sessions` 表 + `WebSessionStore`(idle TTL)、be2-auth POPUP 登入(`/confirm/login` 點擊手勢開彈窗 → postMessage 驗 origin → `/confirm/session` 換碼建 session、設 `be2mcp_sid` HttpOnly cookie)、`/confirm/logout`、confirm routes(`GET/POST /confirm/:id`、`/approve`、`/reject`)全面改成只認 session cookie(**不再讀任何 URL query/body 憑證**)。**自我批准漏洞已關閉**:agent 沒有 be2-auth session、無法批准自己建立的 change-set,即使帶上舊版 `?token=` 參數也一樣(`tests/phase2bSecurity.test.ts` 有回歸測試)。IDOR 由「登入使用者 == change-set 建立者」把關(不同人一律 404,無 existence leak)。executor/live-diff/audit 全部改用**批准當下的 web session** 身分(而非 change-set 原始建立者的身分),CAS 防重複執行、modify_user 解析失敗不 strand change-set 等 Phase 2a 既有保護全數保留。`npm run ci` **137 passed / 0 skipped**、`tsc` clean；`npm run eval` 因無 `ANTHROPIC_API_KEY` 為文件化 SKIP(非失敗)。Plan 已 agy-approved(rounds=3)。Pilot 文件見 `docs/be2-mcp/phase2b-runbook.md`。
+**Live WRITE e2e 仍 DEFERRED**:沿用 Phase 2a 的 403 卡點(SIT `.env` 帳號無 shelf-write 權限,契約已雙證,見上與 `docs/be2-mcp/sit-write-contracts.md`),Phase 2b 沒有新增寫入路徑,只換了「誰能按批准」的認證層,故此阻擋項不變、不重新驗證。
+**Carry-forward(待對真實 be2-auth 確認,非阻擋)**:be2-auth POPUP 的 `postMessage` 訊息契約(型別 `UPDATE_AUTH_TOKEN`、payload 的 code 欄位鍵名)以及登入 URL 的 `redirectPath` 實際語意/allowlist 行為,目前只在單元測試用 mock `authServiceClient.exchangeCode` 驗證流程骨架,尚未對真實 be2-auth 環境跑過一次真的 POPUP 登入。對應 Phase 0 B2 的延伸小確認,見 `docs/be2-mcp/phase2b-runbook.md`「已知限制」與「Live SIT WRITE e2e — PENDING」兩節。
+
 ## 0. 決策：Option 1 — 已定案（2026-08-09）
 
 > **結論：採 Option 1（server 端 token store）。** 主 spec §2/§3/§6/§11/§12 已回改並過 agy review（rounds=2 approved）。下方為評估紀錄。
