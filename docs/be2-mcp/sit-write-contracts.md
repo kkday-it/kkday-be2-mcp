@@ -12,6 +12,27 @@ The findings in §1–§5 below were **partly wrong**. Verified by clicking the 
 
 Net: executor write path/contract validated end-to-end against be2-web; `modify_user`=platformId resolved; only a write-authorized product (or that authz granted for a test product) is still needed for a green toggle. §1–§5 below are superseded where they conflict with this block.
 
+## STAGE confirmation (2026-08-09, user-provided curls) — the write SUCCEEDS on stage
+
+The user demonstrated the **same account + same product 546965 + same contract** succeeding on **stage** (`api-gateway.stage.kkday.com`), while SIT be2-220 returns 403. Captured working request:
+```
+PUT https://api-gateway.stage.kkday.com/product/api/v1/product-configs/546965/switch
+headers: authorization: Bearer <be2 stage JWT>, content-type: application/json, x-auth-id: be2,
+         request-uuid/x-request-id (browser tracing), origin/referer (browser CORS)
+body: {"is_active":false,"modify_user":"f7965b8d-ae5f-421c-9ced-c69a7587b422"}   // modify_user = platformId
+→ 200 (succeeds)
+```
+Conclusions:
+- **The SIT be2-220 403 is purely a per-ENVIRONMENT authorization difference** (this account can write 546965 on stage, not on be2-220) — not a code, path, header, or mechanism problem. Definitive.
+- **Our `GatewayClient.put` is contract-equivalent to this working request**: same method/path/body + `x-auth-id: be2`. The extra `request-uuid`/`x-request-id`/`origin`/`referer` headers are browser tracing/CORS, NOT required for authz (the SIT 403 fired even with them present, via be2-web). So our executor would succeed against an environment/product where the account is authorized.
+- **`modify_user` = JWT `platformId`** reconfirmed (the successful stage PUT uses it).
+
+### Still needed for a fully-green live write THROUGH our code
+Our code can't reproduce the stage write yet because **`.env` has `STAGE_pwd` and `STAGE_AUTHSVC_SERVICE_KEY` empty** (only `STAGE_email` set), and the curl's bearer is a ~5-min token (expired). To close it, ONE of:
+1. Fill `STAGE_pwd` + `STAGE_AUTHSVC_SERVICE_KEY` in `.env` → run the executor/probe against stage hosts (`auth.stage.kkday.com` / `api-gateway.stage.kkday.com`) for a reversible toggle+revert; OR
+2. Paste a fresh stage be2 bearer (validity ~5 min) to drive `GatewayClient.put` directly; OR
+3. Grant this account write authz on a be2-220 test product (keeps everything on the SIT anchor).
+
 ## Open-item results
 
 ### #1 modify_user = a be2 **userUuid** (UUID), NOT a JWT claim — needs auth-service resolution
