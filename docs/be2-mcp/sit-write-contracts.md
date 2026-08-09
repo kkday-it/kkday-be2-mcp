@@ -2,6 +2,16 @@
 
 Probed live against api-gateway-220.sit.kkday.com with the `.env` account (lance.chien@kkday.com), using its OWN non-marketplace test product `546965` / plan `1967504` (created by automation). Reversible probe.
 
+## ⚠️ CORRECTION (2026-08-09, verified by driving be2-web itself with Playwright)
+
+The findings in §1–§5 below were **partly wrong**. Verified by clicking the real be2-web shelf toggle for product 546965 (page `https://be2-220.sit.kkday.com/v2/product/{prodOid}/sale-status/edit-detail`) and capturing the actual request:
+
+1. **Our write endpoint + contract are CORRECT.** be2-web sends exactly `PUT {gateway}/product/api/v1/product-configs/546965/switch` with body `{"is_active":false,"modify_user":"f7965b8d-ae5f-421c-9ced-c69a7587b422"}` — the same product-service-direct endpoint our Phase 2a executor uses. Minimal body = just `{is_active, modify_user}` (no other required fields on /switch).
+2. **`modify_user` = the JWT `platformId` claim** (`f7965b8d-…` = lance.chien's `platformId`), NOT a separate be2 userUuid needing an auth-service lookup. So §1 below is WRONG. The stored `24c66807-…` was just whoever last modified (lance.liu); the value you SEND is your own `platformId`. **⇒ Phase 2a's `modifyUserFromPlaceholder` (returns `platformId`) is actually CORRECT, not a placeholder — the modify_user blocker is resolved.**
+3. **The 403 is genuine per-product authorization, not a mechanism/path/S2S issue.** be2-web ITSELF — real browser, real user session, correct contract — gets the SAME `403` on this write (console error + network capture confirm). Product 546965's last-modifier is `lance.liu@kkday.com`; lance.chien apparently lacks write authz on this specific product. **⇒ To get a successful live write we need a product this account can actually write** (not a code fix, not a different mechanism, not necessarily a different account — a product in this user's write scope). §4's "write-capable account" framing is imprecise: the account HAS the `product.product-sale-status.update` + `bundle-package-sale-status.update` businessList codes; it's per-oid ownership that denies 546965.
+
+Net: executor write path/contract validated end-to-end against be2-web; `modify_user`=platformId resolved; only a write-authorized product (or that authz granted for a test product) is still needed for a green toggle. §1–§5 below are superseded where they conflict with this block.
+
 ## Open-item results
 
 ### #1 modify_user = a be2 **userUuid** (UUID), NOT a JWT claim — needs auth-service resolution
