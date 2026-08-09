@@ -85,3 +85,15 @@ export const createChangesetTool: L2ToolDef = {
     }
   },
 }
+
+export const getChangesetStatusTool: L2ToolDef = {
+  name: 'be2_get_changeset_status',
+  description: 'Query a change-set you created: its approval/execution status and per-item before/after results. Read-only.',
+  inputShape: { changeset_id: z.string().min(1) },
+  async handler(args, ctx) {
+    const rec = ctx.changeSets.get(args.changeset_id as string)
+    if (!rec || rec.creatorLabel !== ctx.userLabel) return makeEnvelope([], [{ key: args.changeset_id as string, code: 'NOT_FOUND', message: 'No such change-set for this user.' }])
+    const results = ['pending_approval', 'approved'].includes(rec.status) ? undefined : ctx.changeSets.getResults(rec.id)
+    return makeEnvelope([{ changeset_id: rec.id, status: rec.status, action_type: rec.actionType, note: rec.note, diff: { items: rec.diff }, ...(results ? { results } : {}) }])
+  },
+}
