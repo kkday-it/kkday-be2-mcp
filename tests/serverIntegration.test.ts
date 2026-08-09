@@ -107,4 +107,15 @@ describe('MCP server integration', () => {
     expect(body.error.code).toBe('SESSION_OWNER_MISMATCH')
     await client.close()
   })
+  it('redirects an unauthenticated confirm-page request to the SSO login route (session gate)', async () => {
+    const res = await fetch(`${base}/confirm/some-random-id`, { redirect: 'manual' })
+    expect(res.status).toBe(302)
+    expect(res.headers.get('location')).toMatch(/^\/confirm\/login\?next=/)
+  })
+  it('serves the SSO login page at /confirm/login (proves it is not swallowed by /confirm/:id, agy T4)', async () => {
+    const res = await fetch(`${base}/confirm/login`)
+    expect(res.status).toBe(200)
+    const text = await res.text()
+    expect(text).toContain('loginFlow=POPUP')
+  })
 })

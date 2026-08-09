@@ -16,6 +16,7 @@ import { WebSessionStore } from './webSessionStore.js'
 import { requestContext } from './requestContext.js'
 import { wrapTool, wrapL2Tool, type PipelineDeps, type L2PipelineDeps } from './toolPipeline.js'
 import { buildConfirmRouter } from './confirmRoutes.js'
+import { buildSsoRouter } from './ssoRoutes.js'
 import { findProductsTool } from '../tools/findProducts.js'
 import { productPlansTool } from '../tools/productPlans.js'
 import { inventorySettingsTool } from '../tools/inventorySettings.js'
@@ -67,17 +68,21 @@ export function modifyUserFromPlaceholder(accessToken: string): string {
 
 export function buildApp({ config, db }: ServerDeps): express.Express {
   const store = new TokenStore(db)
-  const tokenManager = new TokenManager(store, new AuthServiceClient({ baseUrl: config.authsvcUrl, serviceKey: config.serviceKey }))
+  // Shared across the tool pipeline (TokenManager) and the SSO router (Task 6): both need to
+  // exchange/refresh be2 tokens against the same auth-service client, and reusing one instance
+  // avoids duplicate config parsing / connection setup.
+  const authServiceClient = new AuthServiceClient({ baseUrl: config.authsvcUrl, serviceKey: config.serviceKey })
+  const tokenManager = new TokenManager(store, authServiceClient)
   const rateBudget = new RateBudget(db)
   const audit = new AuditLog(db)
   const gateway = new GatewayClient({ baseUrl: config.gatewayUrl })
   const readOids = new ReadOidStore(db)
   const changeSets = new ChangeSetStore(db)
-  // NOTE (Task 5, compile-only wiring): confirmRoutes' ConfirmDeps now requires webSessions
-  // (Phase 2b session-cookie auth replaces the Phase 2a capability token). This satisfies the
-  // type; mounting the SSO login/session routes (buildSsoRouter) and full config (authOrigin,
-  // etc.) that actually populate this store is Task 6's job.
+  // Phase 2b: session-cookie auth (SSO) for the confirm page replaces the Phase 2a capability
+  // token. webSessions is shared between the SSO router (creates sessions on login) and the
+  // confirm router (reads sessions to authorize approve/reject).
   const webSessions = new WebSessionStore(db)
+  const authOrigin = new URL(config.authsvcUrl).origin
 
   const deps: PipelineDeps = { tokenManager, rateBudget, audit, gateway, readOids }
   const l2Deps: L2PipelineDeps = {
@@ -115,6 +120,12 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   const app = express()
   app.use(express.json())
   app.get('/healthz', (_req, res) => { res.status(200).send('ok') })
+  // CRITICAL route order (agy T4 finding): buildSsoRouter registers GET /confirm/login (+ POST
+  // /confirm/session, /confirm/logout); buildConfirmRouter registers GET /confirm/:id. Express
+  // matches routes in registration order, not by specificity — if the confirm router mounted
+  // first, /confirm/:id would swallow /confirm/login (treating "login" as a change-set id) and
+  // the login page would be unreachable. The SSO router MUST be mounted first.
+  app.use(buildSsoRouter({ authServiceClient, tokenStore: store, webSessions, authOrigin, now: Date.now }))
   app.use(buildConfirmRouter({
     changeSets, gateway, tokenManager, audit, webSessions,
     modifyUserFrom: modifyUserFromPlaceholder,
