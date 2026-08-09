@@ -83,8 +83,14 @@ function itemKey(it: ChangeSetItem): string {
   return it.pkg_oid ? `${it.prod_oid}:${it.pkg_oid}` : it.prod_oid
 }
 
-// READ-ONLY fields that the write endpoint rejects (Task 1 SIT probe confirmed).
-const SWITCH_READONLY = ['is_locked_for_active', 'updated_by', 'updated_at']
+// READ-ONLY fields that the /switch write endpoint rejects (Task 1 SIT probe finding #3 confirmed).
+// market_external_edit_blocked / market_edit_block_change_reason are candidate read-only fields too;
+// unconfirmed until a write-capable SIT account is available (finding #3).
+const SWITCH_READONLY = ['is_locked_for_active']
+
+// READ-ONLY fields on each package-configs per-pkg object that the write endpoint rejects
+// (Task 1 SIT probe finding #2: updated_by/updated_at are server-set on package-configs).
+const PLAN_PKG_READONLY = ['updated_by', 'updated_at']
 
 async function execProduct(deps: ExecutorDeps, at: string, modifyUser: string, oid: string, target: boolean, traceId: string): Promise<ItemResult[]> {
   const path = `/product/api/v1/product-configs/${encodeURIComponent(oid)}/switch`
@@ -118,6 +124,7 @@ async function execPlan(deps: ExecutorDeps, at: string, modifyUser: string, oid:
   for (const [pkg, obj] of entries) {
     const full = { ...(obj as Record<string, unknown>) }
     delete full.pkg_oid
+    for (const k of PLAN_PKG_READONLY) delete full[k]
     if (targets.has(pkg)) full.is_active = targets.get(pkg)! // flip ONLY the target; preserve everything else
     config_data[pkg] = full
   }

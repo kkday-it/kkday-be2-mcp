@@ -43,7 +43,7 @@ describe('executeChangeSet', () => {
   })
   it('plan read-merge-write preserves other pkgs', async () => {
     const db = openDb(':memory:'); const store = new ChangeSetStore(db, { now: () => 1000 })
-    const state: Record<string, any> = { '/product/api/v1/products/p1/package-configs': [{ pkg_oid: 'k1', is_active: true, name: 'A' }, { pkg_oid: 'k2', is_active: true, name: 'B' }] }
+    const state: Record<string, any> = { '/product/api/v1/products/p1/package-configs': [{ pkg_oid: 'k1', is_active: true, name: 'A', updated_by: 'U-old', updated_at: '2026-01-01' }, { pkg_oid: 'k2', is_active: true, name: 'B', updated_by: 'U-old', updated_at: '2026-01-01' }] }
     let putBody: any
     const gateway = { get: async (p: string) => state[p.split('?')[0]], put: async (_p: string, _t: string, body: any) => { putBody = body; return { ok: true } } } as never
     const d: ExecutorDeps = { changeSets: store, tokenManager: { getFreshByHash: async () => ({ accessToken: 'f', userLabel: 'owner@kkday.com', businessList: [] }) } as never, gateway, audit: new AuditLog(db, () => 1000), modifyUserFrom: () => 'U', now: () => 1000 }
@@ -54,6 +54,11 @@ describe('executeChangeSet', () => {
     // and MUST preserve each pkg's other fields (name), not strip to {is_active}.
     expect(putBody.config_data.k1).toEqual({ is_active: false, name: 'A' })
     expect(putBody.config_data.k2).toEqual({ is_active: true, name: 'B' })
+    // server-set read-only fields (Task 1 SIT probe finding #2) must never be echoed back in the PUT.
+    expect(putBody.config_data.k1).not.toHaveProperty('updated_by')
+    expect(putBody.config_data.k1).not.toHaveProperty('updated_at')
+    expect(putBody.config_data.k2).not.toHaveProperty('updated_by')
+    expect(putBody.config_data.k2).not.toHaveProperty('updated_at')
     expect(putBody.modify_user).toBe('U')
   })
   it('refuses to execute a non-approved change-set', async () => {
