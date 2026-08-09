@@ -37,3 +37,12 @@
 2. 身分一律由 token 推導，input 永不接收使用者身分 / 越權 scope。
 3. be2 授權以 auth-service 的 `businessList` + `/verify` 為準，**不自建 RBAC**。
 4. change-set draft-only：agent 不直接送出寫入，一律人工在確認頁批准。
+
+## 開發指令（Phase 1a，`npm run <script>`）
+
+- `dev` — 啟動 MCP server（Streamable HTTP，`/mcp` + `/healthz`），監聽 `127.0.0.1:$BE2_MCP_PORT`（預設 8787）。
+- `test` — 跑 vitest 單元/整合測試。
+- `ci` — `typecheck` + `test`，本地重現 CI gate。
+- `eval` — 跑 agent-eval 案例（需 `ANTHROPIC_API_KEY`；沒設會 SKIP，不算失敗）。
+- `bootstrap-user` — pilot 使用者登入 auth-service 換 be2 token，存進 server 端 SQLite store，印出一次性的 static bearer 供 `claude mcp add` 用（見 `docs/be2-mcp/phase1a-runbook.md`）。
+- `probe-sit` — 手動打 SIT `be2-220` 抓真實 endpoint 回應形狀，寫成 sanitized fixtures（絕不寫入 token）。

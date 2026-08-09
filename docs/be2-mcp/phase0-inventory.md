@@ -17,6 +17,8 @@
 
 **下一步**：開新 session → `superpowers:writing-plans` 規劃 **Phase 1a**（MCP server skeleton + 3 個 L0 read tools + OTel + 稽核 + eval 骨架；Claude Code static bearer；**無外部依賴、不等 C 盤完**）→ agy-peer-review → subagent-driven-development + TDD。
 
+**Phase 1a 進度（2026-08-09，Task 16）**：**已實作完成**——MCP server（Streamable HTTP）+ 3 個 L0 read tools（`be2_find_products`／`be2_get_product_plans`／`be2_get_inventory_settings`）+ OTel + 稽核（append-only audit_log）+ rate budget（100/session、500/user/day）+ eval 骨架，全走 TDD、單元/整合測試 **65 passed / 3 skipped**，plan 已 agy-approved。Pilot 上線文件見 `docs/be2-mcp/phase1a-runbook.md`。**Live SIT e2e 驗證（brief Step 2）與 fixture 補測（3 個 skip 的測試）延後（DEFERRED）**：卡在 `.env` 的 SIT 測試帳密（`AUTH_email`/`AUTH_pwd`）已失效，auth-service 回 `AU9010`；待取得有效 SIT 憑證後依 runbook「⚠️ Live SIT e2e verification — PENDING valid credentials」段落補跑。
+
 ## 0. 決策：Option 1 — 已定案（2026-08-09）
 
 > **結論：採 Option 1（server 端 token store）。** 主 spec §2/§3/§6/§11/§12 已回改並過 agy review（rounds=2 approved）。下方為評估紀錄。
