@@ -1,0 +1,53 @@
+import { describe, it, expect } from 'vitest'
+import { productPlansTool, normalizePackageConfigs } from '../src/tools/productPlans.js'
+import type { ToolContext } from '../src/tools/types.js'
+import { existsSync, readFileSync } from 'node:fs'
+
+function ctxWith(routes: Record<string, unknown>): ToolContext {
+  return {
+    accessToken: 'fake-jwt', userLabel: 'p@kkday.com',
+    gateway: { get: async (path: string) => {
+      for (const [frag, v] of Object.entries(routes)) if (path.includes(frag)) return v
+      throw new Error(`unexpected ${path}`)
+    } } as never,
+  }
+}
+
+const pkgs = [{ pkg_oid: 'k1', item_oid: 'i1', name: '標準方案', supplier_oid_list: [0] }]
+
+describe('normalizePackageConfigs', () => {
+  it('handles config_data object form', () => {
+    const m = normalizePackageConfigs({ config_data: { k1: { is_active: true } } })
+    expect(m.get('k1')).toEqual({ is_active: true })
+  })
+  it('handles array form', () => {
+    const m = normalizePackageConfigs([{ pkg_oid: 'k1', is_active: false }])
+    expect(m.get('k1')).toEqual({ is_active: false })
+  })
+})
+
+describe('be2_get_product_plans', () => {
+  it('merges package list with per-package is_active', async () => {
+    const env = await productPlansTool.handler({ prod_oid: 'p1' },
+      ctxWith({ '/packages': pkgs, '/package-configs': { config_data: { k1: { is_active: true } } } }))
+    expect(env.items).toEqual([{ pkg_oid: 'k1', item_oid: 'i1', name: '標準方案', is_active: true }])
+    expect(env.data_origin).toBe('be2_content')
+    expect(env.read_oids.sort()).toEqual(['i1', 'k1', 'p1'])
+  })
+  it('missing config for a pkg -> is_active undefined, still listed', async () => {
+    const env = await productPlansTool.handler({ prod_oid: 'p1' },
+      ctxWith({ '/packages': pkgs, '/package-configs': { config_data: {} } }))
+    expect((env.items[0] as { is_active?: boolean }).is_active).toBeUndefined()
+  })
+})
+
+describe.skipIf(!existsSync('tests/fixtures/packages.json'))('fixture: real SIT shape', () => {
+  it('produces items with pkg_oid + name from captured fixtures', async () => {
+    const env = await productPlansTool.handler({ prod_oid: 'fx' }, ctxWith({
+      '/packages': JSON.parse(readFileSync('tests/fixtures/packages.json', 'utf8')),
+      '/package-configs': JSON.parse(readFileSync('tests/fixtures/package-configs.json', 'utf8')),
+    }))
+    expect(env.items.length).toBeGreaterThan(0)
+    expect((env.items[0] as Record<string, unknown>).pkg_oid).toBeDefined()
+  })
+})
