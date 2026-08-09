@@ -57,7 +57,11 @@
 
 - **確認頁認證從 capability-token 換成 web session cookie**:`/confirm/*` 不再吃 `?token=`;改驗 `be2mcp_sid` cookie → 查 web session → 取該 session 的 be2 token。這是 2b 的**唯一認證面改動**。
 - **IDOR / 批准者對齊**:`/confirm/:id` 與 approve/reject 只服務 **session 的 be2 使用者 label == change-set `creator_label`** 的 change-set(不符 → 404,不洩存在)。即「只有建立者本人登入才能看/批自己的 change-set」,與 2a 的 capability-token-綁-creator 等價,但改由 SSO 身份強制。
-- **執行用 session token(不用 stored creatorBearerHash)**:2a executor 用 change-set 存的 `creatorBearerHash` 撈 token;2b 批准是人工登入的 session,直接用 **session 的新鮮 be2 token** 執行 —— 更貼近「批准當下的人就是執行身份」。executor 介面已把 token 解析抽象成注入(`getFreshByHash` / 傳入 token),2b 傳 session token 即可,executor 邏輯不改。
+- **執行用 session token(不用 stored creatorBearerHash)——需改 executor 簽章(更正 agy round-1)**:2a 的 `executeChangeSet(deps, changesetId)` **寫死** `deps.tokenManager.getFreshByHash(rec.creatorBearerHash)`(即用 change-set 建立時存的 agent-side bearer 撈 token)。2b 批准是人工登入的 web session,執行身份必須是**批准當下登入的人**,故:
+  - **`executeChangeSet` 必須改成接受注入的執行身份**:新增參數(如 `opts: { accessToken, userLabel, modifyUser? }`)或改注入一個 `resolveExecutor()`,由呼叫端(2b 的 approve route)傳入**該 web session 的新鮮 be2 access token + user_label**;移除對 `rec.creatorBearerHash` 的硬編。**「executor 邏輯不改」是錯的**——簽章與 token 取得處必須改;但 read-merge-write / no-op / allSettled / stuck-state / CAS 這些**演算法**不變。單元測試已注入 token-like 依賴,改注入點即可。
+  - `getFreshByHash`(Phase 2a Task 3)在 2b 仍可用於**別處**,但 approve 執行路徑改用 session token。
+- **`liveDiff` 也用 session token(採納 agy 建議)**:`confirmRoutes.ts` 的 `liveDiff` 目前也用 `rec.creatorBearerHash` 讀現況;2b 一律改用**當前 web session 的 token**讀 live state(diff 預覽、stale 重算、before/after)——人工檢視期間的所有 gateway 呼叫都以人工身份發出,與執行身份一致。
+- **稽核歸屬必須改成 web session(更正 agy round-1;治理硬性要求)**:Phase 2a 的 approve/reject/execute 稽核列把 `sessionId` 寫死成 `rec.sessionId`(= agent 原始 tool-call session)。2b 若沿用,人工批准/執行事件會被錯記在 **agent 的 session** 下,喪失「哪個人在哪個 web session 批的」這條治理主軸。故 2b 的 approve/reject/execute 稽核列**必須記 web session id + 登入的 user_label**(以及來源 IP/UA,已於 Phase 2a final-fix 加入 route 層 approve/reject 稽核),與 `rec.sessionId`(建立者的 agent session)**分開可辨**。稽核需能回答:change-set 由「agent session X 的員工 A」建立,由「web session Y 的員工 A」批准+執行。
 - **draft-only 維持**:agent 面仍無批准/執行 tool;批准只在需要 be2-auth session 的瀏覽器頁,agent 無 session → 無法批准(**這就是關閉 2a self-approval 洞的機制**)。
 - **授權仍委派 gateway**:寫入經 gateway 代打 `/verify`(403 fail-closed)不變。businessList 過濾照 2a。
 
@@ -89,6 +93,8 @@
 ## 9. 測試與評估
 
 - 單元/整合(vitest, TDD):session 建立/查詢/TTL 過期、cookie 驗證、`/confirm/session` exchange(mock be2-auth)、confirm 頁 session-auth(無 session→導登入、他人 session→404)、approve 需 session.user==creator、CAS 執行恰好一次(沿用 2a race 測)、postMessage origin 檢查(前端邏輯以整合測試涵蓋)。
+- **執行身份測試(對應 §4 更正)**:approve 執行時 executor 用的是**傳入的 web session token**、非 `rec.creatorBearerHash`(以不同的 mock token 驗證 gateway PUT 收到的是 session token);`liveDiff` 同樣用 session token。
+- **稽核歸屬測試(對應 §4 更正)**:approve/reject/execute 的稽核列 `session_id` == web session id(非 `rec.sessionId`),且帶登入 user_label + IP/UA;建立列仍為 agent session —— 兩者可辨。
 - **安全測試**:agent 無 session cookie → approve 得 401/導登入(**證明 self-approval 洞已關**);偽造 origin 的 postMessage 被拒;capability-token 路徑已移除(不得殘留可繞過的舊批准面)。
 - 上線前 `verify` skill 走真實 SIT:登入(POPUP,cookie 靜默)→ 建 session → 開 diff → 批准 → 執行(有寫入帳號則 toggle+revert;否則 403 fail-closed 驗證)。
 
@@ -101,3 +107,5 @@
 
 - 2b 完成 = Phase 2 的「一般員工可用」認證面就緒(parent spec §11 的 1b/2 對一般員工 GA 前提之一)。
 - 內網多人服務(非 loopback)、完整 Batch Wizard UI、modify_user resolver + 寫入帳號打通 live e2e,為 2b 之後的獨立工作項。
+
+<!-- agy-peer-reviewed: 2026-08-09T11:42:18Z rounds=2 verdict=approved -->
