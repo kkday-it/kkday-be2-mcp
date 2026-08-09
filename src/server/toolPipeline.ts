@@ -36,6 +36,7 @@ export function wrapTool(tool: ToolDef, deps: PipelineDeps) {
       let userLabel = 'unknown'
       let status: 'ok' | 'error' | 'denied_rate' | 'denied_auth' = 'ok'
       let result: ToolResult
+      let message: string | undefined
       try {
         const user = await deps.tokenManager.getFreshAccessToken(ctx.bearer)
         userLabel = user.userLabel
@@ -48,14 +49,16 @@ export function wrapTool(tool: ToolDef, deps: PipelineDeps) {
         result = { content: [{ type: 'text', text: JSON.stringify(envelope) }] }
       } catch (e) {
         status = e instanceof RateError ? 'denied_rate' : e instanceof AuthError ? 'denied_auth' : 'error'
+        span.recordException(e as Error)
         span.setStatus({ code: SpanStatusCode.ERROR })
         const code = e instanceof AppError ? e.code : 'INTERNAL'
-        const message = e instanceof AppError ? e.message : 'internal error in be2-mcp — check server logs'
+        message = e instanceof AppError ? e.message : 'internal error in be2-mcp — check server logs'
+        if (status === 'error') console.error(`be2-mcp tool ${tool.name} failed:`, e)
         result = errResult(code, message)
       } finally {
         deps.audit.record({
           userLabel, sessionId: ctx.sessionId, clientInfo: ctx.clientInfo, tool: tool.name,
-          params: args, status, errorMessage: status === 'ok' ? undefined : JSON.parse(result!.content[0].text).error?.message,
+          params: args, status, errorMessage: status === 'ok' ? undefined : message,
           traceId, durationMs: Date.now() - started,
         })
         span.end()

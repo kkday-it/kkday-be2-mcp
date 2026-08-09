@@ -68,12 +68,25 @@ describe('wrapTool pipeline', () => {
     expect(out.content[0].text).toMatch(/budget/i)
     expect(new AuditLog(db).recent()[0].status).toBe('denied_rate')
   })
-  it('handler throw -> isError, audited error, no stack leaked', async () => {
+  it('handler throw -> isError, audited error, no stack leaked, logged to stderr', async () => {
     const { db, deps } = makeDeps()
     tool.handler.mockRejectedValueOnce(new Error('boom'))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const out = await requestContext.run(ctx, () => wrapTool(tool as never, deps)({ v: 'x' }))
     expect(out.isError).toBe(true)
     expect(out.content[0].text).not.toContain('at ') // no stack frames
     expect(new AuditLog(db).recent()[0].status).toBe('error')
+    expect(errSpy).toHaveBeenCalledTimes(1)
+    expect(errSpy.mock.calls[0].join(' ')).toContain('t_echo')
+    errSpy.mockRestore()
+  })
+  it('AuthError/RateError path does NOT trigger the generic internal-error console.error', async () => {
+    const { deps } = makeDeps()
+    ;(deps as never as { tokenManager: { getFreshAccessToken: ReturnType<typeof vi.fn> } })
+      .tokenManager.getFreshAccessToken.mockRejectedValueOnce(new AuthError('UNKNOWN_BEARER', 'unknown bearer', 401))
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    await requestContext.run(ctx, () => wrapTool(tool as never, deps)({ v: 'x' }))
+    expect(errSpy).not.toHaveBeenCalled()
+    errSpy.mockRestore()
   })
 })
