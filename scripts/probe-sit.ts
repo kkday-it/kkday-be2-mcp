@@ -67,8 +67,7 @@ async function main() {
   ]
   if (itemOid) {
     probes.push(
-      ['inventory', `/be2/api/v1/product/item/${itemOid}/inventory`],
-      ['inventory-status', `/be2/api/v1/product/item/${itemOid}/inventory/status`],
+      ['inventory-status', `/product/api/v1/items/${itemOid}/inventories/status`],
     )
   }
   for (const [name, path] of probes) {

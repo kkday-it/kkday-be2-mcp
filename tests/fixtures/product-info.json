@@ -1,0 +1,80 @@
+{
+  "prod_oid": 248777,
+  "prod_mid": 248777,
+  "workflow_status": "PUBLISHED",
+  "is_draft_only": false,
+  "is_marketplace": true,
+  "is_allowed_to_modify": false,
+  "category": "M05",
+  "category_tags": [],
+  "bd_tag": "0005",
+  "tags": [
+    "TAG_5_2"
+  ],
+  "product_category": {
+    "sub": [],
+    "main": "CATEGORY_064"
+  },
+  "master_lang": "zh-cn",
+  "name": "【中国武汉市送机】武汉市三环内到武汉天河机场 / 专车服务",
+  "desc": "中国武汉市送机服务：武汉市三环内到武汉天河机场，中途不停车",
+  "feature": "1.无需担心时间问题，我们24小时均有接送服务<br>2.车况良好，并有专业司机保驾护航<br>3.价格透明，无隐藏费用，行程开始前两天退款无忧<br><br>",
+  "meta_title": "",
+  "guide_lang": [
+    "zh-tw",
+    "en"
+  ],
+  "voice_guide_lang": [],
+  "schedule_time": {
+    "day": 0,
+    "hour": 4,
+    "enable": true,
+    "minute": 0
+  },
+  "lunch_price": null,
+  "dinner_price": null,
+  "ai_generated_flag": {
+    "name": false,
+    "desc": false,
+    "feature": false
+  },
+  "product_config": {
+    "is_active": true,
+    "is_delete": false,
+    "is_global_search": true,
+    "is_locked_for_active": false,
+    "prod_setting": {
+      "owners": {
+        "am": {
+          "user_id": "69a1b448-1e60-4075-8931-b672a21d2481",
+          "updated_at": "2025-08-14 08:04:28",
+          "updated_by": "69a1b448-1e60-4075-8931-b672a21d2481"
+        },
+        "bd": {
+          "user_id": "69a1b448-1e60-4075-8931-b672a21d2481",
+          "updated_at": "2025-08-14 08:04:28",
+          "updated_by": "69a1b448-1e60-4075-8931-b672a21d2481"
+        }
+      }
+    },
+    "updated_at": "2025-11-27 05:05:04",
+    "updated_by": "00000000-0000-0000-0000-000000000000",
+    "allow_modify_platform": "pms",
+    "allow_sale_channel": []
+  },
+  "created_platform": "pms",
+  "created_platform_supplier": "rezio",
+  "scheduled_publish_at": null,
+  "last_finalize_error": [],
+  "published_at": "2025-11-27 05:05:04",
+  "go_date_setting_type": "01",
+  "payment_invoice_type": 2,
+  "payment_invoice_type_updated_at": "2025-10-01 03:10:20",
+  "payment_invoice_type_update_by": "dc9b2700-ebc7-46c7-8705-c276f15a029e",
+  "category_type": "DEFAULT",
+  "vertical": "TICKET",
+  "created_at": "2024-09-10 06:22:43",
+  "created_by": "9f9e3617-e1fe-4ef1-85be-ec171062d35f",
+  "updated_at": "2025-11-27 05:05:04",
+  "updated_by": "00000000-0000-0000-0000-000000000000"
+}

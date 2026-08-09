@@ -1,0 +1,17 @@
+[
+  {
+    "pkg_oid": 1096031,
+    "name": "【武汉天河机场送机】武汉市三环内-武汉天河机场（35KM以内）",
+    "is_active": true,
+    "is_bundle": false,
+    "is_standalone": true,
+    "reserve_date": null,
+    "reserve_status": null,
+    "reserve_queue": [],
+    "pay_on_site_marketings": [],
+    "has_activity_label": false,
+    "user_promotion_label": null,
+    "updated_by": "9f9e3617-e1fe-4ef1-85be-ec171062d35f",
+    "updated_at": "2024-09-10 06:22:45"
+  }
+]

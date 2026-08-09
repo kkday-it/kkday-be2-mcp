@@ -1,0 +1,14 @@
+{
+  "is_active": true,
+  "is_global_search": true,
+  "instant_order_flag": 1,
+  "is_recommend_mail": true,
+  "promo_tag": null,
+  "payment_invoice_type": 2,
+  "modify_user": "00000000-0000-0000-0000-000000000000",
+  "allow_modify_platform": "pms",
+  "is_locked_for_active": false,
+  "allow_sale_channel": [],
+  "market_external_edit_blocked": false,
+  "market_edit_block_change_reason": null
+}
