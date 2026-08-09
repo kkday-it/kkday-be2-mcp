@@ -115,6 +115,19 @@ describe('confirm routes — session-cookie auth', () => {
     expect(store.get('cs1')!.status).toBe('pending_approval')
   })
 
+  it('creatorLabel and session userLabel differing only by case/whitespace still match: creator can view AND approve their own change-set', async () => {
+    // Regression for the IDOR fix: creatorLabel (bearer-side) and session userLabel (confirm-page
+    // side) both derive from the JWT authKey now, but must tolerate incidental case/whitespace
+    // differences rather than 404ing the change-set's own creator.
+    seed(store, 'cs1', true, false, '  Owner@KKday.com  ')
+    const g = await http(base, 'GET', '/confirm/cs1', undefined, COOKIE_A)
+    expect(g.status).toBe(200)
+    const dv = await getDiffVersion(COOKIE_A)
+    const r = await http(base, 'POST', '/confirm/cs1/approve', { diff_version: dv }, COOKIE_A)
+    expect(r.status).toBe(200)
+    expect(store.get('cs1')!.status).toBe('done')
+  })
+
   it('GET sets Referrer-Policy: no-referrer and shows the product name', async () => {
     seed(store, 'cs1', true, false)
     const r = await http(base, 'GET', '/confirm/cs1', undefined, COOKIE_A)

@@ -6,9 +6,16 @@ export interface WebSession { sessionId: string; userLabel: string; createdAt: n
 export class WebSessionStore {
   private now: () => number
   private idleTtlMs: number
-  constructor(private db: Database.Database, opts: { now?: () => number; idleTtlMs?: number } = {}) {
+  // Phase 2b fix: session teardown must also purge the be2 token this session owns (in
+  // user_tokens, keyed by hash(sessionId) — see ssoRoutes.ts). Rather than duplicate that
+  // knowledge here, delete() (the single row-removal path — idle-expiry in get() delegates to
+  // it too) notifies this optional callback so the caller (app.ts) can wire up the purge without
+  // WebSessionStore needing to know about TokenStore.
+  private onDelete?: (sessionId: string) => void
+  constructor(private db: Database.Database, opts: { now?: () => number; idleTtlMs?: number; onDelete?: (sessionId: string) => void } = {}) {
     this.now = opts.now ?? Date.now
     this.idleTtlMs = opts.idleTtlMs ?? 8 * 3600_000
+    this.onDelete = opts.onDelete
   }
   static newSessionId(): string { return randomBytes(32).toString('hex') }
 
@@ -28,5 +35,6 @@ export class WebSessionStore {
   }
   delete(sessionId: string): void {
     this.db.prepare('DELETE FROM web_sessions WHERE session_id = ?').run(sessionId)
+    this.onDelete?.(sessionId)
   }
 }

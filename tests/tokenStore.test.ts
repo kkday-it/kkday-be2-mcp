@@ -32,6 +32,18 @@ describe('TokenStore', () => {
     s.upsert({ ...base, accessToken: 'a2', refreshToken: 'r2', accessExpiresAt: 2 })
     expect(s.getByBearer('b')!.refreshToken).toBe('r2')
   })
+  it('deleteByBearerHash removes the record so getByBearerHash returns undefined', () => {
+    const s = makeStore()
+    const hash = TokenStore.hashBearer('be2mcp_xyz')
+    s.upsert({ bearerHash: hash, userLabel: 'u', accessToken: 'a', refreshToken: 'r', businessList: [], accessExpiresAt: 1, updatedAt: 1 })
+    expect(s.getByBearerHash(hash)).toBeDefined()
+    s.deleteByBearerHash(hash)
+    expect(s.getByBearerHash(hash)).toBeUndefined()
+  })
+  it('deleteByBearerHash on an unknown hash is a silent no-op', () => {
+    const s = makeStore()
+    expect(() => s.deleteByBearerHash(TokenStore.hashBearer('nope'))).not.toThrow()
+  })
   it('audit_log rejects UPDATE and DELETE (append-only triggers)', () => {
     const db = openDb(':memory:')
     db.prepare(`INSERT INTO audit_log (ts, user_label, session_id, client_info, tool, params_json, status, trace_id, duration_ms)

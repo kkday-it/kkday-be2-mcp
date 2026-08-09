@@ -18,6 +18,12 @@ export interface ConfirmDeps extends ExecutorDeps {
   modifyUserFrom: (accessToken: string) => string
 }
 
+// creatorLabel (bearer-side, src/auth/enroll.ts) and session userLabel (confirm-page side,
+// src/server/ssoRoutes.ts) now both derive from the same JWT authKey claim, but comparing them
+// with strict `===` is still fragile against incidental case/whitespace differences (and would
+// otherwise 404 a change-set's own creator on their own approval page). Normalize defensively.
+const sameUser = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase()
+
 function esc(s: unknown): string { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!)) }
 
 function renderPage(id: string, diff: DiffItem[], diffVersion: string, banner = ''): string {
@@ -80,7 +86,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     const rec = deps.changeSets.get(String(req.params.id))
     // IDOR: only the change-set's creator may view it. Generic 404 either way — no existence leak
     // for a different user's change-set id.
-    if (!rec || rec.creatorLabel !== who.userLabel || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
+    if (!rec || !sameUser(rec.creatorLabel, who.userLabel) || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
     const { diff, version } = await liveDiff(rec, who.accessToken)
     res.status(200).send(renderPage(rec.id, diff, version))
   }))
@@ -90,7 +96,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     const who = await requireSession(req)
     if (!who) { loginRedirect(res, `/confirm/${req.params.id}`); return }
     const rec = deps.changeSets.get(String(req.params.id))
-    if (!rec || rec.creatorLabel !== who.userLabel || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
+    if (!rec || !sameUser(rec.creatorLabel, who.userLabel) || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
     const { diff, version } = await liveDiff(rec, who.accessToken)
     if (version !== String(req.body?.diff_version)) { res.status(409).send(renderPage(rec.id, diff, version, '<p style="color:#b00">目標欄位已被改動,請重新確認。</p>')); return }
     // CRITICAL ordering (agy round-2): resolve modifyUser BEFORE the CAS below. modifyUserFrom can
@@ -126,7 +132,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     const who = await requireSession(req)
     if (!who) { loginRedirect(res, `/confirm/${req.params.id}`); return }
     const rec = deps.changeSets.get(String(req.params.id))
-    if (!rec || rec.creatorLabel !== who.userLabel) { res.status(404).send('not found'); return }
+    if (!rec || !sameUser(rec.creatorLabel, who.userLabel)) { res.status(404).send('not found'); return }
     // Same CAS discipline as approve: only a still-pending change-set can be rejected. Prevents
     // rejecting a change-set that has already been approved/executed (or rejected) concurrently.
     const won = deps.changeSets.casStatus(rec.id, 'pending_approval', 'rejected', deps.now())

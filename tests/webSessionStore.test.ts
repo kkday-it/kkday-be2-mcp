@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { openDb } from '../src/store/db.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 
@@ -36,5 +36,31 @@ describe('WebSessionStore', () => {
     const s = new WebSessionStore(openDb(':memory:'), { now: () => 1000 })
     s.create('sid1', 'u'); s.delete('sid1')
     expect(s.get('sid1')).toBeUndefined()
+  })
+
+  it('onDelete fires with the sessionId on explicit delete()', () => {
+    const onDelete = vi.fn()
+    const s = new WebSessionStore(openDb(':memory:'), { now: () => 1000, onDelete })
+    s.create('sid1', 'u')
+    s.delete('sid1')
+    expect(onDelete).toHaveBeenCalledTimes(1)
+    expect(onDelete).toHaveBeenCalledWith('sid1')
+  })
+
+  it('onDelete fires when get() lazily reaps an idle-expired session', () => {
+    let t = 1000
+    const onDelete = vi.fn()
+    const s = new WebSessionStore(openDb(':memory:'), { now: () => t, idleTtlMs: 100, onDelete })
+    s.create('sid1', 'u')
+    t = 1000 + 200
+    expect(s.get('sid1')).toBeUndefined()
+    expect(onDelete).toHaveBeenCalledTimes(1)
+    expect(onDelete).toHaveBeenCalledWith('sid1')
+  })
+
+  it('onDelete is optional — no callback provided does not throw', () => {
+    const s = new WebSessionStore(openDb(':memory:'), { now: () => 1000 })
+    s.create('sid1', 'u')
+    expect(() => s.delete('sid1')).not.toThrow()
   })
 })

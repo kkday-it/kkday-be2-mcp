@@ -41,6 +41,14 @@ export class TokenStore {
     }
   }
 
+  // Phase 2b fix: web-session teardown (logout / idle-expiry / dead-session) must purge the be2
+  // access+refresh token it owns — otherwise the row lives on in user_tokens forever, at rest,
+  // with no session left that can ever reach it. Wired via WebSessionStore's onDelete callback
+  // (src/server/webSessionStore.ts, src/server/app.ts) so every session-removal path cleans up.
+  deleteByBearerHash(hash: string): void {
+    this.db.prepare('DELETE FROM user_tokens WHERE bearer_hash = ?').run(hash)
+  }
+
   upsert(rec: TokenRecord): void {
     this.db.prepare(`
       INSERT INTO user_tokens (bearer_hash, user_label, access_token, refresh_token, business_list_json, access_expires_at, updated_at)

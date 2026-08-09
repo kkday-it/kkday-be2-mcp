@@ -128,6 +128,27 @@ describe('phase2b security — IDOR (a different be2 user cannot touch your chan
   })
 })
 
+describe('phase2b security — session teardown purges the be2 token, not just the web-session row (Fix 2)', () => {
+  it('POST /confirm/logout purges the be2 token for that session', async () => {
+    const hash = TokenStore.hashBearer('sid-owner')
+    expect(new TokenStore(db).getByBearerHash(hash)).toBeDefined()
+    const res = await fetch(`${base}/confirm/logout`, { method: 'POST', headers: { cookie: 'be2mcp_sid=sid-owner' } })
+    expect(res.status).toBe(200)
+    expect(new TokenStore(db).getByBearerHash(hash)).toBeUndefined()
+  })
+
+  it('an idle-expired session, once lazily reaped by requireSession, also purges its be2 token', async () => {
+    const hash = TokenStore.hashBearer('sid-owner')
+    // The app's own WebSessionStore instance has no fake clock injected (default idleTtlMs 8h) —
+    // backdate last_seen_at directly to simulate 9h of inactivity without a real wait.
+    db.prepare('UPDATE web_sessions SET last_seen_at = ? WHERE session_id = ?').run(Date.now() - 9 * 3600_000, 'sid-owner')
+    expect(new TokenStore(db).getByBearerHash(hash)).toBeDefined()
+    const res = await fetch(`${base}/confirm/anything`, { headers: { cookie: 'be2mcp_sid=sid-owner' }, redirect: 'manual' })
+    expect(res.status).toBe(302) // idle-expired -> requireSession treats as no-session -> login redirect
+    expect(new TokenStore(db).getByBearerHash(hash)).toBeUndefined()
+  })
+})
+
 describe('phase2b security — reject-after-done (carry-forward from Phase 2a, session-auth version)', () => {
   it('reject after approve/execute -> 409, status stays done (cannot reject a done change-set)', async () => {
     // This case needs a change-set to actually reach 'done', which needs both (a) a gateway that

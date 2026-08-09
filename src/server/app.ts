@@ -81,7 +81,11 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // Phase 2b: session-cookie auth (SSO) for the confirm page replaces the Phase 2a capability
   // token. webSessions is shared between the SSO router (creates sessions on login) and the
   // confirm router (reads sessions to authorize approve/reject).
-  const webSessions = new WebSessionStore(db)
+  // Fix 2 (whole-branch review): every web-session removal (logout, dead-session, idle-expiry —
+  // all three funnel through WebSessionStore#delete) must also purge the be2 access+refresh
+  // token that session owns (stored under hash(sessionId) in user_tokens by ssoRoutes.ts), or the
+  // token is orphaned at rest forever with no session left able to reach it.
+  const webSessions = new WebSessionStore(db, { onDelete: sid => store.deleteByBearerHash(TokenStore.hashBearer(sid)) })
   const authOrigin = new URL(config.authsvcUrl).origin
 
   const deps: PipelineDeps = { tokenManager, rateBudget, audit, gateway, readOids }
@@ -95,7 +99,13 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     // Fix 1: the confirm_url (embedding the raw one-time approval token) never reaches the tool
     // response / the model's context — it is printed to the be2-mcp SERVER's own stdout, which
     // only the human running `npm run dev` sees. The agent has no way to read this terminal.
-    emitConfirmUrl: (id, url) => { console.log(`[be2-mcp] change-set ${id} awaiting approval: ${url}`) },
+    // Whole-branch-review Fix 3: the `?token=` capability param that tools.ts still embeds in
+    // `url` is dead surface — Task 5 moved confirm-page auth to the be2-auth SSO session cookie,
+    // and confirmRoutes.ts never reads req.query at all now (see phase2bSecurity.test.ts's
+    // self-approval-closed tests). Logging it here is misleading (implies it still matters), so
+    // strip the query string before logging. approvalTokenHash generation itself is untouched —
+    // out of scope for this fix.
+    emitConfirmUrl: (id, url) => { console.log(`[be2-mcp] change-set ${id} awaiting approval: ${url.split('?')[0]}`) },
   }
 
   const transports = new Map<string, StreamableHTTPServerTransport>()
