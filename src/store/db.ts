@@ -66,6 +66,12 @@ CREATE TABLE IF NOT EXISTS change_set_results (
   trace_id      TEXT NOT NULL,
   PRIMARY KEY (changeset_id, item_key)
 );
+CREATE TABLE IF NOT EXISTS web_sessions (
+  session_id   TEXT PRIMARY KEY,
+  user_label   TEXT NOT NULL,
+  created_at   INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL
+);
 `
 
 export function openDb(path: string): Database.Database {
