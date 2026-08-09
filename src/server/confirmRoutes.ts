@@ -2,10 +2,18 @@ import express from 'express'
 import { timingSafeEqual } from 'node:crypto'
 import { ChangeSetStore } from '../changeset/store.js'
 import { computeShelfDiff, diffVersionHash } from '../changeset/diff.js'
-import { executeChangeSet, type ExecutorDeps } from '../changeset/executor.js'
+import { executeChangeSet, type ExecutorDeps, type ExecutorIdentity } from '../changeset/executor.js'
+import type { TokenManager } from '../auth/tokenManager.js'
 import type { DiffItem } from '../changeset/types.js'
 
-export interface ConfirmDeps extends ExecutorDeps {}
+// Interim (Task 3): executeChangeSet no longer resolves tokens/modifyUser itself — the caller
+// must. This route still resolves identity the Phase 2a way (via the change-set creator's stored
+// bearer); Task 5 switches the SOURCE of `who` to the confirm-page's own web session, but this
+// shape (ConfirmDeps extends ExecutorDeps + explicit tokenManager/modifyUserFrom) stays.
+export interface ConfirmDeps extends ExecutorDeps {
+  tokenManager: TokenManager
+  modifyUserFrom: (accessToken: string) => string
+}
 
 function esc(s: unknown): string { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!)) }
 
@@ -71,6 +79,14 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     if (!rec || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
     const { diff, version } = await liveDiff(rec)
     if (version !== String(req.body?.diff_version)) { res.status(409).send(renderPage(rec.id, token, diff, version, '<p style="color:#b00">目標欄位在你檢視期間被改動,已重新載入最新狀態,請再次確認後批准。</p>')); return }
+    // CRITICAL ordering (agy round-1): resolve the FULL identity (token AND modify_user) BEFORE
+    // the CAS below. modifyUserFrom can throw (the Fix-4 placeholder guard throws unless an env
+    // flag is set; a real resolver could 5xx) — if that throw happened AFTER pending_approval ->
+    // approved, the change-set would be stranded in 'approved' forever (never executes, never
+    // fails). Resolving first means a throw here aborts the whole request (the `h()` wrapper turns
+    // it into a 500) while the change-set is still 'pending_approval' — retryable, not stranded.
+    const user = await deps.tokenManager.getFreshByHash(rec.creatorBearerHash)
+    const who: ExecutorIdentity = { accessToken: user.accessToken, userLabel: user.userLabel, modifyUser: deps.modifyUserFrom(user.accessToken), sessionId: rec.sessionId }
     // Atomic compare-and-swap: two concurrent approves (double-click / client retry) can both
     // pass the `status === 'pending_approval'` check above (that read is stale by the time we
     // get here, since liveDiff() awaits and yields the event loop). Only the request that wins
@@ -88,7 +104,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
       tool: 'changeset.approve', params: { changeset_id: rec.id, ip: req.ip },
       status: 'ok', traceId: 'n/a', durationMs: 0,
     })
-    const out = await executeChangeSet(deps, rec.id)
+    const out = await executeChangeSet(deps, rec.id, who)
     res.status(200).send(`<!doctype html><meta charset=utf-8><h1>執行結果:${esc(out.status)}</h1><pre>${esc(JSON.stringify(out.results, null, 2))}</pre>`)
   }))
 

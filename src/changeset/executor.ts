@@ -1,38 +1,29 @@
 import { trace } from '@opentelemetry/api'
 import type { ChangeSetStore } from './store.js'
-import type { TokenManager } from '../auth/tokenManager.js'
 import type { GatewayClient } from '../gateway/client.js'
 import type { AuditLog } from '../audit/auditLog.js'
 import type { ItemResult, ChangeSetItem } from './types.js'
 import { AppError } from '../errors.js'
 
 export interface ExecutorDeps {
-  changeSets: ChangeSetStore; tokenManager: TokenManager; gateway: GatewayClient; audit: AuditLog
-  modifyUserFrom: (accessToken: string) => string; now: () => number
+  changeSets: ChangeSetStore; gateway: GatewayClient; audit: AuditLog; now: () => number
 }
 
-export async function executeChangeSet(deps: ExecutorDeps, changesetId: string): Promise<{ status: 'done' | 'partial' | 'failed'; results: ItemResult[] }> {
+// The identity to execute AS. Resolved by the CALLER before executeChangeSet is invoked (spec
+// §4): a token-resolution failure must never strand a change-set in 'executing' with no way
+// forward. The caller resolves `who` first, then CAS's pending_approval -> approved, then calls
+// executeChangeSet — so a resolution failure simply leaves the change-set pending_approval
+// (retryable), never stuck mid-execution.
+export interface ExecutorIdentity { accessToken: string; userLabel: string; modifyUser: string; sessionId: string }
+
+export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, who: ExecutorIdentity): Promise<{ status: 'done' | 'partial' | 'failed'; results: ItemResult[] }> {
   const rec = deps.changeSets.get(changesetId)
   if (!rec) throw new AppError('NOT_FOUND', 'change-set not found', 404)
   if (rec.status !== 'approved') throw new AppError('BAD_STATE', `change-set is ${rec.status}, not approved`, 409)
   deps.changeSets.setStatus(changesetId, 'executing')
 
-  // Anything that throws AFTER we flip to 'executing' but BEFORE per-item results are recorded
-  // (e.g. token refresh REAUTH_REQUIRED) would otherwise strand the change-set in 'executing'
-  // forever. Guard: on early throw, mark it 'failed' (terminal, visible) and rethrow.
-  let at: string, modifyUser: string
-  try {
-    const user = await deps.tokenManager.getFreshByHash(rec.creatorBearerHash)
-    at = user.accessToken
-    modifyUser = deps.modifyUserFrom(at)
-  } catch (e) {
-    deps.changeSets.setStatus(changesetId, 'failed', deps.now())
-    deps.audit.record({
-      userLabel: rec.creatorLabel, sessionId: rec.sessionId, clientInfo: 'confirm-page', tool: 'changeset.execute',
-      params: { changeset_id: changesetId }, status: 'error', errorMessage: (e as Error).message, traceId: 'n/a', durationMs: 0,
-    })
-    throw e
-  }
+  const at = who.accessToken
+  const modifyUser = who.modifyUser
   const tracer = trace.getTracer('be2-mcp')
 
   const byOid = new Map<string, ChangeSetItem[]>()
@@ -67,7 +58,7 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string):
   deps.changeSets.recordResults(changesetId, results)
   for (const r of results) {
     deps.audit.record({
-      userLabel: rec.creatorLabel, sessionId: rec.sessionId, clientInfo: 'confirm-page', tool: 'changeset.execute',
+      userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-page', tool: 'changeset.execute',
       params: { changeset_id: changesetId, item: r.item_key }, status: r.status === 'failed' ? 'error' : 'ok',
       errorMessage: r.error_message, traceId: r.trace_id, durationMs: 0,
     })
