@@ -40,6 +40,32 @@ CREATE TABLE IF NOT EXISTS session_read_oids (
   recorded_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, oid)
 );
+CREATE TABLE IF NOT EXISTS change_sets (
+  id                   TEXT PRIMARY KEY,
+  creator_label        TEXT NOT NULL,
+  creator_bearer_hash  TEXT NOT NULL,
+  session_id           TEXT NOT NULL,
+  action_type          TEXT NOT NULL,
+  items_json           TEXT NOT NULL,
+  diff_json            TEXT NOT NULL,
+  diff_version         TEXT NOT NULL,
+  note                 TEXT,
+  status               TEXT NOT NULL,
+  approval_token_hash  TEXT NOT NULL,
+  created_at           INTEGER NOT NULL,
+  decided_at           INTEGER
+);
+CREATE TABLE IF NOT EXISTS change_set_results (
+  changeset_id  TEXT NOT NULL,
+  item_key      TEXT NOT NULL,
+  status        TEXT NOT NULL,
+  before_json   TEXT,
+  after_json    TEXT,
+  error_code    TEXT,
+  error_message TEXT,
+  trace_id      TEXT NOT NULL,
+  PRIMARY KEY (changeset_id, item_key)
+);
 `
 
 export function openDb(path: string): Database.Database {
