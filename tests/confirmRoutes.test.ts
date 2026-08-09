@@ -3,123 +3,184 @@ import express from 'express'
 import { openDb } from '../src/store/db.js'
 import { ChangeSetStore } from '../src/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
+import { WebSessionStore } from '../src/server/webSessionStore.js'
+import { TokenStore } from '../src/store/tokenStore.js'
+import { AuthError } from '../src/errors.js'
 import { buildConfirmRouter } from '../src/server/confirmRoutes.js'
 import type { Server } from 'node:http'
 
-// minimal fetch helper
-async function http(base: string, method: string, path: string, body?: object) {
-  const res = await fetch(`${base}${path}`, { method, headers: body ? { 'content-type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined, redirect: 'manual' })
+// minimal fetch helper — redirect:'manual' so we can assert 302s instead of following them.
+async function http(base: string, method: string, path: string, body?: object, cookie?: string) {
+  const headers: Record<string, string> = {}
+  if (body) headers['content-type'] = 'application/json'
+  if (cookie) headers['cookie'] = cookie
+  const res = await fetch(`${base}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, redirect: 'manual' })
   return { status: res.status, text: await res.text(), headers: res.headers }
 }
-function seed(store: ChangeSetStore, current: boolean, target: boolean) {
-  const token = 'tok-abc'
-  store.create({ id: 'cs1', creatorLabel: 'owner@kkday.com', creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_product',
+
+const SID_A = 'sid-A'
+const SID_B = 'sid-B'
+const COOKIE_A = `be2mcp_sid=${SID_A}`
+const COOKIE_B = `be2mcp_sid=${SID_B}`
+
+function seed(store: ChangeSetStore, id: string, current: boolean, target: boolean, creatorLabel = 'owner@kkday.com') {
+  store.create({
+    id, creatorLabel, creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_product',
     items: [{ prod_oid: 'p1', target_is_active: target }],
     diff: [{ prod_oid: 'p1', name: 'Prod A', current_is_active: current, target_is_active: target, no_op: current === target }],
-    diffVersion: 'seed', status: 'pending_approval', approvalTokenHash: ChangeSetStore.hashToken(token), createdAt: 1000 })
-  return token
+    diffVersion: 'seed', status: 'pending_approval', approvalTokenHash: ChangeSetStore.hashToken('unused'), createdAt: 1000,
+  })
 }
 
-let server: Server, base: string, store: ChangeSetStore, db: ReturnType<typeof openDb>, live: { is_active: boolean }, putCalls: number
+let server: Server, base: string, store: ChangeSetStore, db: ReturnType<typeof openDb>, webSessions: WebSessionStore
+let live: { is_active: boolean }, putCalls: number, putBearer: string | undefined
+let tmMode: 'ok' | 'throw'
+let modifyUserThrows: boolean
+
 beforeEach(async () => {
-  db = openDb(':memory:'); store = new ChangeSetStore(db, { now: () => 1000 }); live = { is_active: true }; putCalls = 0
+  db = openDb(':memory:')
+  store = new ChangeSetStore(db, { now: () => 1000 })
+  webSessions = new WebSessionStore(db, { now: () => 1000 })
+  webSessions.create(SID_A, 'owner@kkday.com')
+  webSessions.create(SID_B, 'other@kkday.com')
+  live = { is_active: true }
+  putCalls = 0
+  putBearer = undefined
+  tmMode = 'ok'
+  modifyUserThrows = false
+
   const gateway = {
-    // Delay on the live-state read inside liveDiff() — this is what widens the race window between
-    // a request's initial `status === 'pending_approval'` check and its eventual status-transition
-    // call, letting a second concurrent approve's initial check run (and pass) before the first
-    // request transitions the status away from pending_approval.
     get: async (p: string) => { if (p.includes('/info')) return { name: 'Prod A' }; await new Promise(r => setTimeout(r, 15)); return { is_active: live.is_active } },
-    put: async () => { putCalls++; live.is_active = false; return {} },
+    put: async (_p: string, at: string) => { putCalls++; putBearer = at; live.is_active = false; return {} },
   } as never
-  const tokenManager = { getFreshByHash: async () => ({ accessToken: 'f', userLabel: 'owner@kkday.com', businessList: [] }) } as never
-  const router = buildConfirmRouter({ changeSets: store, gateway, tokenManager, audit: new AuditLog(db, () => 1000), modifyUserFrom: () => 'U', now: () => 1000 })
+
+  const sessionTokens: Record<string, { accessToken: string; userLabel: string }> = {
+    [TokenStore.hashBearer(SID_A)]: { accessToken: 'sess-tok-A', userLabel: 'owner@kkday.com' },
+    [TokenStore.hashBearer(SID_B)]: { accessToken: 'sess-tok-B', userLabel: 'other@kkday.com' },
+  }
+  const tokenManager = {
+    getFreshByHash: async (hash: string) => {
+      if (tmMode === 'throw') throw new AuthError('REAUTH_REQUIRED', 'be2 session dead', 401)
+      const rec = sessionTokens[hash]
+      if (!rec) throw new Error('unknown session hash')
+      return { ...rec, businessList: [] }
+    },
+  } as never
+
+  const modifyUserFrom = (at: string) => { if (modifyUserThrows) throw new Error('modify_user resolver failed'); return 'U:' + at }
+
+  const router = buildConfirmRouter({
+    changeSets: store, gateway, tokenManager, webSessions, audit: new AuditLog(db, () => 1000),
+    modifyUserFrom, now: () => 1000,
+  })
   const app = express(); app.use(express.json()); app.use(router)
   server = app.listen(0); await new Promise(r => server.on('listening', r))
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
 })
 
-describe('confirm routes', () => {
-  it('GET with bad token -> 404', async () => {
-    seed(store, true, false)
-    expect((await http(base, 'GET', '/confirm/cs1?token=WRONG')).status).toBe(404)
-    expect((await http(base, 'GET', '/confirm/cs1?token=tok-abc')).status).toBe(200)
+async function getDiffVersion(cookie: string, id = 'cs1'): Promise<string> {
+  const g = await http(base, 'GET', `/confirm/${id}`, undefined, cookie)
+  return /data-diff-version="([^"]+)"/.exec(g.text)![1]
+}
+
+describe('confirm routes — session-cookie auth', () => {
+  it('no cookie -> GET redirects to /confirm/login; approve with no cookie is not executed', async () => {
+    seed(store, 'cs1', true, false)
+    const g = await http(base, 'GET', '/confirm/cs1')
+    expect(g.status).toBe(302)
+    expect(g.headers.get('location')).toBe('/confirm/login?next=%2Fconfirm%2Fcs1')
+
+    const a = await http(base, 'POST', '/confirm/cs1/approve', { diff_version: 'seed' })
+    expect(a.status).toBe(302)
+    expect(store.get('cs1')!.status).toBe('pending_approval')
+    expect(putCalls).toBe(0)
   })
-  it('GET sets Referrer-Policy: no-referrer and shows the product name + target', async () => {
-    seed(store, true, false)
-    const r = await http(base, 'GET', '/confirm/cs1?token=tok-abc')
+
+  it('dead session (getFreshByHash throws) -> requireSession deletes it + redirects, not a 500, no write', async () => {
+    seed(store, 'cs1', true, false)
+    tmMode = 'throw'
+    const g = await http(base, 'GET', '/confirm/cs1', undefined, COOKIE_A)
+    expect(g.status).toBe(302)
+    expect(g.headers.get('location')).toContain('/confirm/login')
+    expect(webSessions.get(SID_A)).toBeUndefined()
+    expect(putCalls).toBe(0)
+  })
+
+  it('cookie of a DIFFERENT user -> 404 (IDOR, no existence leak)', async () => {
+    seed(store, 'cs1', true, false, 'owner@kkday.com')
+    const g = await http(base, 'GET', '/confirm/cs1', undefined, COOKIE_B)
+    expect(g.status).toBe(404)
+    const a = await http(base, 'POST', '/confirm/cs1/approve', { diff_version: 'seed' }, COOKIE_B)
+    expect(a.status).toBe(404)
+    expect(store.get('cs1')!.status).toBe('pending_approval')
+  })
+
+  it('GET sets Referrer-Policy: no-referrer and shows the product name', async () => {
+    seed(store, 'cs1', true, false)
+    const r = await http(base, 'GET', '/confirm/cs1', undefined, COOKIE_A)
+    expect(r.status).toBe(200)
     expect(r.headers.get('referrer-policy')).toBe('no-referrer')
     expect(r.text).toContain('Prod A')
   })
-  it('approve executes when diff_version matches live, sets done, writes', async () => {
-    const token = seed(store, true, false)
-    // live diff_version = hash of current is_active=true
-    const g = await http(base, 'GET', `/confirm/cs1?token=${token}`)
-    const dv = /data-diff-version="([^"]+)"/.exec(g.text)![1]
-    const r = await http(base, 'POST', '/confirm/cs1/approve', { token, diff_version: dv })
+
+  it('approve with matching diff_version executes once, sets done, writes with the SESSION token', async () => {
+    seed(store, 'cs1', true, false)
+    const dv = await getDiffVersion(COOKIE_A)
+    const r = await http(base, 'POST', '/confirm/cs1/approve', { diff_version: dv }, COOKIE_A)
     expect(r.status).toBe(200)
     expect(store.get('cs1')!.status).toBe('done')
     expect(live.is_active).toBe(false)
+    expect(putBearer).toBe('sess-tok-A')
   })
+
   it('approve with stale diff_version -> 409, does NOT execute', async () => {
-    const token = seed(store, true, false)
-    const r = await http(base, 'POST', '/confirm/cs1/approve', { token, diff_version: 'STALE' })
+    seed(store, 'cs1', true, false)
+    const r = await http(base, 'POST', '/confirm/cs1/approve', { diff_version: 'STALE' }, COOKIE_A)
     expect(r.status).toBe(409)
     expect(store.get('cs1')!.status).toBe('pending_approval')
     expect(live.is_active).toBe(true)
-  })
-  it('reject sets rejected', async () => {
-    const token = seed(store, true, false)
-    await http(base, 'POST', '/confirm/cs1/reject', { token })
-    expect(store.get('cs1')!.status).toBe('rejected')
+    expect(putCalls).toBe(0)
   })
 
-  it('approve writes a route-level audit row for the human DECISION (Fix 2)', async () => {
-    const token = seed(store, true, false)
-    const g = await http(base, 'GET', `/confirm/cs1?token=${token}`)
-    const dv = /data-diff-version="([^"]+)"/.exec(g.text)![1]
-    await http(base, 'POST', '/confirm/cs1/approve', { token, diff_version: dv })
-    const rows = new AuditLog(db).recent()
-    const decision = rows.find(r => r.tool === 'changeset.approve')
-    expect(decision).toMatchObject({ userLabel: 'owner@kkday.com', status: 'ok' })
-    expect((decision!.params as { changeset_id?: string }).changeset_id).toBe('cs1')
-  })
-
-  it('reject writes a route-level audit row for the human DECISION (Fix 2)', async () => {
-    const token = seed(store, true, false)
-    await http(base, 'POST', '/confirm/cs1/reject', { token })
-    const rows = new AuditLog(db).recent()
-    const decision = rows.find(r => r.tool === 'changeset.reject')
-    expect(decision).toMatchObject({ userLabel: 'owner@kkday.com', status: 'ok' })
-    expect((decision!.params as { changeset_id?: string }).changeset_id).toBe('cs1')
-  })
-
-  it('double-approve is exactly-once: concurrent approves fire the gateway write only once', async () => {
-    const token = seed(store, true, false)
-    const g = await http(base, 'GET', `/confirm/cs1?token=${token}`)
-    const dv = /data-diff-version="([^"]+)"/.exec(g.text)![1]
-    // Fire both approves concurrently (not sequentially-awaited) so both requests race past the
-    // status===pending_approval read before either finishes the async liveDiff() recompute — this
-    // is the actual race window a double-click / client retry would hit. Without the CAS fix, both
-    // requests pass the check, both call executeChangeSet, and the gateway PUT fires twice.
+  it('double-approve (concurrent, same cookie) executes exactly once via CAS', async () => {
+    seed(store, 'cs1', true, false)
+    const dv = await getDiffVersion(COOKIE_A)
     const [r1, r2] = await Promise.all([
-      http(base, 'POST', '/confirm/cs1/approve', { token, diff_version: dv }),
-      http(base, 'POST', '/confirm/cs1/approve', { token, diff_version: dv }),
+      http(base, 'POST', '/confirm/cs1/approve', { diff_version: dv }, COOKIE_A),
+      http(base, 'POST', '/confirm/cs1/approve', { diff_version: dv }, COOKIE_A),
     ])
     const statuses = [r1.status, r2.status].sort()
     expect(statuses).toEqual([200, 409])
     expect(store.get('cs1')!.status).toBe('done')
-    expect(putCalls).toBe(1) // the real gateway write happened exactly once
+    expect(putCalls).toBe(1)
   })
 
-  it('reject after approve/execute -> 409, status stays done (can\'t reject a done change-set)', async () => {
-    const token = seed(store, true, false)
-    const g = await http(base, 'GET', `/confirm/cs1?token=${token}`)
-    const dv = /data-diff-version="([^"]+)"/.exec(g.text)![1]
-    const approveRes = await http(base, 'POST', '/confirm/cs1/approve', { token, diff_version: dv })
-    expect(approveRes.status).toBe(200)
-    expect(store.get('cs1')!.status).toBe('done')
-    const rejectRes = await http(base, 'POST', '/confirm/cs1/reject', { token })
-    expect(rejectRes.status).toBe(409)
-    expect(store.get('cs1')!.status).toBe('done')
+  it('approve writes an audit row with session_id/userLabel from the WEB session', async () => {
+    seed(store, 'cs1', true, false)
+    const dv = await getDiffVersion(COOKIE_A)
+    await http(base, 'POST', '/confirm/cs1/approve', { diff_version: dv }, COOKIE_A)
+    const rows = new AuditLog(db).recent()
+    const decision = rows.find(r => r.tool === 'changeset.approve')
+    expect(decision).toMatchObject({ userLabel: 'owner@kkday.com', sessionId: SID_A, status: 'ok' })
+  })
+
+  it('reject writes an audit row with session_id/userLabel from the WEB session', async () => {
+    seed(store, 'cs2', true, false)
+    const r = await http(base, 'POST', '/confirm/cs2/reject', {}, COOKIE_A)
+    expect(r.status).toBe(200)
+    expect(store.get('cs2')!.status).toBe('rejected')
+    const rows = new AuditLog(db).recent()
+    const decision = rows.find(row => row.tool === 'changeset.reject')
+    expect(decision).toMatchObject({ userLabel: 'owner@kkday.com', sessionId: SID_A, status: 'ok' })
+  })
+
+  it('modifyUser resolution failure leaves the change-set pending_approval, not stranded', async () => {
+    seed(store, 'cs1', true, false)
+    const dv = await getDiffVersion(COOKIE_A)
+    modifyUserThrows = true
+    const r = await http(base, 'POST', '/confirm/cs1/approve', { diff_version: dv }, COOKIE_A)
+    expect(r.status).toBe(500)
+    expect(store.get('cs1')!.status).toBe('pending_approval')
+    expect(putCalls).toBe(0)
   })
 })

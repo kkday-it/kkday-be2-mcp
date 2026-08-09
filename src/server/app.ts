@@ -12,6 +12,7 @@ import { GatewayClient } from '../gateway/client.js'
 import { AuditLog } from '../audit/auditLog.js'
 import { RateBudget } from '../limits/rateBudget.js'
 import { ChangeSetStore } from '../changeset/store.js'
+import { WebSessionStore } from './webSessionStore.js'
 import { requestContext } from './requestContext.js'
 import { wrapTool, wrapL2Tool, type PipelineDeps, type L2PipelineDeps } from './toolPipeline.js'
 import { buildConfirmRouter } from './confirmRoutes.js'
@@ -72,6 +73,11 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   const gateway = new GatewayClient({ baseUrl: config.gatewayUrl })
   const readOids = new ReadOidStore(db)
   const changeSets = new ChangeSetStore(db)
+  // NOTE (Task 5, compile-only wiring): confirmRoutes' ConfirmDeps now requires webSessions
+  // (Phase 2b session-cookie auth replaces the Phase 2a capability token). This satisfies the
+  // type; mounting the SSO login/session routes (buildSsoRouter) and full config (authOrigin,
+  // etc.) that actually populate this store is Task 6's job.
+  const webSessions = new WebSessionStore(db)
 
   const deps: PipelineDeps = { tokenManager, rateBudget, audit, gateway, readOids }
   const l2Deps: L2PipelineDeps = {
@@ -110,7 +116,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   app.use(express.json())
   app.get('/healthz', (_req, res) => { res.status(200).send('ok') })
   app.use(buildConfirmRouter({
-    changeSets, gateway, tokenManager, audit,
+    changeSets, gateway, tokenManager, audit, webSessions,
     modifyUserFrom: modifyUserFromPlaceholder,
     now: Date.now,
   }))

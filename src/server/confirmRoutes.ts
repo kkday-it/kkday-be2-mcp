@@ -1,23 +1,26 @@
 import express from 'express'
-import { timingSafeEqual } from 'node:crypto'
-import { ChangeSetStore } from '../changeset/store.js'
 import { computeShelfDiff, diffVersionHash } from '../changeset/diff.js'
-import { executeChangeSet, type ExecutorDeps, type ExecutorIdentity } from '../changeset/executor.js'
+import { executeChangeSet, type ExecutorDeps } from '../changeset/executor.js'
 import type { TokenManager } from '../auth/tokenManager.js'
+import type { WebSessionStore } from './webSessionStore.js'
+import { TokenStore } from '../store/tokenStore.js'
+import { parseCookies } from './cookies.js'
 import type { DiffItem } from '../changeset/types.js'
 
-// Interim (Task 3): executeChangeSet no longer resolves tokens/modifyUser itself — the caller
-// must. This route still resolves identity the Phase 2a way (via the change-set creator's stored
-// bearer); Task 5 switches the SOURCE of `who` to the confirm-page's own web session, but this
-// shape (ConfirmDeps extends ExecutorDeps + explicit tokenManager/modifyUserFrom) stays.
+// Task 5: the confirm-page's auth model switches from a per-change-set capability token
+// (`?token=`) to the be2-auth SSO web session (Task 4's `be2mcp_sid` cookie + WebSessionStore).
+// Identity (who is approving) and authorization (which change-sets they may see) both come from
+// the session now — never from the request body/query — closing the Phase 2a self-approval hole
+// (anyone with the link could approve) documented in the Phase 2b design spec.
 export interface ConfirmDeps extends ExecutorDeps {
   tokenManager: TokenManager
+  webSessions: WebSessionStore
   modifyUserFrom: (accessToken: string) => string
 }
 
 function esc(s: unknown): string { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!)) }
 
-function renderPage(id: string, token: string, diff: DiffItem[], diffVersion: string, banner = ''): string {
+function renderPage(id: string, diff: DiffItem[], diffVersion: string, banner = ''): string {
   const rows = diff.map(d => `<tr><td>${esc(d.name ?? d.pkg_oid ?? d.prod_oid)}</td><td>${esc(d.prod_oid)}${d.pkg_oid ? '/' + esc(d.pkg_oid) : ''}</td><td>${d.current_is_active === undefined ? '?' : d.current_is_active ? '上架' : '下架'}</td><td>→ ${d.target_is_active ? '上架' : '下架'}</td><td>${d.no_op ? '(無變更)' : ''}</td></tr>`).join('')
   return `<!doctype html><meta charset=utf-8><title>確認變更 ${esc(id)}</title>
 <style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}button{padding:8px 16px;font-size:1rem}</style>
@@ -25,9 +28,9 @@ function renderPage(id: string, token: string, diff: DiffItem[], diffVersion: st
 <p>名稱為 be2 內容(untrusted),請以 oid 為準核對。</p>
 <table data-diff-version="${esc(diffVersion)}"><tr><th>名稱</th><th>oid</th><th>現況</th><th>目標</th><th></th></tr>${rows}</table>
 <form method=post action="/confirm/${esc(id)}/approve" style="margin-top:1rem">
-  <input type=hidden name=token value="${esc(token)}"><input type=hidden name=diff_version value="${esc(diffVersion)}">
+  <input type=hidden name=diff_version value="${esc(diffVersion)}">
   <button type=submit>批准並執行</button></form>
-<form method=post action="/confirm/${esc(id)}/reject"><input type=hidden name=token value="${esc(token)}"><button type=submit>拒絕</button></form>`
+<form method=post action="/confirm/${esc(id)}/reject"><button type=submit>拒絕</button></form>`
 }
 
 export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
@@ -44,81 +47,92 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
       console.error('confirm route error:', (err as Error).message)
       if (!res.headersSent) res.status(500).send('internal error')
     }) }
-  const tokenOf = (req: express.Request) => String(req.query.token ?? req.body?.token ?? '')
-  // Constant-time compare against the stored hash — avoids leaking timing information about how
-  // many leading hex chars of the token hash matched. Both sides are sha256 hex (64 chars) in
-  // practice, but a length mismatch is treated defensively as a non-match rather than thrown.
-  function hashesEqual(a: string, b: string): boolean {
-    const bufA = Buffer.from(a, 'hex'), bufB = Buffer.from(b, 'hex')
-    if (bufA.length !== bufB.length) return false
-    return timingSafeEqual(bufA, bufB)
+
+  async function requireSession(req: express.Request): Promise<{ sessionId: string; userLabel: string; accessToken: string } | undefined> {
+    const sid = parseCookies(req.header('cookie'))['be2mcp_sid']
+    if (!sid) return undefined
+    const sess = deps.webSessions.get(sid)   // undefined if idle-expired (row deleted)
+    if (!sess) return undefined
+    let user
+    try {
+      user = await deps.tokenManager.getFreshByHash(TokenStore.hashBearer(sid))
+    } catch {
+      // be2 refresh token expired/revoked (AuthError REAUTH_REQUIRED) or upstream unavailable:
+      // the web session is dead. Delete it and treat as no-session so the caller redirects to
+      // login — otherwise every /confirm request 500s in a loop until the idle TTL. (agy round-1)
+      deps.webSessions.delete(sid)
+      return undefined
+    }
+    deps.webSessions.touch(sid)
+    return { sessionId: sid, userLabel: sess.userLabel, accessToken: user.accessToken }
   }
-  function load(id: string, token: string) {
-    const rec = deps.changeSets.get(id)
-    if (!rec || !hashesEqual(rec.approvalTokenHash, ChangeSetStore.hashToken(token))) return undefined
-    return rec
-  }
-  async function liveDiff(rec: NonNullable<ReturnType<typeof deps.changeSets.get>>) {
-    const user = await deps.tokenManager.getFreshByHash(rec.creatorBearerHash)
-    const diff = await computeShelfDiff(rec.actionType, rec.items, { gateway: deps.gateway, accessToken: user.accessToken, userLabel: user.userLabel })
+  function loginRedirect(res: express.Response, next: string) { res.redirect(302, `/confirm/login?next=${encodeURIComponent(next)}`) }
+
+  async function liveDiff(rec: NonNullable<ReturnType<typeof deps.changeSets.get>>, accessToken: string) {
+    const diff = await computeShelfDiff(rec.actionType, rec.items, { gateway: deps.gateway, accessToken, userLabel: rec.creatorLabel })
     return { diff, version: diffVersionHash(diff) }
   }
 
   r.get('/confirm/:id', h(async (req, res) => {
     res.setHeader('Referrer-Policy', 'no-referrer')
-    const rec = load(String(req.params.id), tokenOf(req))
-    if (!rec || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
-    const { diff, version } = await liveDiff(rec)
-    res.status(200).send(renderPage(rec.id, tokenOf(req), diff, version))
+    const who = await requireSession(req)
+    if (!who) { loginRedirect(res, `/confirm/${req.params.id}`); return }
+    const rec = deps.changeSets.get(String(req.params.id))
+    // IDOR: only the change-set's creator may view it. Generic 404 either way — no existence leak
+    // for a different user's change-set id.
+    if (!rec || rec.creatorLabel !== who.userLabel || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
+    const { diff, version } = await liveDiff(rec, who.accessToken)
+    res.status(200).send(renderPage(rec.id, diff, version))
   }))
 
   r.post('/confirm/:id/approve', h(async (req, res) => {
     res.setHeader('Referrer-Policy', 'no-referrer')
-    const token = tokenOf(req)
-    const rec = load(String(req.params.id), token)
-    if (!rec || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
-    const { diff, version } = await liveDiff(rec)
-    if (version !== String(req.body?.diff_version)) { res.status(409).send(renderPage(rec.id, token, diff, version, '<p style="color:#b00">目標欄位在你檢視期間被改動,已重新載入最新狀態,請再次確認後批准。</p>')); return }
-    // CRITICAL ordering (agy round-1): resolve the FULL identity (token AND modify_user) BEFORE
-    // the CAS below. modifyUserFrom can throw (the Fix-4 placeholder guard throws unless an env
-    // flag is set; a real resolver could 5xx) — if that throw happened AFTER pending_approval ->
-    // approved, the change-set would be stranded in 'approved' forever (never executes, never
-    // fails). Resolving first means a throw here aborts the whole request (the `h()` wrapper turns
-    // it into a 500) while the change-set is still 'pending_approval' — retryable, not stranded.
-    const user = await deps.tokenManager.getFreshByHash(rec.creatorBearerHash)
-    const who: ExecutorIdentity = { accessToken: user.accessToken, userLabel: user.userLabel, modifyUser: deps.modifyUserFrom(user.accessToken), sessionId: rec.sessionId }
+    const who = await requireSession(req)
+    if (!who) { loginRedirect(res, `/confirm/${req.params.id}`); return }
+    const rec = deps.changeSets.get(String(req.params.id))
+    if (!rec || rec.creatorLabel !== who.userLabel || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
+    const { diff, version } = await liveDiff(rec, who.accessToken)
+    if (version !== String(req.body?.diff_version)) { res.status(409).send(renderPage(rec.id, diff, version, '<p style="color:#b00">目標欄位已被改動,請重新確認。</p>')); return }
+    // CRITICAL ordering (agy round-2): resolve modifyUser BEFORE the CAS below. modifyUserFrom can
+    // throw (the Fix-4 placeholder guard throws unless an env flag is set; a real resolver could
+    // 5xx) — if that throw happened AFTER pending_approval -> approved, the change-set would be
+    // stranded in 'approved' forever (never executes, never fails). Resolving first means a throw
+    // here aborts the whole request (the `h()` wrapper turns it into a 500) while the change-set is
+    // still 'pending_approval' — retryable, not stranded.
+    const modifyUser = deps.modifyUserFrom(who.accessToken)
     // Atomic compare-and-swap: two concurrent approves (double-click / client retry) can both
     // pass the `status === 'pending_approval'` check above (that read is stale by the time we
     // get here, since liveDiff() awaits and yields the event loop). Only the request that wins
     // the pending_approval -> approved transition may proceed to executeChangeSet; the loser gets
     // a 409 and never touches the gateway. This is what guarantees execute-exactly-once.
-    const won = deps.changeSets.casStatus(rec.id, 'pending_approval', 'approved', deps.now())
-    if (!won) { res.status(409).send('已被處理或已過期'); return }
-    // Fix 2: audit the human DECISION itself (governance event "human approved change-set X at
-    // T"), separate from the per-item audit rows executeChangeSet writes under tool=
-    // 'changeset.execute'. Without this, reject wrote zero audit rows and approve's decision
-    // moment had no trail distinct from the resulting writes.
+    const wonCas = deps.changeSets.casStatus(rec.id, 'pending_approval', 'approved', deps.now())
+    if (!wonCas) { res.status(409).send('已被處理或已過期'); return }
+    // Audit the human DECISION itself (governance event "human approved change-set X at T"),
+    // separate from the per-item audit rows executeChangeSet writes under tool='changeset.execute'.
+    // Attributed to the approving WEB SESSION, not the change-set's original creator — Phase 2b
+    // closes the Phase 2a self-approval hole where those could differ without any check.
     deps.audit.record({
-      userLabel: rec.creatorLabel, sessionId: rec.sessionId,
+      userLabel: who.userLabel, sessionId: who.sessionId,
       clientInfo: 'confirm-page:' + String(req.headers['user-agent'] ?? '').slice(0, 80),
       tool: 'changeset.approve', params: { changeset_id: rec.id, ip: req.ip },
       status: 'ok', traceId: 'n/a', durationMs: 0,
     })
-    const out = await executeChangeSet(deps, rec.id, who)
+    const out = await executeChangeSet(deps, rec.id, { accessToken: who.accessToken, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId })
     res.status(200).send(`<!doctype html><meta charset=utf-8><h1>執行結果:${esc(out.status)}</h1><pre>${esc(JSON.stringify(out.results, null, 2))}</pre>`)
   }))
 
   r.post('/confirm/:id/reject', h(async (req, res) => {
     res.setHeader('Referrer-Policy', 'no-referrer')
-    const rec = load(String(req.params.id), tokenOf(req))
-    if (!rec) { res.status(404).send('not found'); return }
+    const who = await requireSession(req)
+    if (!who) { loginRedirect(res, `/confirm/${req.params.id}`); return }
+    const rec = deps.changeSets.get(String(req.params.id))
+    if (!rec || rec.creatorLabel !== who.userLabel) { res.status(404).send('not found'); return }
     // Same CAS discipline as approve: only a still-pending change-set can be rejected. Prevents
     // rejecting a change-set that has already been approved/executed (or rejected) concurrently.
     const won = deps.changeSets.casStatus(rec.id, 'pending_approval', 'rejected', deps.now())
     if (!won) { res.status(409).send('已被處理或已過期'); return }
-    // Fix 2: same governance-event audit as approve, above.
     deps.audit.record({
-      userLabel: rec.creatorLabel, sessionId: rec.sessionId,
+      userLabel: who.userLabel, sessionId: who.sessionId,
       clientInfo: 'confirm-page:' + String(req.headers['user-agent'] ?? '').slice(0, 80),
       tool: 'changeset.reject', params: { changeset_id: rec.id, ip: req.ip },
       status: 'ok', traceId: 'n/a', durationMs: 0,
