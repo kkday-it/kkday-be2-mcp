@@ -46,6 +46,11 @@ export function wrapTool(tool: ToolDef, deps: PipelineDeps) {
           gateway: deps.gateway, accessToken: user.accessToken, userLabel,
         })
         if (envelope.read_oids.length) deps.readOids.record(ctx.sessionId, envelope.read_oids)
+        if (envelope.items.length === 0 && envelope.errors.length > 0) {
+          status = 'error'
+          const first = envelope.errors[0]
+          message = first.code ? `${first.code}: ${first.message}` : first.message
+        }
         result = { content: [{ type: 'text', text: JSON.stringify(envelope) }] }
       } catch (e) {
         status = e instanceof RateError ? 'denied_rate' : e instanceof AuthError ? 'denied_auth' : 'error'

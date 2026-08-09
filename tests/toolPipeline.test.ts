@@ -89,4 +89,17 @@ describe('wrapTool pipeline', () => {
     expect(errSpy).not.toHaveBeenCalled()
     errSpy.mockRestore()
   })
+  it('fully-failed read (empty items, non-empty errors) is audited as error, not ok', async () => {
+    const { db, deps } = makeDeps()
+    tool.handler.mockResolvedValueOnce(
+      makeEnvelope([], [{ key: 'x', message: 'boom', code: 'FORBIDDEN', status: 403 }]))
+    const out = await requestContext.run(ctx, () => wrapTool(tool as never, deps)({ v: 'x' }))
+    expect(out.isError).toBeUndefined()
+    const env = JSON.parse(out.content[0].text)
+    expect(env.errors[0]).toMatchObject({ code: 'FORBIDDEN' })
+    const row = new AuditLog(db).recent()[0]
+    expect(row.status).toBe('error')
+    expect(row.errorMessage).toBeTruthy()
+    expect(row.errorMessage).toContain('boom')
+  })
 })

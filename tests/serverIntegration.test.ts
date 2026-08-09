@@ -16,11 +16,17 @@ function fakeJwt(expSec: number): string {
 
 let http: Server, base: string, db: Database.Database
 const BEARER = 'be2mcp_' + 'a'.repeat(48)
+const BEARER_B = 'be2mcp_' + 'b'.repeat(48)
 
 beforeAll(async () => {
   db = openDb(':memory:')
   new TokenStore(db).upsert({
     bearerHash: TokenStore.hashBearer(BEARER), userLabel: 'pilot@kkday.com',
+    accessToken: fakeJwt(Math.floor(Date.now() / 1000) + 3600), refreshToken: 'r', businessList: [],
+    accessExpiresAt: Date.now() + 3600_000, updatedAt: Date.now(),
+  })
+  new TokenStore(db).upsert({
+    bearerHash: TokenStore.hashBearer(BEARER_B), userLabel: 'other@kkday.com',
     accessToken: fakeJwt(Math.floor(Date.now() / 1000) + 3600), refreshToken: 'r', businessList: [],
     accessExpiresAt: Date.now() + 3600_000, updatedAt: Date.now(),
   })
@@ -72,6 +78,31 @@ describe('MCP server integration', () => {
     const audit = new AuditLog(db).recent()
     expect(audit[0]).toMatchObject({ tool: 'be2_find_products', userLabel: 'pilot@kkday.com' })
     expect(audit[0].traceId).toBeTruthy()
+    await client.close()
+  })
+  it('rejects a session-id reused with a different bearer (session ownership binding, spec §6.2)', async () => {
+    const { client, transport } = mcpClient(BEARER)
+    await client.connect(transport)
+    const sessionId = transport.sessionId
+    expect(sessionId).toBeTruthy()
+
+    // Forge: A's session-id + B's bearer, via raw fetch (SDK client hides session wiring).
+    const res = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        authorization: `Bearer ${BEARER_B}`,
+        'mcp-session-id': sessionId!,
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 99, method: 'tools/call',
+        params: { name: 'be2_find_products', arguments: { prod_oids: ['p1'] } },
+      }),
+    })
+    const body = await res.json() as { error: { code: string } }
+    expect(res.status).toBe(403)
+    expect(body.error.code).toBe('SESSION_OWNER_MISMATCH')
     await client.close()
   })
 })

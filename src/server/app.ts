@@ -33,6 +33,10 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   }
 
   const transports = new Map<string, StreamableHTTPServerTransport>()
+  // Binds a session-id to the bearer that created it (spec §6.2): prevents an enrolled
+  // bearer B from reusing bearer A's mcp-session-id to piggyback on A's session state
+  // (read_oids, rate budget) while acting — and being audited — as A.
+  const sessionOwner = new Map<string, string>()
 
   function newServer(): McpServer {
     const server = new McpServer({ name: 'be2-mcp', version: '0.1.0' })
@@ -63,10 +67,13 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
         if (req.method !== 'POST') { res.status(400).json({ error: { code: 'NO_SESSION', message: 'unknown mcp session' } }); return }
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: randomUUID,
-          onsessioninitialized: id => { transports.set(id, transport!) },
-          onsessionclosed: id => { transports.delete(id) },
+          onsessioninitialized: id => { transports.set(id, transport!); sessionOwner.set(id, TokenStore.hashBearer(bearer)) },
+          onsessionclosed: id => { transports.delete(id); sessionOwner.delete(id) },
         })
         await newServer().connect(transport)
+      } else if (sessionOwner.get(sessionId!) !== TokenStore.hashBearer(bearer)) {
+        res.status(403).json({ error: { code: 'SESSION_OWNER_MISMATCH', message: 'session does not belong to this bearer' } })
+        return
       }
 
       const ctx = {
