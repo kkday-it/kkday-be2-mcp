@@ -119,9 +119,33 @@ Example natural-language prompts (replace with real SIT oids):
 
 ---
 
-## ⚠️ Live SIT e2e verification — PENDING valid credentials
+## ✅ Live SIT be2-220 e2e verification — DONE (2026-08-09)
 
-**Status: NOT YET RUN.** The `.env` SIT credentials (`AUTH_email`/`AUTH_pwd`) available during Phase 1a implementation are stale — auth-service rejects them with `AU9010`. All contract-level facts below were verified from source and from earlier live SIT testing (see `docs/be2-mcp/sit-contracts.md` and `docs/be2-mcp/phase0-inventory.md`), but the actual Task 16 Step 2 live run through Claude Code has **not** been executed and must be done once valid SIT creds are available.
+**Status: PASSED against SIT be2-220.** Earlier `AU9010` was a misconfiguration — `.env` pointed at `stage`, not be2-220. Once `.env` was switched to `auth-220.sit`/`api-gateway-220.sit`, the SIT credentials in `.env` (`AUTH_email`/`AUTH_pwd`) authenticate fine (`AU0000`). The full run was driven through the MCP protocol with a real enrolled bearer (via the MCP SDK client rather than an interactive Claude Code chat, so raw envelopes are inspectable). Results:
+
+| Check | Result |
+|---|---|
+| Auth login→exchange→refresh | ✅ `AU0000`, live |
+| Wrong bearer | ✅ rejected `UNAUTHORIZED` |
+| `be2_find_products(248777)` | ✅ real name, `workflow_status: PUBLISHED`, `is_active: true` |
+| `be2_get_product_plans(248777)` | ✅ real plan (pkg 1096031 / item 841808), `is_active: true` |
+| `be2_get_inventory_settings(841808)` | ✅ status returned; no `supplier_oid` → status-only, graceful (no error) |
+| Untrusted envelope | ✅ `data_origin: be2_content` on all |
+| `session_read_oids` substrate (§6.2) | ✅ 248777, 1096031, 841808 recorded |
+| Audit log | ✅ one row/call; **no token material** (0 matches for `eyJ`/`be2mcp_`) |
+| Tokens server-side / bearer hashed | ✅ be2 access/refresh in `user_tokens`; bearer stored as sha256 only |
+| Injection input `"123; DROP TABLE audit_log;--"` | ✅ handled (gateway 404, no crash); `audit_log` intact |
+
+**Defects the live run caught and fixed** (commit `e11fdab`, fixtures `852bcee`): (1) fixtures now stored unwrapped (`body.data`); (2) plan name reads `pkg_name` (real field, not `name`); (3) `be2_get_inventory_settings` switched from the be2-api-proxied `/be2/api/v1/...` prefix (which 500s systemically) to product-service-direct `/product/api/v1/items/{itemOid}/inventories/...`.
+
+**Still open (not blockers for Phase 1a read tools):**
+- Inventory **quantities-by-supplier** unverified live: the test account got 403 on suppliers 0/1/2 for the marketplace item 248777/841808 (fail-closed — account doesn't manage that supplier). To verify quantities, enroll with a product the account actually manages and pass its `supplier_oid`.
+- `trace_id` is all-zeros unless `OTEL_MODE=console|otlp` (default `off`). Set it for real trace correlation.
+- The be2-api `/be2/api/v1/...` gateway prefix 500s for our S2S calls generally; product-service-direct `/product/api/v1/...` is the working path for all three tools.
+
+---
+
+### Original PENDING steps (kept for re-runs)
 
 Exact steps to run when creds are available (from the plan's Task 16 / Step 2):
 

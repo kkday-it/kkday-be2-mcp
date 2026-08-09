@@ -17,7 +17,9 @@
 
 **下一步**：開新 session → `superpowers:writing-plans` 規劃 **Phase 1a**（MCP server skeleton + 3 個 L0 read tools + OTel + 稽核 + eval 骨架；Claude Code static bearer；**無外部依賴、不等 C 盤完**）→ agy-peer-review → subagent-driven-development + TDD。
 
-**Phase 1a 進度（2026-08-09，Task 16）**：**已實作完成**——MCP server（Streamable HTTP）+ 3 個 L0 read tools（`be2_find_products`／`be2_get_product_plans`／`be2_get_inventory_settings`）+ OTel + 稽核（append-only audit_log）+ rate budget（100/session、500/user/day）+ eval 骨架，全走 TDD、單元/整合測試 **65 passed / 3 skipped**，plan 已 agy-approved。Pilot 上線文件見 `docs/be2-mcp/phase1a-runbook.md`。**Live SIT e2e 驗證（brief Step 2）與 fixture 補測（3 個 skip 的測試）延後（DEFERRED）**：卡在 `.env` 的 SIT 測試帳密（`AUTH_email`/`AUTH_pwd`）已失效，auth-service 回 `AU9010`；待取得有效 SIT 憑證後依 runbook「⚠️ Live SIT e2e verification — PENDING valid credentials」段落補跑。
+**Phase 1a 進度（2026-08-09，Task 16）**：**已實作完成 + Live SIT be2-220 e2e 驗收通過**——MCP server（Streamable HTTP）+ 3 個 L0 read tools（`be2_find_products`／`be2_get_product_plans`／`be2_get_inventory_settings`）+ OTel + 稽核（append-only audit_log）+ rate budget + eval 骨架,全走 TDD,測試 **70 passed / 0 skipped**（fixture-gated 測試已用真實 be2-220 資料實跑）,plan 已 agy-approved。Pilot 文件見 `docs/be2-mcp/phase1a-runbook.md`。
+
+**Live 驗收（2026-08-09,對 SIT be2-220）**：先前 `AU9010` 是 `.env` 誤指 stage,改回 `auth-220.sit`/`api-gateway-220.sit` 後 `.env` 帳密正常（`AU0000`）。以真實 bearer 透過 MCP 協定跑通 3 個工具(拿到真實商品名稱/方案/庫存狀態)、壞 bearer 拒絕、audit 無 token 明文、session_read_oids(§6.2 substrate)寫入、注入字串優雅處理。Live 揪出並修掉 3 個真實契約缺陷: fixture 需存 unwrapped、方案名是 `pkg_name`、inventory 端點須走 product-service-direct(`/product/api/v1/items/{itemOid}/inventories/...`,原 `/be2/api/v1/...` 系統性 500)。**未竟(非 Phase 1a read 阻擋項)**: inventory 依 supplier 的數量因測試帳號對該 marketplace 商品無 supplier 權限(403)未實測、需用帳號自管商品+supplier_oid 驗;trace_id 需 `OTEL_MODE=console|otlp` 才有值。
 
 ## 0. 決策：Option 1 — 已定案（2026-08-09）
 
