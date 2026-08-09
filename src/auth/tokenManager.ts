@@ -19,11 +19,17 @@ export class TokenManager {
   }
 
   async getFreshAccessToken(bearer: string): Promise<UserAuthContext> {
-    let rec = this.store.getByBearer(bearer)
+    return this.freshFromRecord(this.store.getByBearer(bearer), TokenStore.hashBearer(bearer))
+  }
+
+  async getFreshByHash(bearerHash: string): Promise<UserAuthContext> {
+    return this.freshFromRecord(this.store.getByBearerHash(bearerHash), bearerHash)
+  }
+
+  private async freshFromRecord(rec: TokenRecord | undefined, key: string): Promise<UserAuthContext> {
     if (!rec) throw new AuthError('UNKNOWN_BEARER', 'unknown bearer token — run bootstrap-user to enroll', 401)
 
     if (rec.accessExpiresAt - this.now() < this.skewMs) {
-      const key = rec.bearerHash
       let flight = this.inflight.get(key)
       if (!flight) {
         flight = this.doRefresh(rec).finally(() => this.inflight.delete(key))

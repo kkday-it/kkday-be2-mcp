@@ -19,10 +19,17 @@ export class TokenStore {
   }
 
   getByBearer(bearer: string): TokenRecord | undefined {
+    return this.getByBearerHash(TokenStore.hashBearer(bearer))
+  }
+
+  getByBearerHash(hash: string): TokenRecord | undefined {
     const row = this.db
       .prepare('SELECT * FROM user_tokens WHERE bearer_hash = ?')
-      .get(TokenStore.hashBearer(bearer)) as Record<string, unknown> | undefined
-    if (!row) return undefined
+      .get(hash) as Record<string, unknown> | undefined
+    return row ? this.rowToRecord(row) : undefined
+  }
+
+  private rowToRecord(row: Record<string, unknown>): TokenRecord {
     return {
       bearerHash: row.bearer_hash as string,
       userLabel: row.user_label as string,
