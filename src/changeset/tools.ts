@@ -32,8 +32,11 @@ export const createChangesetTool: L2ToolDef = {
   name: 'be2_create_changeset',
   description:
     'Stage a DRAFT shelf-on/off change for products (shelf_toggle_product) or plans (shelf_toggle_plan) — max 20 items. ' +
-    'Returns a diff preview + a confirm_url; it does NOT apply anything. A human must open the confirm_url and approve; ' +
-    'only then does the write execute. You CANNOT approve or execute. Only pass oids you already looked up this session.',
+    'Returns { changeset_id, status, diff } — a preview only; it does NOT apply anything and returns NO approval link. ' +
+    'A human operator receives the one-time approval link out-of-band (on the be2-mcp server console) and approves it there; ' +
+    'only then does the write execute. You CANNOT approve or execute, and you do not receive the approval link — ' +
+    'report the changeset_id and the diff to the user and tell them to approve it from the server-provided link. ' +
+    'Only pass oids you already looked up this session.',
   inputShape,
   async handler(args, ctx: L2ToolContext) {
     const items = args.items as ChangeSetItem[]
