@@ -20,3 +20,7 @@ build/
 # Data and test fixtures
 data/
 tests/fixtures/*.local.json
+
+# 對外提案 / 概覽草稿 — 刻意不進 git
+docs/be2-mcp/cto-proposal.md
+docs/be2-mcp/poc-overview.md
