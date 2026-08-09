@@ -13,4 +13,19 @@ describe('cookies', () => {
     expect(c).toContain('SameSite=Lax')
     expect(c).toContain('Path=/confirm')
   })
+  it('emits Secure only when explicitly requested (kept OFF on loopback per design)', () => {
+    const secure = serializeSetCookie('be2mcp_sid', 'abc', { secure: true })
+    expect(secure).toContain('Secure')
+    const insecure = serializeSetCookie('be2mcp_sid', 'abc', {})
+    expect(insecure).not.toContain('Secure')
+    const defaulted = serializeSetCookie('be2mcp_sid', 'abc')
+    expect(defaulted).not.toContain('Secure')
+  })
+  it('does not throw on a malformed percent-encoded cookie value, and still returns the others', () => {
+    expect(() => parseCookies('a=1; bad=%; b=2')).not.toThrow()
+    const parsed = parseCookies('a=1; bad=%; b=2')
+    expect(parsed.a).toBe('1')
+    expect(parsed.b).toBe('2')
+    expect(parsed.bad).toBe('%') // falls back to raw value instead of throwing
+  })
 })

@@ -15,17 +15,28 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
   const h = (fn: (req: express.Request, res: express.Response) => Promise<void>) =>
     (req: express.Request, res: express.Response) => { void fn(req, res).catch(() => { if (!res.headersSent) res.status(500).send('internal error') }) }
 
+  // Safe to interpolate into an inline <script>: JSON.stringify alone does NOT escape
+  // `</script>`, so a value like `</script><script>...` can break out of the script block.
+  // Unicode-escaping `<` makes that breakout structurally impossible regardless of upstream validation.
+  const js = (v: unknown): string => JSON.stringify(v).replace(/</g, '\\u003c')
+
+  // Strict allowlist for the post-login redirect target: only same-origin confirm-page
+  // paths with an opaque id-like suffix. A prefix check (`startsWith('/confirm/')`) is not
+  // enough — it still accepts `/confirm/</script><script>...`.
+  const NEXT_RE = /^\/confirm\/[A-Za-z0-9_-]+$/
+  const safeNext = (raw: unknown): string => (typeof raw === 'string' && NEXT_RE.test(raw)) ? raw : '/'
+
   // POPUP launcher. Opens be2-auth in a popup; on postMessage from the be2-auth origin ONLY,
   // extracts the authorizationCode, POSTs it to /confirm/session, then navigates to `next`.
   r.get('/confirm/login', (req, res) => {
     res.setHeader('Referrer-Policy', 'no-referrer')
-    const next = typeof req.query.next === 'string' && req.query.next.startsWith('/confirm/') ? req.query.next : '/'
+    const next = safeNext(req.query.next)
     const loginUrl = `${deps.authOrigin}/auth/be2/login?loginFlow=POPUP&redirectPath=${encodeURIComponent(deps.authOrigin + '/auth/be2/login')}`
     res.status(200).send(`<!doctype html><meta charset=utf-8><title>be2 登入</title>
 <body><p>需登入 be2 才能審批變更。</p><button id="loginBtn">登入 be2</button><p id="msg"></p><script>
-  var AUTH_ORIGIN = ${JSON.stringify(deps.authOrigin)};
-  var NEXT = ${JSON.stringify(next)};
-  var LOGIN_URL = ${JSON.stringify(loginUrl)};
+  var AUTH_ORIGIN = ${js(deps.authOrigin)};
+  var NEXT = ${js(next)};
+  var LOGIN_URL = ${js(loginUrl)};
   var pop = null;
   // window.open MUST run inside a user gesture (click) — browsers block popups opened on load. (agy round-1)
   document.getElementById('loginBtn').addEventListener('click', function () {
@@ -60,11 +71,11 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
     res.status(200).json({ ok: true })
   }))
 
-  r.post('/confirm/logout', (req, res) => {
+  r.post('/confirm/logout', h(async (req, res) => {
     const sid = parseCookies(req.header('cookie'))['be2mcp_sid']
     if (sid) deps.webSessions.delete(sid)
     res.setHeader('Set-Cookie', serializeSetCookie('be2mcp_sid', '', { httpOnly: true, sameSite: 'Lax', path: '/confirm', maxAgeSec: 0 }))
     res.status(200).send('logged out')
-  })
+  }))
   return r
 }

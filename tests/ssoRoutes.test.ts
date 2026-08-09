@@ -49,4 +49,20 @@ describe('SSO routes', () => {
     const r = await fetch(`${base}/confirm/session`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
     expect(r.status).toBe(400)
   })
+  it('GET /confirm/login rejects a `next` breakout attempt and never emits an unescaped </script> breakout', async () => {
+    const malicious = '/confirm/</script><script>alert(1)</script>'
+    const r = await fetch(`${base}/confirm/login?next=${encodeURIComponent(malicious)}`)
+    const html = await r.text()
+    expect(r.status).toBe(200)
+    // the literal breakout sequence must never appear unescaped in the response
+    expect(html).not.toContain('</script><script>alert')
+    // next must have been rejected by the strict allowlist and fallen back to '/'
+    expect(html).toMatch(/var NEXT = "\\?\/"/) // fell back to '/' (plain or unicode-escaped slash form)
+  })
+  it('GET /confirm/login preserves a clean, allowlisted `next`', async () => {
+    const r = await fetch(`${base}/confirm/login?next=${encodeURIComponent('/confirm/cs1')}`)
+    const html = await r.text()
+    expect(r.status).toBe(200)
+    expect(html).toContain('/confirm/cs1')
+  })
 })
