@@ -943,6 +943,46 @@ describe('execInventory', () => {
     expect(ds['2026-08-31']).toBe('done')
     expect(ds['2026-09-01']).toBe('failed')
   })
+  it('bare-array GET shape: PUT body is an OBJECT with rows wrapped + modify_user surviving stringify', async () => {
+    const calls: Array<{ m: string; body?: unknown }> = []
+    const gw = {
+      calls,
+      async get(path: string) {
+        calls.push({ m: 'GET' })
+        if (path.endsWith('/inventories/status')) return { is_processing: false }
+        return [{ date: '2026-08-15', quantity: 10 }]          // bare array response
+      },
+      async put(_p: string, _a: string, body: unknown) { calls.push({ m: 'PUT', body }) },
+    }
+    const r = await execInventory(deps(gw), 'at', 'MU', item(), 't1')
+    const putBody = calls.find(c => c.m === 'PUT')!.body as Record<string, unknown>
+    expect(Array.isArray(putBody)).toBe(false)
+    expect(JSON.parse(JSON.stringify(putBody)).modify_user).toBe('MU')   // survives serialization
+    expect((putBody.itemInventory as Array<{ quantity: number }>)[0].quantity).toBe(60)
+    expect(r.status).toBe('done')
+  })
+  it('set on a date with NO existing live row: injects a new row into the PUT payload', async () => {
+    const gw = fakeGw({ qty: { '2026-08-16': 7 } })   // 08-15 has no row
+    const r = await execInventory(deps(gw), 'at', 'MU', item({ op: 'set', quantity: 5, dates: ['2026-08-15'] }), 't1')
+    const rows = (gw.calls.find(c => c.m === 'PUT')!.body as { itemInventory: Array<{ date: string; quantity: number }> }).itemInventory
+    expect(rows).toContainEqual({ date: '2026-08-15', quantity: 5 })   // injected, not dropped
+    expect(rows).toContainEqual({ date: '2026-08-16', quantity: 7 })   // existing row preserved
+    expect(r.status).toBe('done')
+  })
+  it('PUT succeeds but after-re-read fails: dates stay done (NEVER failed — no double-apply bait)', async () => {
+    const gw = fakeGw({ qty: { '2026-08-15': 10 } })
+    const origGet = gw.get.bind(gw)
+    let qtyGets = 0
+    gw.get = async (p: string, a: string, q?: Record<string, string>) => {
+      if (!p.includes('/status') && ++qtyGets === 2) throw Object.assign(new Error('blip'), { code: 'GW_TIMEOUT' })
+      return origGet(p, a, q)
+    }
+    const r = await execInventory(deps(gw), 'at', 'MU', item(), 't1')
+    expect(r.status).toBe('done')
+    expect((r.after as { date_status: Record<string, string> }).date_status['2026-08-15']).toBe('done')
+    expect(r.error_code).toBe('AFTER_READ_FAILED')
+    expect((r.after as { quantities: Record<string, number> }).quantities['2026-08-15']).toBeUndefined()
+  })
   it('busy guard: is_processing stays true past poll budget => INVENTORY_BUSY, zero reads/writes of quantities', async () => {
     const gw = fakeGw({ qty: { '2026-08-15': 10 }, processing: [true, true, true] })
     const r = await execInventory(deps(gw), 'at', 'MU', item(), 't1')
@@ -967,7 +1007,7 @@ Run: `npx vitest run tests/inventoryExecutor.test.ts` — Expected: FAIL (module
 ```typescript
 import type { GatewayClient } from '../gateway/client.js'
 import type { InventoryItem, ItemResult } from './types.js'
-import { findRows, groupDatesByMonth, parseQuantities, rowDate, setRowQty } from '../tools/inventoryShape.js'
+import { DATE_KEYS, QTY_KEYS, ROWS_KEYS, findRows, groupDatesByMonth, parseQuantities, rowDate, setRowQty } from '../tools/inventoryShape.js'
 
 export interface InventoryExecDeps {
   gateway: GatewayClient
@@ -1039,19 +1079,44 @@ export async function execInventory(deps: InventoryExecDeps, at: string, modifyU
     // FINALIZE(Task 1): if the probe proves per-date merge semantics, this stays correct;
     // if it proves replace, this is the ONLY safe shape. Never send a date subset before proof.
     const body = structuredClone(raw) as Record<string, unknown>
-    for (const row of findRows(body)) {
+    let rows = findRows(body)
+    if (rows.length === 0 && !Array.isArray(body)) { body[ROWS_KEYS[0]] = []; rows = findRows(body) }
+    const covered = new Set<string>()
+    for (const row of rows) {
       const d = rowDate(row)
-      if (d && targets.has(d)) setRowQty(row, targets.get(d)!)
+      if (d && targets.has(d)) { setRowQty(row, targets.get(d)!); covered.add(d) }
     }
-    body.modify_user = modifyUser
+    // `set` may target a date with NO existing live row (diff allows current: undefined) — the
+    // merge loop above only rewrites EXISTING rows, so missing dates must be INJECTED or the PUT
+    // silently omits them and the write never lands (agy round-1). Row key names: the resolved
+    // shape constants — FINALIZE(Task 1) alongside DATE_KEYS/QTY_KEYS.
+    for (const [d, qty] of targets) {
+      if (!covered.has(d)) rows.push({ [DATE_KEYS[0]]: d, [QTY_KEYS[0]]: qty })
+    }
+    // The PUT body MUST be a JSON object: a named property assigned onto a bare array survives
+    // in memory but is STRIPPED by JSON.stringify, silently dropping modify_user (agy round-2).
+    // If the GET returned a bare row array, wrap it under the canonical rows key.
+    // FINALIZE(Task 1): confirm the accepted PUT envelope (rows key + modify_user placement).
+    const putBody: Record<string, unknown> = Array.isArray(body) ? { [ROWS_KEYS[0]]: body } : body
+    putBody.modify_user = modifyUser
+    // PUT and the after-re-read are isolated: a successful write must NEVER be reported as
+    // 'failed' just because the re-read blipped (agy round-1) — a 'failed' adjust invites the
+    // user to re-issue the delta, double-applying it on the backend. Re-read failure keeps the
+    // dates 'done' with an AFTER_READ_FAILED note and no after-quantity (honest, not corrupting).
     try {
-      await gw.put(basePath, at, body)
-      const reread = parseQuantities(await gw.get(`${basePath}/${encodeURIComponent(it.supplier_oid)}`, at, { year_month: ym })).byDate
-      for (const d of targets.keys()) { dateStatus[d] = 'done'; if (reread[d] !== undefined) afterQty[d] = reread[d] }
+      await gw.put(basePath, at, putBody)
     } catch (e) {
       const err = e as { code?: string; message?: string }
       firstError ??= err
       for (const d of targets.keys()) dateStatus[d] = 'failed'
+      continue
+    }
+    for (const d of targets.keys()) dateStatus[d] = 'done'
+    try {
+      const reread = parseQuantities(await gw.get(`${basePath}/${encodeURIComponent(it.supplier_oid)}`, at, { year_month: ym })).byDate
+      for (const d of targets.keys()) if (reread[d] !== undefined) afterQty[d] = reread[d]
+    } catch (e) {
+      firstError ??= { code: 'AFTER_READ_FAILED', message: `write succeeded but the after-state re-read failed: ${(e as Error).message}` }
     }
   }
 
@@ -1317,3 +1382,5 @@ git commit -m "verify(phase3a): live SIT e2e evidence (or PENDING blocker) recor
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
+
+<!-- agy-peer-reviewed: 2026-08-10T02:11:44Z rounds=3 verdict=approved -->
