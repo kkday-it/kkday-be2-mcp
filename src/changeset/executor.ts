@@ -2,8 +2,9 @@ import { trace } from '@opentelemetry/api'
 import type { ChangeSetStore } from './store.js'
 import type { GatewayClient } from '../gateway/client.js'
 import type { AuditLog } from '../audit/auditLog.js'
-import type { ItemResult, ChangeSetItem } from './types.js'
+import type { ItemResult, ChangeSetItem, InventoryItem } from './types.js'
 import { AppError } from '../errors.js'
+import { execInventory } from './executorInventory.js'
 
 export interface ExecutorDeps {
   changeSets: ChangeSetStore; gateway: GatewayClient; audit: AuditLog; now: () => number
@@ -25,6 +26,34 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
   const at = who.accessToken
   const modifyUser = who.modifyUser
   const tracer = trace.getTracer('be2-mcp')
+
+  if (rec.actionType === 'inventory_setting') {
+    // Sequential per item (spec §5): each item is a heavy read→compute→PUT→re-read cycle;
+    // never run items concurrently against the gateway.
+    const results: ItemResult[] = []
+    for (const it of rec.items as InventoryItem[]) {
+      const r = await tracer.startActiveSpan('changeset.execute/inventory_setting', async span => {
+        try { return await execInventory({ gateway: deps.gateway }, at, modifyUser, it, span.spanContext().traceId) }
+        finally { span.end() }
+      }).catch(e => ({
+        item_key: `${it.item_oid}:${it.supplier_oid}`, status: 'failed' as const,
+        error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: 'n/a',
+      }))
+      results.push(r)
+    }
+    deps.changeSets.recordResults(changesetId, results)
+    for (const r of results) {
+      deps.audit.record({
+        userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-page', tool: 'changeset.execute',
+        params: { changeset_id: changesetId, item: r.item_key }, status: r.status === 'failed' ? 'error' : 'ok',
+        errorMessage: r.error_message, traceId: r.trace_id, durationMs: 0,
+      })
+    }
+    const status = results.every(r => r.status === 'done' || r.status === 'skipped_noop') ? 'done'
+      : results.every(r => r.status === 'failed') ? 'failed' : 'partial'
+    deps.changeSets.setStatus(changesetId, status, deps.now())
+    return { status, results }
+  }
 
   const byOid = new Map<string, ChangeSetItem[]>()
   // Phase 3a Task 2: inventory_setting wiring lands in Task 6; the shelf paths below still only
