@@ -66,7 +66,10 @@ export const createChangesetTool: L2ToolDef = {
     try {
       // Per-user daily change-set budget (§8) — throws RateError over the cap.
       ctx.rateBudget.consumeChangeset(ctx.userLabel)
-      const diff = await computeShelfDiff(actionType, items, { gateway: ctx.gateway, accessToken: ctx.accessToken, userLabel: ctx.userLabel })
+      // Task 4 narrowed computeShelfDiff's actionType param to exclude 'inventory_setting' (the
+      // dispatcher now owns that branch); this call site still only ever handles the two shelf
+      // action types (createChangesetTool's inventory_setting path is wired in Task 5). Safe cast.
+      const diff = await computeShelfDiff(actionType as Exclude<ActionType, 'inventory_setting'>, items, { gateway: ctx.gateway, accessToken: ctx.accessToken, userLabel: ctx.userLabel })
       const diffVersion = diffVersionHash(diff)
       const id = ctx.genId()
       ctx.changeSets.create({

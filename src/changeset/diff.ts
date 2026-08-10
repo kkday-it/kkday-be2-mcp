@@ -2,15 +2,26 @@ import { createHash } from 'node:crypto'
 import type { ToolContext } from '../tools/types.js'
 import { findProductsTool } from '../tools/findProducts.js'
 import { productPlansTool } from '../tools/productPlans.js'
-import type { ActionType, ChangeSetItem, DiffItem } from './types.js'
+import type { ActionType, AnyChangeSetItem, AnyDiffItem, ChangeSetItem, DiffItem } from './types.js'
+import type { InventoryDiffItem, InventoryItem } from './types.js'
+import { computeInventoryDiff } from './inventoryDiff.js'
 
-// Version hash binds ONLY the current live state the user is approving against
-// (prod/pkg + current_is_active), order-independent. Target is the user's intent, not "state".
-export function diffVersionHash(diff: DiffItem[]): string {
-  const canon = diff
-    .map(d => `${d.prod_oid}:${d.pkg_oid ?? ''}=${d.current_is_active ?? 'null'}`)
-    .sort()
-    .join('|')
+// Version hash binds ONLY what the approver is approving against (spec §4):
+//  shelf + inventory `set`: the live base (drift => stale 409);
+//  inventory `adjust`: the OPERATION (item, supplier, sorted dates, delta) — the user approves
+//  "+50", not an absolute number, so live drift must NOT invalidate the approval.
+export function diffVersionHash(diff: AnyDiffItem[]): string {
+  const canon = diff.map(d => {
+    if ('item_oid' in d) {
+      const inv = d as InventoryDiffItem
+      if (inv.op === 'adjust') {
+        return `invadj:${inv.item_oid}:${inv.supplier_oid}:${inv.dates.map(x => x.date).sort().join(',')}=${inv.quantity}`
+      }
+      return inv.dates.map(x => `inv:${inv.item_oid}:${inv.supplier_oid}:${x.date}=${x.current ?? 'null'}`).sort().join('|')
+    }
+    const s = d as DiffItem
+    return `${s.prod_oid}:${s.pkg_oid ?? ''}=${s.current_is_active ?? 'null'}`
+  }).sort().join('|')
   return createHash('sha256').update(canon).digest('hex')
 }
 
@@ -25,7 +36,12 @@ export class DiffError extends Error {
   }
 }
 
-export async function computeShelfDiff(actionType: ActionType, items: ChangeSetItem[], ctx: ToolContext): Promise<DiffItem[]> {
+export async function computeChangesetDiff(actionType: ActionType, items: AnyChangeSetItem[], ctx: ToolContext): Promise<AnyDiffItem[]> {
+  if (actionType === 'inventory_setting') return computeInventoryDiff(items as InventoryItem[], ctx)
+  return computeShelfDiff(actionType, items as ChangeSetItem[], ctx)
+}
+
+export async function computeShelfDiff(actionType: Exclude<ActionType, 'inventory_setting'>, items: ChangeSetItem[], ctx: ToolContext): Promise<DiffItem[]> {
   if (actionType === 'shelf_toggle_product') {
     const oids = [...new Set(items.map(i => i.prod_oid))]
     const env = await findProductsTool.handler({ prod_oids: oids }, ctx)
