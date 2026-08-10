@@ -106,3 +106,24 @@ The `.env` SIT account is **not mapped to any supplier** on be2-220 for the test
 2. **stage**: `.env`'s `STAGE_pwd` and `STAGE_AUTHSVC_SERVICE_KEY` are still empty (unchanged since Phase 2a) — filling them would let this probe run against stage, where the account may already have supplier mappings (per the Phase 2a stage shelf-toggle success, stage authz differs from be2-220 for this account).
 
 **Downstream consequence for Phase 3a Tasks 2–9**: Q1–Q6 stay open. Per the plan (Task 1 interface note), later tasks proceed with **defensive/tolerant parsing** of the inventory quantities shape (accept either a `total`/`remaining`-style field, don't assume merge vs replace, cap batch size defensively) rather than a shape confirmed against a real 200. Task 9's live e2e exit gate goes **PENDING** on this same blocker, exactly as Task 10 did for the shelf-toggle in Phase 2a.
+
+### 2026-08-10 追加(headless source-dig + live 重測):403 之謎解開 —— 是「端點選錯」,不是 supplier 授權;寫入契約已從原始碼出土;首個 be2-220 真 200 寫入達成
+
+讀本機 `kkday-be2-api`/`kkday-be2-web` 原始碼(be2-web 庫存頁真正呼叫的鏈路)後 live 重測,推翻上節「per-supplier 對映缺失」推論:
+
+1. **supplier 根本不用猜也不用申請對映**:`GET /product/api/v1/items/{itemOid}/supplier-mappings` → **200**,item 1713281 的真實 supplier = **15247**(`is_default:true`,「築地市場 (IT 訂單組測試用商家)」)。
+2. **用真 supplier 打 `GET .../inventories/{supplierOid}` 照樣 403** —— 因為**這條是 be2-api 對 product-service 的 S2S 內部端點**(be2-api 帶自己的 service 憑證呼叫),對使用者 token 就是拒絕。**UI 實際讀逐日庫存走的是 `POST /product/api/v1/items/{itemOid}/inventories/search`**(body `{item_oid, supplier_oid, rrules?, filter?, spec?}`)→ 用使用者 token **200**。**⇒ Phase 3a 的讀取側(L0 tool + diff + executor base read)必須從 GET 換成 POST search —— 列入 FINALIZE 工作。**
+3. **item 1713281 現況是 UNLIMITED**(`basic-info` 200:`inventory_setting.control_type=0, inventory_type=null`,`default_inventory_qty:null`)→ search 回 `[]` 是合法空集,不是錯誤。模式 enum(源碼):UNLIMITED=0/00、ITEM_BY_QUANTITY=10、ITEM_BY_DATETIME=11、SKU_BY_QUANTITY=20、SKU_BY_DATETIME=21(十位=control_type、個位=inventory_type)。
+4. **寫入契約(源碼出土,be2-api → product-service)**:
+   - **逐日數量寫入 = `PUT /product/api/v1/items/{itemOid}/inventories/{supplierOid}/quantity`**(supplier 在 path!解 T6 review 的 supplier-scoping 疑問),body `{inventory_data: {modify_type, remain_qty}, modify_user}`。
+   - **`modify_type`:1 = REPLACE(set)、0 = ADD_AND_SUBTRACT(adjust)** —— 後端**原生支援相對調整**(be2-web `BatchUpdateType` enum REPLACE_ALL=0/ADD_AND_SUBTRACT=1 經 `+!value` 反轉成 code)。設計含意:executor 可繼續走「本地算絕對值 + modify_type=1」保留 would_go_negative/partial 語義,原生 adjust 為備選。
+   - **`remain_qty` 形狀 = `{ [skuOid|itemOid]: { [date]: {[event]|fullday: qty} } | {fullday: qty} }`**(be2-web `InventoryRemainQtyUpdateFormatter`;維度依 control_type:item vs sku、single vs by-datetime、有無場次)→ **Q6 答案:模式為 SKU_* 時分 SKU、有場次時分 event**。
+   - `modify_user` = be2-api 端 `AuthService::user()->uuid()`(與 platformId 同值,shelf 已雙證)。
+   - 另兩條寫入:`PUT item-configs/{itemOid}/inventory-setting` body `{item_oid, inventory_setting:{control_type∈[0,1,2], inventory_type∈[null,0,1]}, modify_user}`(模式切換);`PUT items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting`(供應商層布林)。
+5. **Live 重測結果(全程可逆,已還原)**:
+   - `PUT item-configs/1713281/inventory-setting`(UNLIMITED→ITEM_BY_DATETIME)→ **200(be2-220 上此帳號首個真 200 寫入!)**;結束後切回 UNLIMITED → 200,`basic-info` 驗證還原乾淨。
+   - `PUT items/1713281/inventories/15247/quantity`(modify_type 1 與 0 各試一次)→ **403** —— 數量寫入仍是 per-帳號授權拒絕(與 shelf-toggle 同類),但至此**唯一**還缺的就是這一個 endpoint 的授權。
+   - BY_DATETIME 模式下 search 不帶 rrules → 422 `133001「月曆設定與Item Setting設定不符 RRule需帶recurrence_date」`⇒ by-datetime 模式的 search 需帶 item 的 `recurrence_date` rrule(讀取側 FINALIZE 時處理)。
+   - `/status` 全程 `is_processing:false`(mode 切換為同步;數量寫入的 sync/async 仍待該 PUT 通了才知)。
+6. **Q1–Q8 更新**:Q2(merge-vs-replace)→ **基本解**:quantity 端點是 per-date 操作語義(`modify_type` + 指定日期 map),非全月 replace;read-merge-write 的「全月回送」不需要,executor 可簡化為只送目標日期(FINALIZE 落地)。Q3(跨月)→ remain_qty 以日期為 key,結構上可跨月,上限待實測。Q4(欄位)→ 寫入欄位是 `remain_qty`(剩餘量);read 側欄位名待 search 200-with-data。Q6 → **已解**(見上)。Q1(read row 形狀)→ 唯一還缺 200-with-data 樣本。Q5 → 部分(mode 寫同步)。
+7. **剩餘 blocker 收斂為一項**:`items/{itemOid}/inventories/{supplierOid}/quantity` 的 **PUT 授權**(be2-220 此帳號 403)。解法不變:220 授權或補 stage keys。讀取側已無 blocker(search 200)。
