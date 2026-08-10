@@ -45,7 +45,10 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
     for (const r of results) {
       deps.audit.record({
         userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-page', tool: 'changeset.execute',
-        params: { changeset_id: changesetId, item: r.item_key }, status: r.status === 'failed' ? 'error' : 'ok',
+        // I-2: anything that is not a clean 'done'/'skipped_noop' (e.g. 'partial' — some dates
+        // really failed) must audit as 'error', or audit scans filtering on error miss it.
+        params: { changeset_id: changesetId, item: r.item_key },
+        status: (r.status === 'done' || r.status === 'skipped_noop') ? 'ok' : 'error',
         errorMessage: r.error_message, traceId: r.trace_id, durationMs: 0,
       })
     }
@@ -96,7 +99,10 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
   for (const r of results) {
     deps.audit.record({
       userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-page', tool: 'changeset.execute',
-      params: { changeset_id: changesetId, item: r.item_key }, status: r.status === 'failed' ? 'error' : 'ok',
+      // I-2: same rule as the inventory loop above — anything not a clean 'done'/'skipped_noop'
+      // audits as 'error'.
+      params: { changeset_id: changesetId, item: r.item_key },
+      status: (r.status === 'done' || r.status === 'skipped_noop') ? 'ok' : 'error',
       errorMessage: r.error_message, traceId: r.trace_id, durationMs: 0,
     })
   }

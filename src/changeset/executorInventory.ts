@@ -9,13 +9,38 @@ export interface InventoryExecDeps {
 }
 type DateStatus = 'done' | 'skipped_noop' | 'failed'
 
+// I-1: two DIFFERENT change-sets can target the same (item_oid, supplier_oid) and be approved
+// near-simultaneously (two confirm tabs). The busy guard above only protects against a prior
+// WRITE still processing server-side — it does nothing to stop two concurrent executions of
+// THIS process both reading the same stale base before either PUT lands (silent lost update:
+// +50 and +30 against base 10 both report 'done' but the final quantity is 40, not 90).
+// Serialize the entire critical section per (item_oid:supplier_oid) key with an in-process
+// promise-chain mutex. Keys never queue behind unrelated keys (see tests/inventoryExecutor.test.ts).
+//
+// PRODUCTION NOTE: this mutex is in-process only — correct for the current single-process
+// SQLite POC. A multi-process deployment (multiple be2-mcp instances) needs a distributed lock
+// (e.g. Redis) instead, or two instances can still race the same item×supplier.
+const inflight = new Map<string, Promise<unknown>>()
+
+export async function execInventory(deps: InventoryExecDeps, at: string, modifyUser: string, it: InventoryItem, traceId: string): Promise<ItemResult> {
+  const key = `${it.item_oid}:${it.supplier_oid}`
+  const prev = inflight.get(key) ?? Promise.resolve()
+  const run = prev.catch(() => {}).then(() => doExecInventory(deps, at, modifyUser, it, traceId))
+  inflight.set(key, run)
+  try {
+    return await run
+  } finally {
+    if (inflight.get(key) === run) inflight.delete(key)
+  }
+}
+
 // spec §5. Per item: (0) busy guard — never read a base while a prior write is processing
 // (merging from a stale base would overwrite the in-flight change); (1..4) one full
 // read-merge-write cycle PER MONTH (GET is month-scoped; cross-month PUT unproven — Task 1);
 // per-date: set==live => skipped_noop, adjust below 0 => failed WOULD_GO_NEGATIVE (never
 // clamped, never blocks sibling dates). Aggregation NEVER collapses partial success to
 // 'failed' — a re-issued adjust would double-apply on the succeeded dates (spec §4).
-export async function execInventory(deps: InventoryExecDeps, at: string, modifyUser: string, it: InventoryItem, traceId: string): Promise<ItemResult> {
+async function doExecInventory(deps: InventoryExecDeps, at: string, modifyUser: string, it: InventoryItem, traceId: string): Promise<ItemResult> {
   const gw = deps.gateway
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>(r => setTimeout(r, ms)))
   const poll = deps.poll ?? { retries: 5, delayMs: 2000 }

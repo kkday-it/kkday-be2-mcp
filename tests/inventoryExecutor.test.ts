@@ -127,4 +127,75 @@ describe('execInventory', () => {
     const r = await execInventory(deps(gw), 'at', 'MU', item(), 't1')
     expect(r.status).toBe('done')
   })
+
+  // I-1: two DIFFERENT change-sets touching the same (item_oid, supplier_oid) approved near-
+  // simultaneously (two confirm tabs). Without in-process serialization, both busy guards pass
+  // before either PUT lands, both read base=10, and +50/+30 both report 'done' while the final
+  // quantity is a lost update (40 instead of 90) because the second call's read/compute happens
+  // off a fake gateway is deliberately gate-free here — the natural multi-await shape of
+  // execInventory (status-get -> quantity-get -> put -> re-read) is enough for real Node
+  // microtask interleaving to reproduce the race deterministically; no manual timers needed.
+  function fakeGwMulti(qtyByItem: Record<string, Record<string, number>>) {
+    const calls: string[] = []
+    return {
+      calls,
+      async get(path: string, at: string, query?: Record<string, string>) {
+        if (path.endsWith('/inventories/status')) { calls.push(`STATUS ${at}`); return { is_processing: false } }
+        const m = /items\/([^/]+)\/inventories\/([^/]+)/.exec(path)!
+        const itemOid = m[1]
+        calls.push(`GET ${at} item=${itemOid}`)
+        const qty = qtyByItem[itemOid]
+        const ym = query!.year_month
+        return { itemInventory: Object.entries(qty).filter(([d]) => d.startsWith(ym)).map(([date, quantity]) => ({ date, quantity })) }
+      },
+      async put(path: string, at: string, body: unknown) {
+        const m = /items\/([^/]+)\/inventories/.exec(path)!
+        const itemOid = m[1]
+        calls.push(`PUT ${at} item=${itemOid}`)
+        const qty = qtyByItem[itemOid]
+        for (const row of (body as Record<string, unknown>).itemInventory as Array<{ date: string; quantity: number }>) {
+          qty[row.date] = row.quantity
+        }
+      },
+    }
+  }
+  const concurrentDeps = (gw: unknown) => ({ gateway: gw as never, sleep: async () => {}, poll: { retries: 0, delayMs: 0 } })
+
+  it('I-1: two concurrent execInventory calls on the SAME item×supplier serialize — no lost update', async () => {
+    const qtyByItem = { i1: { '2026-08-15': 10 } }
+    const gw = fakeGwMulti(qtyByItem)
+    const itemA = item({ item_oid: 'i1', supplier_oid: 's1', quantity: 50 })
+    const itemB = item({ item_oid: 'i1', supplier_oid: 's1', quantity: 30 })
+    const [ra, rb] = await Promise.all([
+      execInventory(concurrentDeps(gw), 'atA', 'MU', itemA, 'tA'),
+      execInventory(concurrentDeps(gw), 'atB', 'MU', itemB, 'tB'),
+    ])
+    expect(ra.status).toBe('done')
+    expect(rb.status).toBe('done')
+    // whichever call's write landed second must have read the OTHER call's already-written base —
+    // 10 -> (+50) -> 60 -> (+30) -> 90, never a lost update landing on 40 or 60.
+    expect(qtyByItem.i1['2026-08-15']).toBe(90)
+  })
+
+  it('I-1: concurrent execInventory calls on DIFFERENT item×supplier do NOT serialize against each other', async () => {
+    const qtyByItem = { i1: { '2026-08-15': 10 }, i2: { '2026-08-15': 5 } }
+    const gw = fakeGwMulti(qtyByItem)
+    const itemA = item({ item_oid: 'i1', supplier_oid: 's1', quantity: 50 })
+    const itemB = item({ item_oid: 'i2', supplier_oid: 's1', quantity: 20 })
+    const [ra, rb] = await Promise.all([
+      execInventory(concurrentDeps(gw), 'atA', 'MU', itemA, 'tA'),
+      execInventory(concurrentDeps(gw), 'atB', 'MU', itemB, 'tB'),
+    ])
+    expect(ra.status).toBe('done')
+    expect(rb.status).toBe('done')
+    expect(qtyByItem.i1['2026-08-15']).toBe(60)
+    expect(qtyByItem.i2['2026-08-15']).toBe(25)
+    // prove they interleave rather than fully serialize: item i2's read must happen before
+    // item i1's write completes — a distinct key must never queue behind an unrelated key.
+    const getB = gw.calls.findIndex(c => c.startsWith('GET atB'))
+    const putA = gw.calls.findIndex(c => c.startsWith('PUT atA'))
+    expect(getB).toBeGreaterThanOrEqual(0)
+    expect(putA).toBeGreaterThanOrEqual(0)
+    expect(getB).toBeLessThan(putA)
+  })
 })

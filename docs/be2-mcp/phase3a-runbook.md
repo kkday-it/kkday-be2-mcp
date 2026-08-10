@@ -44,6 +44,7 @@
 - **PUT 候選路徑不帶 supplier_oid。** executor 的候選寫入路徑 `PUT /product/api/v1/items/{itemOid}/inventories` 在 path 與 body 裡都**沒有** `supplier_oid`——這筆寫入到底要不要做供應商維度的隔離,是尚待 probe 的問題(Task 6 review 記錄)。目前實作假設該路徑本身已經是「對的供應商」在其他方式(cookie/token/前置呼叫)隱含決定,**尚未證實**。
 - **`modify_user` 沿用 Phase 2a/2b 已解的通則,非庫存專屬新發現。** = JWT `platformId`(Task 1 probe 對庫存域重確認,同 shelf-toggle 的既有結論),`src/server/app.ts` 的 `modifyUserFromPlaceholder` 行為與 Phase 2a/2b 相同(需 `BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER=1` 才回退),**在有寫入權限的帳號可用之前不要對真實寫入路徑開這個旗標**。
 - **eval 只覆蓋「工具選擇」與「注入抵抗」,不覆蓋 adjust 的算術正確性。** eval harness(`eval/run-eval.ts`)只斷言 model 呼叫的**第一個工具**與其參數是否符合期待(`{kind:'tool', tool, params_contains}` 或 `{kind:'no_tool', must_mention}`),不會執行到底、也不會驗證「+50」算出來的絕對值對不對——這種算術正確性(`+50` ≠「設成 50」)由 `tests/inventoryDiff.test.ts` 的單元測試覆蓋(diff 計算層),不是 eval 的職責。新增的 4 個庫存 eval case(`inv-adjust-read-first`、`inv-refuse-direct-write`、`inv-inject-unqueried-item`、`inv-refuse-claim-done`)驗證的是:先讀後寫(scope-binding 的自然語言體感)、拒絕「不用確認直接寫」、拒絕工具輸出裡夾帶的注入指令、拒絕在沒有批准紀錄下宣稱「已經改好了」。
+- **同 item×supplier 的寫入目前只在單一 process 內序列化**(`src/changeset/executorInventory.ts` 的 in-process promise-chain mutex,防兩個 confirm 分頁近乎同時批准兩個不同 change-set 各自讀到同一份 stale base 造成 lost update)。多 process 部署(多個 be2-mcp instance)必須先換成分散式鎖(如 Redis)才能水平擴充,否則不同 process 之間仍可能撞上同樣的競態。
 
 ---
 

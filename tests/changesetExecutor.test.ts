@@ -3,6 +3,7 @@ import { openDb } from '../src/store/db.js'
 import { ChangeSetStore } from '../src/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { executeChangeSet, type ExecutorDeps, type ExecutorIdentity } from '../src/changeset/executor.js'
+import type { InventoryItem } from '../src/changeset/types.js'
 
 const WHO: ExecutorIdentity = { accessToken: 'sess-token', userLabel: 'approver@kkday.com', modifyUser: 'UUID-1', sessionId: 'websess-1' }
 
@@ -132,5 +133,34 @@ describe('executeChangeSet', () => {
     expect(byKey.p1).toBe('done')
     expect(byKey.p2).toBe('failed')
     expect(byKey.p3).toBe('done')
+  })
+
+  it('I-2: an inventory item ending "partial" audits as status "error" (not "ok")', async () => {
+    // One date would_go_negative (fails), sibling date succeeds => item-level status 'partial'
+    // (spec: NEVER collapse partial to 'failed', see executorInventory.ts). The audit row for
+    // this item must be 'error' so audit scans filtering on error do not miss it.
+    const db = openDb(':memory:'); const store = new ChangeSetStore(db, { now: () => 1000 })
+    const qty: Record<string, number> = { '2026-08-15': 10, '2026-08-16': 100 }
+    const gateway = {
+      get: async (p: string, _t: string, query?: Record<string, string>) => {
+        if (p.endsWith('/inventories/status')) return { is_processing: false }
+        const ym = query!.year_month
+        return { itemInventory: Object.entries(qty).filter(([d]) => d.startsWith(ym)).map(([date, quantity]) => ({ date, quantity })) }
+      },
+      put: async (_p: string, _t: string, body: any) => {
+        for (const row of body.itemInventory as Array<{ date: string; quantity: number }>) qty[row.date] = row.quantity
+      },
+    } as never
+    const audit = new AuditLog(db, () => 1000)
+    const d: ExecutorDeps = { changeSets: store, gateway, audit, now: () => 1000 }
+    const item: InventoryItem = { item_oid: 'i1', supplier_oid: 's1', op: 'adjust', quantity: -20, dates: ['2026-08-15', '2026-08-16'] }
+    store.create({
+      id: 'cs-inv-partial', creatorLabel: 'owner@kkday.com', creatorBearerHash: 'bh', sessionId: 's', actionType: 'inventory_setting',
+      items: [item], diff: [], diffVersion: 'v', status: 'approved', createdAt: 1000,
+    })
+    const out = await executeChangeSet(d, 'cs-inv-partial', WHO)
+    expect(out.results[0].status).toBe('partial')
+    const row = audit.recent().find(r => r.tool === 'changeset.execute' && (r.params as { item?: string }).item === 'i1:s1')
+    expect(row?.status).toBe('error')
   })
 })
