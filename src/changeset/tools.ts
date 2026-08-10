@@ -1,16 +1,22 @@
 import { z } from 'zod'
 import type { L2ToolContext, L2ToolDef } from '../server/l2Context.js'
-import { computeShelfDiff, diffVersionHash } from './diff.js'
+import { computeChangesetDiff, diffVersionHash } from './diff.js'
+import { validateInventoryItems } from './inventoryValidate.js'
 import { makeEnvelope, toEnvelopeError } from '../tools/envelope.js'
-import type { ActionType, ChangeSetItem } from './types.js'
+import type { ActionType, AnyChangeSetItem, ChangeSetItem, InventoryItem } from './types.js'
+
+// FINALIZE(Task 1): confirmed live against SIT be2-220 (docs/be2-mcp/sit-write-contracts.md
+// "inventory" section, Task 1 probe) — this is the real businessList action code, not a
+// placeholder. Exported so tests seed the same constant instead of hardcoding a literal that
+// would silently diverge if the confirmed code ever changes.
+export const INVENTORY_ACTION_CODES = ['product.product-inventory.update']
 
 // action_type -> businessList action code(s). businessList is 666 dot-notation strings
 // (e.g. "product.product-sale-status.update"), verified live against SIT be2-220.
 const ACTION_CODES: Record<ActionType, string[]> = {
   shelf_toggle_product: ['product.product-sale-status.update'],
   shelf_toggle_plan: ['product.product-sale-status.update', 'product.bundle-package-sale-status.update'],
-  // Confirmed live against SIT be2-220 (docs/be2-mcp/sit-write-contracts.md "inventory" section, Task 1 probe).
-  inventory_setting: ['product.product-inventory.update'],
+  inventory_setting: INVENTORY_ACTION_CODES,
 }
 
 export function businessListAllowsAction(businessList: unknown[], actionType: ActionType): boolean {
@@ -37,6 +43,9 @@ const inputShape = {
   note: z.string().max(500).optional(),
 }
 
+const isInventoryItem = (i: unknown): i is InventoryItem =>
+  typeof (i as InventoryItem).item_oid === 'string' && Array.isArray((i as InventoryItem).dates)
+
 export const createChangesetTool: L2ToolDef = {
   name: 'be2_create_changeset',
   description:
@@ -45,19 +54,42 @@ export const createChangesetTool: L2ToolDef = {
     'A human operator must open the confirm page for this change-set in a browser and log in via be2-auth SSO to review ' +
     'and approve or reject it there; only then does the write execute. You CANNOT approve or execute this change-set ' +
     'yourself — report the changeset_id and the diff to the user and tell them to open the confirm page to decide. ' +
-    'Only pass oids you already looked up this session.',
+    'Only pass oids you already looked up this session. ' +
+    'inventory_setting stages per-date inventory quantity changes ({item_oid, supplier_oid, op: set|adjust, quantity, dates}); ' +
+    'read the item inventory first — adjust is computed against live quantities at approval time.',
   inputShape,
   async handler(args, ctx: L2ToolContext) {
-    const items = args.items as ChangeSetItem[]
+    const items = args.items as AnyChangeSetItem[]
     const actionType = args.action_type as ActionType
-    // §6.2 scope-binding gate
-    const notRead = items.filter(i => !ctx.readOids.has(ctx.sessionId, i.prod_oid) || (i.pkg_oid && !ctx.readOids.has(ctx.sessionId, i.pkg_oid)))
-    if (notRead.length) {
-      return makeEnvelope([], [{
-        key: notRead.map(i => i.pkg_oid ?? i.prod_oid).join(','),
-        code: 'SCOPE_NOT_READ',
-        message: 'These oids were not looked up in this session; query them first (be2_find_products / be2_get_product_plans) before staging a change.',
-      }])
+    if (actionType === 'inventory_setting') {
+      if (!items.every(isInventoryItem)) {
+        return makeEnvelope([], [{ key: actionType, code: 'INVALID_ITEMS', message: 'inventory_setting items need {item_oid, supplier_oid, op, quantity, dates}.' }])
+      }
+      const inv = items as InventoryItem[]
+      const bad = validateInventoryItems(inv, ctx.now())
+      if (bad) return makeEnvelope([], [{ key: bad.key, code: 'INVALID_ITEMS', message: bad.message }])
+      // §6.2 scope-binding gate
+      const notRead = inv.filter(i => !ctx.readOids.has(ctx.sessionId, i.item_oid))
+      if (notRead.length) {
+        return makeEnvelope([], [{
+          key: notRead.map(i => i.item_oid).join(','),
+          code: 'SCOPE_NOT_READ',
+          message: 'These item_oids were not looked up in this session; query them first (be2_get_inventory_settings / be2_get_product_plans) before staging a change.',
+        }])
+      }
+    } else {
+      if (items.some(isInventoryItem)) {
+        return makeEnvelope([], [{ key: actionType, code: 'INVALID_ITEMS', message: 'shelf action_types take {prod_oid, (pkg_oid), target_is_active} items.' }])
+      }
+      // §6.2 scope-binding gate
+      const notRead = (items as ChangeSetItem[]).filter(i => !ctx.readOids.has(ctx.sessionId, i.prod_oid) || (i.pkg_oid && !ctx.readOids.has(ctx.sessionId, i.pkg_oid)))
+      if (notRead.length) {
+        return makeEnvelope([], [{
+          key: notRead.map(i => i.pkg_oid ?? i.prod_oid).join(','),
+          code: 'SCOPE_NOT_READ',
+          message: 'These oids were not looked up in this session; query them first (be2_find_products / be2_get_product_plans) before staging a change.',
+        }])
+      }
     }
     // businessList fail-fast (action_type only)
     if (!businessListAllowsAction(ctx.businessList, actionType)) {
@@ -66,10 +98,7 @@ export const createChangesetTool: L2ToolDef = {
     try {
       // Per-user daily change-set budget (§8) — throws RateError over the cap.
       ctx.rateBudget.consumeChangeset(ctx.userLabel)
-      // Task 4 narrowed computeShelfDiff's actionType param to exclude 'inventory_setting' (the
-      // dispatcher now owns that branch); this call site still only ever handles the two shelf
-      // action types (createChangesetTool's inventory_setting path is wired in Task 5). Safe cast.
-      const diff = await computeShelfDiff(actionType as Exclude<ActionType, 'inventory_setting'>, items, { gateway: ctx.gateway, accessToken: ctx.accessToken, userLabel: ctx.userLabel })
+      const diff = await computeChangesetDiff(actionType, items, { gateway: ctx.gateway, accessToken: ctx.accessToken, userLabel: ctx.userLabel })
       const diffVersion = diffVersionHash(diff)
       const id = ctx.genId()
       ctx.changeSets.create({
@@ -85,7 +114,9 @@ export const createChangesetTool: L2ToolDef = {
         status: 'pending_approval',
         createdAt: ctx.now(),
       })
-      const readOidsOut = [...new Set(items.flatMap(i => [i.prod_oid, i.pkg_oid].filter((x): x is string => !!x)))]
+      const readOidsOut = actionType === 'inventory_setting'
+        ? [...new Set((items as InventoryItem[]).map(i => i.item_oid))]
+        : [...new Set((items as ChangeSetItem[]).flatMap(i => [i.prod_oid, i.pkg_oid].filter((x): x is string => !!x)))]
       // Fix 1: the confirm_url must NOT enter the model's context — deliver it out-of-band to the
       // human instead. The tool response carries only the changeset_id, status, and diff (data
       // for the agent to summarize to the human in chat). Phase 2b: the URL carries no capability
