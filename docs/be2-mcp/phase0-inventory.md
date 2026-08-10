@@ -32,6 +32,25 @@
 **Live WRITE e2e 仍 DEFERRED**:沿用 Phase 2a 的 403 卡點(SIT `.env` 帳號無 shelf-write 權限,契約已雙證,見上與 `docs/be2-mcp/sit-write-contracts.md`),Phase 2b 沒有新增寫入路徑,只換了「誰能按批准」的認證層,故此阻擋項不變、不重新驗證。
 **Carry-forward(待對真實 be2-auth 確認,非阻擋)**:be2-auth POPUP 的 `postMessage` 訊息契約(型別 `UPDATE_AUTH_TOKEN`、payload 的 code 欄位鍵名)以及登入 URL 的 `redirectPath` 實際語意/allowlist 行為,目前只在單元測試用 mock `authServiceClient.exchangeCode` 驗證流程骨架,尚未對真實 be2-auth 環境跑過一次真的 POPUP 登入。對應 Phase 0 B2 的延伸小確認,見 `docs/be2-mcp/phase2b-runbook.md`「已知限制」與「Live SIT WRITE e2e — PENDING」兩節。
 
+## Phase 3 執行決策 + handoff（2026-08-10,待新 session 接手 brainstorm）
+
+**決策**:Phase 3 不做成一份 spec,**拆 3 個逐領域切片**(3a/3b/3c),每片各自 brainstorm→spec→(agy)→plan→(agy)→subagent-driven,重用 Phase 2a/2b 的 change-set + SSO 確認頁機制**不動**。**首片 = `inventory_setting`(庫存)**(使用者拍板,2026-08-10)。順序:庫存 → 價格 → 方案維護(package rename/sort/delete;phase0 已判為低價值,擺最後;`schedule_setting`/日期場次真寫入近 0,視需求再開)。理由:phase0 分析「真價值在庫存+價格」;庫存真寫入量最高(~11.8k/月)、power-user ROI 最突出。
+
+**每個 action_type 切片的固定結構**(仿 Phase 2a):
+1. **live SIT 寫入契約 probe**(仿 Phase 2a Task 1):該域寫入 endpoint、必填欄位、read-merge-write 語義(merge vs replace)、`modify_user`(已知=JWT `platformId`)、可逆性(先 read→改→還原)。**庫存/價格域 endpoint 尚未盤(Phase 0 C 待盤)**,此 probe 是第一步。
+2. **現況讀取**(spec §4 硬性:嚴禁盲寫):擴充既有 L0 讀取工具的回傳 schema、或加一支對應讀取工具,讓 agent 看得到該域現況才能算 diff / 做相對編輯(如「漲價 10%」「庫存 +50」)。
+3. **change-set action_type**:在 `createChangesetTool` 的 `ACTION_CODES` + item schema + `computeShelfDiff`(改名/泛化)+ executor 的 read-merge-write 分支各加該域邏輯;businessList 動作碼查真實 businessList(仿 Phase 2a 用 `product.*` 實查)。
+4. **eval + 安全測試**:draft-only、scope-gate、注入;該域的 diff/相對編輯正確性。
+
+**庫存域已知線索**(來自 Phase 1a inventory 讀取 + trellis-poc memory,待 probe 證實):讀取走 product-service-direct `/product/api/v1/items/{itemOid}/inventories/...`;寫入候選 `PUT items/{itemOid}/inventories`、`PUT item-configs/{itemOid}/inventory-setting`(mode)、`PUT items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting`;粒度 = item × supplier × 日期。**高風險**:寫庫存立即影響前台可售 + 清 cache。
+
+**共同前提/卡點(接手前需知)**:
+- 寫入 live 驗證仍卡 **per-環境/per-oid 授權**(SIT `.env` 帳號對他人商品 403;stage 同帳號同商品可寫但 `.env` 缺 `STAGE_AUTHSVC_SERVICE_KEY`)。庫存/價格 probe 同樣需要一個「此帳號在目標環境可寫」的 item。
+- be2-web 導航除錯原則(memory `be2-web-navigation-debug`):先到 `/v2/product/search-draft` 搜商品→點按鈕,別猜 SPA route(是 `v2` 不是 `v3`)。
+- 現有分支 `feat/phase1a` 已推私有 repo,PR #1(→main)已開;Phase 1a/2a/2b 完成、147 tests 綠。
+
+**下一步**:開新 session(context 乾淨)→ `superpowers:brainstorming` 針對**庫存域**(先讀本段 + 主 spec §4/§5 + Phase 2a/2b 設計 + `sit-write-contracts.md`)→ 產 Phase 3a spec → agy → writing-plans → subagent-driven。
+
 ## 0. 決策：Option 1 — 已定案（2026-08-09）
 
 > **結論：採 Option 1（server 端 token store）。** 主 spec §2/§3/§6/§11/§12 已回改並過 agy review（rounds=2 approved）。下方為評估紀錄。
