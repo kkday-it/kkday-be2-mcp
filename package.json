@@ -10,6 +10,7 @@
     "bootstrap-user": "tsx scripts/bootstrap-user.ts",
     "probe-sit": "tsx scripts/probe-sit.ts",
     "probe-sit-write": "tsx scripts/probe-sit-write.ts",
+    "probe-sit-inventory": "tsx scripts/probe-sit-inventory.ts",
     "ci": "npm run typecheck && npm run test"
   },
   "keywords": [],

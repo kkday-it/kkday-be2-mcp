@@ -59,3 +59,50 @@ Our code can't reproduce the stage write yet because **`.env` has `STAGE_pwd` an
 - Tasks 2–9 proceed unchanged: the executor takes an injected `modifyUserFrom`, unit tests inject a stub (`() => 'UUID-1'`), and the 403 fail-closed path is testable. read-merge-write preserving full objects is confirmed correct.
 - Task 8 app.ts wiring of the REAL `modifyUserFrom` (auth-service userUuid resolver) is deferred until #1 is resolved with a write-capable session.
 - Task 10 live write e2e is BLOCKED pending a write-capable SIT account.
+
+## inventory (Phase 3a Task 1, 2026-08-10)
+
+Probed live against `api-gateway-220.sit.kkday.com` with the `.env` account (`lance.chien@kkday.com`), script `scripts/probe-sit-inventory.ts`. Target: `item_oid=1713281` — this is the account's OWN test product (`prod_oid 546965`, plan/`pkg_oid 1967504`, resolved live via `npm run probe-sit -- 546965` → `packages[0].item_oid`), chosen specifically to rule out "not my product" as the 403 cause (unlike the marketplace item 841808 used in Phase 1a).
+
+### Result: BLOCKED at the quantities GET (`403`) — same failure mode as Phase 1a, now confirmed on the account's OWN item too
+
+```
+GET /product/api/v1/items/1713281/inventories/status -> 200   ({"is_processing":false,...})
+GET /product/api/v1/items/1713281/inventories/0?year_month=2026-08 -> 403
+GET /product/api/v1/items/1713281/inventories/1?year_month=2026-08 -> 403
+GET /product/api/v1/items/1713281/inventories/2?year_month=2026-08 -> 403
+```
+
+Tried `supplier_oid` 0, 1, 2 (the same candidates Phase 1a tried on item 841808) — all three 403 on item 1713281 as well. The `/status` endpoint (no supplier dimension) returns 200 cleanly; only the per-supplier `.../inventories/{supplierOid}` read is denied.
+
+### New finding vs. Phase 1a: the account HAS the businessList inventory action codes
+
+`tokens.businessList` (683 entries) contains, filtered for `/invent/i`:
+```
+["product.product-inventory.query","product.product-inventory.update","vtrans.airport-transfer-capacity-inventory.edit"]
+```
+So this is **not** a missing-action-code problem (the account is action-authorized to query/update inventory in general) — it is a **per-supplier ownership/scope denial**, structurally identical to the shelf-toggle finding for product 546965 (§ above: action code present, per-oid ownership denies). The account is read-capable on `/status` (no supplier scoping) but not on the supplier-scoped quantities read, even for a product it created itself. This suggests inventory authorization is scoped by **supplier_oid** (this account isn't registered as/mapped to any supplier on be2-220), not by product ownership — consistent with `product-service` treating inventory as `item × supplier × date`.
+
+### Q1–Q8 (spec §8) — status: OPEN, blocked before reaching the write
+
+| Q | Question | Status |
+|---|---|---|
+| Q1 | Real GET shape / writable quantity field name (total vs remaining) | **OPEN** — GET never returned 200, no body observed |
+| Q2 | Merge vs replace on PUT | **OPEN** — never reached (blocked before any PUT) |
+| Q3 | Batching / cross-month behavior | **OPEN** — never reached |
+| Q4 | Quantity field name | **OPEN** — never reached |
+| Q5 | Sync vs async (`/status.is_processing`) | Baseline captured: `is_processing:false` before any write attempt (no write attempted, so no before/after transition observed) |
+| Q6 | Is quantity per-SKU? | **OPEN** — never reached |
+| Q7 | `modify_user` value | Not inventory-specific — reconfirmed generic: JWT `platformId` (`f7965b8d-ae5f-421c-9ced-c69a7587b422`), same as the shelf-toggle finding above |
+| Q8 | 403 behavior | **CONFIRMED**: clean `403`, fail-closed, on all 3 tried `supplier_oid` values, on the account's own item — gateway/product-service enforces this before any body validation, same fail-closed pattern as the shelf-toggle write |
+| — | Real businessList inventory action code | **CONFIRMED**: `product.product-inventory.query` (read) / `product.product-inventory.update` (write); also `vtrans.airport-transfer-capacity-inventory.edit` (unrelated vertical, not be2 product inventory) |
+
+No `tests/fixtures/inventory-quantities.json` was written — the script's guard (`if (q.status !== 200) return`) means the fixture is only produced on an actual 200, which never happened.
+
+### Blocker + unblock path (unchanged shape from the Phase 2a shelf-toggle blocker)
+
+The `.env` SIT account is **not mapped to any supplier** on be2-220 for the tested item (or any item — `/status` has no supplier dimension so it can't discriminate; the 403 is specifically on the `{supplierOid}` path segment). Two independent unblock paths, either sufficient:
+1. **be2-220 grant**: get this account mapped as a supplier for a test item on be2-220 (ask whoever owns supplier assignment — likely the same grant surface as the Phase 2a shelf-write grant, but scoped to inventory/supplier rather than product-sale-status).
+2. **stage**: `.env`'s `STAGE_pwd` and `STAGE_AUTHSVC_SERVICE_KEY` are still empty (unchanged since Phase 2a) — filling them would let this probe run against stage, where the account may already have supplier mappings (per the Phase 2a stage shelf-toggle success, stage authz differs from be2-220 for this account).
+
+**Downstream consequence for Phase 3a Tasks 2–9**: Q1–Q6 stay open. Per the plan (Task 1 interface note), later tasks proceed with **defensive/tolerant parsing** of the inventory quantities shape (accept either a `total`/`remaining`-style field, don't assume merge vs replace, cap batch size defensively) rather than a shape confirmed against a real 200. Task 9's live e2e exit gate goes **PENDING** on this same blocker, exactly as Task 10 did for the shelf-toggle in Phase 2a.
