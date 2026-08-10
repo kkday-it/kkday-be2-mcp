@@ -127,3 +127,17 @@ The `.env` SIT account is **not mapped to any supplier** on be2-220 for the test
    - `/status` 全程 `is_processing:false`(mode 切換為同步;數量寫入的 sync/async 仍待該 PUT 通了才知)。
 6. **Q1–Q8 更新**:Q2(merge-vs-replace)→ **基本解**:quantity 端點是 per-date 操作語義(`modify_type` + 指定日期 map),非全月 replace;read-merge-write 的「全月回送」不需要,executor 可簡化為只送目標日期(FINALIZE 落地)。Q3(跨月)→ remain_qty 以日期為 key,結構上可跨月,上限待實測。Q4(欄位)→ 寫入欄位是 `remain_qty`(剩餘量);read 側欄位名待 search 200-with-data。Q6 → **已解**(見上)。Q1(read row 形狀)→ 唯一還缺 200-with-data 樣本。Q5 → 部分(mode 寫同步)。
 7. **剩餘 blocker 收斂為一項**:`items/{itemOid}/inventories/{supplierOid}/quantity` 的 **PUT 授權**(be2-220 此帳號 403)。解法不變:220 授權或補 stage keys。讀取側已無 blocker(search 200)。
+
+### 2026-08-10 再追加(Kibana 一錘定音):quantity PUT 的 403 = auth-service verify v2 的 per-URI 規則擋下,請求從未到達 product-service
+
+以自訂 `request-uuid` 重放 403 PUT 後在 SIT Kibana(`new-kklog-*`)撈同一條 trace(7 hits),完整鏈路:
+
+1. gateway 收到我們的 `PUT items/1713281/inventories/15247/quantity` → 代打 `POST auth/api/v1/verify`。
+2. auth-service verify v2:`Verify v2 entry params`(`target=product, uri=api/v1/items/1713281/inventories/15247/quantity, auth_key=lance.chien@kkday.com`)→ 解析出規則 `uri_pattern: api/v1/items/{*}/inventories/{*}/quantity` → **`CheckTargetRuleCache.php` 丟 Exception「user with business oid」** → verify 回 **403 `AU9403`** → gateway 對我們回 403。
+3. **product-service 全程未參與**;UI 權限閘(`PRODUCT.PRODUCT_INVENTORY.UPDATE`,帳號有)與後端 verify 規則綁的 action **不同顆** —— 這是一個 API-UI 權限不等價實例(phase0 C3 關注點):UI 讓你按存檔,verify 的 per-URI 規則要求的 business action 你的群組沒有。
+4. 對照:`PUT item-configs/{oid}/inventory-setting`(模式切換)同帳號過 verify 且 200 → per-URI 規則綁的 action 逐條不同,缺的只是 quantity(可能含 `items/{*}/inventories`)這幾條的 action。
+
+**精準的解卡請求(給 auth-service / be2 授權管理者)**:
+> 帳號 lance.chien@kkday.com(be2-220)打 `PUT /product/api/v1/items/{itemOid}/inventories/{supplierOid}/quantity` 被 verify v2 拒(AU9403,`CheckTargetRuleCache` user-with-business-oid)。請查 target=product、uri_pattern `api/v1/items/{*}/inventories/{*}/quantity`(以及 `api/v1/items/{*}/inventories`)規則綁定的 business action code,並把該 action 加進我帳號所屬群組(或告知 code 由我申請)。帳號已有 `product.product-inventory.update`,顯然規則要求的是別顆。
+
+(這也解釋 stage 可寫:同帳號在 stage 的群組含該 action、be2-220 沒有 —— 與 Phase 2a shelf-toggle 的 per-環境差異同構。)
