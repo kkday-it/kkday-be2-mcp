@@ -9,6 +9,8 @@ import type { ActionType, ChangeSetItem } from './types.js'
 const ACTION_CODES: Record<ActionType, string[]> = {
   shelf_toggle_product: ['product.product-sale-status.update'],
   shelf_toggle_plan: ['product.product-sale-status.update', 'product.bundle-package-sale-status.update'],
+  // Confirmed live against SIT be2-220 (docs/be2-mcp/sit-write-contracts.md "inventory" section, Task 1 probe).
+  inventory_setting: ['product.product-inventory.update'],
 }
 
 export function businessListAllowsAction(businessList: unknown[], actionType: ActionType): boolean {
@@ -17,12 +19,20 @@ export function businessListAllowsAction(businessList: unknown[], actionType: Ac
   return ACTION_CODES[actionType].some(c => codes.has(c))
 }
 
+const invItemShape = z.object({
+  item_oid: z.string().min(1),
+  supplier_oid: z.string().min(1),
+  op: z.enum(['set', 'adjust']),
+  quantity: z.number(),
+  dates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).min(1).max(62),  // 62 provisional — Task 1 Q4/Q6
+})
 const itemShape = z.union([
   z.object({ prod_oid: z.string().min(1), target_is_active: z.boolean() }),
   z.object({ prod_oid: z.string().min(1), pkg_oid: z.string().min(1), target_is_active: z.boolean() }),
+  invItemShape,
 ])
 const inputShape = {
-  action_type: z.enum(['shelf_toggle_product', 'shelf_toggle_plan']),
+  action_type: z.enum(['shelf_toggle_product', 'shelf_toggle_plan', 'inventory_setting']),
   items: z.array(itemShape).min(1).max(20),
   note: z.string().max(500).optional(),
 }

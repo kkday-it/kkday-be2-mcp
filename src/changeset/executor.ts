@@ -27,7 +27,10 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
   const tracer = trace.getTracer('be2-mcp')
 
   const byOid = new Map<string, ChangeSetItem[]>()
-  for (const it of rec.items) {
+  // Phase 3a Task 2: inventory_setting wiring lands in Task 6; the shelf paths below still only
+  // ever see shelf items (actionType-gated at the create_changeset boundary, Task 5), so this
+  // narrowing cast is safe and shelf-path behavior is unchanged.
+  for (const it of rec.items as ChangeSetItem[]) {
     const g = byOid.get(it.prod_oid) ?? []
     g.push(it)
     byOid.set(it.prod_oid, g)

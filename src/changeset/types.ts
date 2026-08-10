@@ -1,4 +1,4 @@
-export type ActionType = 'shelf_toggle_product' | 'shelf_toggle_plan'
+export type ActionType = 'shelf_toggle_product' | 'shelf_toggle_plan' | 'inventory_setting'
 export type ChangeSetStatus = 'pending_approval' | 'approved' | 'executing' | 'done' | 'partial' | 'failed' | 'rejected' | 'expired'
 
 export interface ChangeSetItem {
@@ -6,6 +6,18 @@ export interface ChangeSetItem {
   pkg_oid?: string
   target_is_active: boolean
 }
+
+export type InventoryOp = 'set' | 'adjust'
+
+export interface InventoryItem {
+  item_oid: string
+  supplier_oid: string
+  op: InventoryOp
+  quantity: number
+  dates: string[]
+}
+
+export type AnyChangeSetItem = ChangeSetItem | InventoryItem
 
 export interface DiffItem {
   prod_oid: string
@@ -16,9 +28,27 @@ export interface DiffItem {
   no_op: boolean
 }
 
+export interface InventoryDateDiff {
+  date: string
+  current?: number
+  target?: number
+  no_op: boolean
+  would_go_negative: boolean
+}
+
+export interface InventoryDiffItem {
+  item_oid: string
+  supplier_oid: string
+  op: InventoryOp
+  quantity: number
+  dates: InventoryDateDiff[]
+}
+
+export type AnyDiffItem = DiffItem | InventoryDiffItem
+
 export interface ItemResult {
   item_key: string
-  status: 'done' | 'skipped_noop' | 'failed' | 'stale'
+  status: 'done' | 'skipped_noop' | 'failed' | 'stale' | 'partial'
   before?: unknown
   after?: unknown
   error_code?: string
@@ -32,8 +62,8 @@ export interface ChangeSetRecord {
   creatorBearerHash: string
   sessionId: string
   actionType: ActionType
-  items: ChangeSetItem[]
-  diff: DiffItem[]
+  items: AnyChangeSetItem[]
+  diff: AnyDiffItem[]
   diffVersion: string
   note?: string
   status: ChangeSetStatus

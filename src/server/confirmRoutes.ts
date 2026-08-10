@@ -5,7 +5,7 @@ import type { TokenManager } from '../auth/tokenManager.js'
 import type { WebSessionStore } from './webSessionStore.js'
 import { TokenStore } from '../store/tokenStore.js'
 import { parseCookies } from './cookies.js'
-import type { DiffItem } from '../changeset/types.js'
+import type { ChangeSetItem, DiffItem } from '../changeset/types.js'
 
 // Task 5: the confirm-page's auth model switches from a per-change-set capability token
 // (`?token=`) to the be2-auth SSO web session (Task 4's `be2mcp_sid` cookie + WebSessionStore).
@@ -75,7 +75,9 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
   function loginRedirect(res: express.Response, next: string) { res.redirect(302, `/confirm/login?next=${encodeURIComponent(next)}`) }
 
   async function liveDiff(rec: NonNullable<ReturnType<typeof deps.changeSets.get>>, accessToken: string) {
-    const diff = await computeShelfDiff(rec.actionType, rec.items, { gateway: deps.gateway, accessToken, userLabel: rec.creatorLabel })
+    // Phase 3a Task 2: this route only ever renders shelf change-sets today (Task 7 adds the
+    // inventory branch/render); the narrowing cast is safe until then.
+    const diff = await computeShelfDiff(rec.actionType, rec.items as ChangeSetItem[], { gateway: deps.gateway, accessToken, userLabel: rec.creatorLabel })
     return { diff, version: diffVersionHash(diff) }
   }
 

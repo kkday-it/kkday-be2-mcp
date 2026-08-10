@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { openDb } from '../src/store/db.js'
 import { ChangeSetStore } from '../src/changeset/store.js'
-import type { ChangeSetRecord } from '../src/changeset/types.js'
+import type { ChangeSetRecord, DiffItem } from '../src/changeset/types.js'
 
 function rec(over: Partial<ChangeSetRecord> = {}): ChangeSetRecord {
   return {
@@ -19,7 +19,7 @@ describe('ChangeSetStore', () => {
     const got = s.get('cs1')!
     expect(got).toMatchObject({ id: 'cs1', creatorLabel: 'p@kkday.com', actionType: 'shelf_toggle_product', status: 'pending_approval' })
     expect(got.items).toEqual([{ prod_oid: '1', target_is_active: false }])
-    expect(got.diff[0].current_is_active).toBe(true)
+    expect((got.diff[0] as DiffItem).current_is_active).toBe(true)
   })
   it('lazily expires a pending change-set past ttl', () => {
     let t = 1000
