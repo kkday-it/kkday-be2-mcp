@@ -1,7 +1,7 @@
 # be2 MCP Phase 3a 設計 — `inventory_setting` change-set 切片(per-date 庫存數量)
 
 日期:2026-08-10
-狀態:草稿(待 agy-peer-review → 使用者審閱)
+狀態:agy-peer-reviewed approved(rounds=2)— 待使用者審閱
 上位 spec:`docs/superpowers/specs/2026-08-07-be2-mcp-design.md`(§4 工具清單/Phase 3 原則、§5 change-set、§6 邊界防護)。
 前一切片:`2026-08-09-be2-mcp-phase2a-design.md`(change-set 機制)、`2026-08-09-be2-mcp-phase2b-design.md`(SSO 確認頁)。
 前置:Phase 1a/2a/2b 已實作(147 tests 綠,`feat/phase1a`);Phase 3 執行決策見 `docs/be2-mcp/phase0-inventory.md`「Phase 3 執行決策 + handoff」。
@@ -66,20 +66,22 @@ note?: string
 - **`adjust`(相對值)**:**不對數量漂移報 stale**——使用者批准的是「+50 這個操作」,非某個絕對數字。確認頁載入與批准時以**當下 live 值**即時重算預覽(`live → live+delta`)呈現;執行時再以**執行當下 live** 計算最終目標值。`diff_version` 對 adjust item 只涵蓋 `(item_oid, supplier_oid, dates, delta)` 的 canonical form,不含 base。
 - **負值 fail-closed**:`adjust` 在(預覽或執行當下)算出目標 < 0 的日期 → 該日期標 `would_go_negative`;**預覽時**顯著警示,**執行時**該日期 `failed`(error_code `WOULD_GO_NEGATIVE`)、不寫入、不自動 clamp 到 0。其他日期不受牽連(per-date 隔離)。
 - **no-op**:`set` 且執行當下 live == target 的日期 → `skipped_noop`(以執行當下 live 判定,2a 規則);`adjust` 無 no-op(delta≠0 已由建立時驗證保證)。
-- **確認頁呈現**:per-date 表格(日期、live 現量、op、目標值、stale/would_go_negative 標記);**頁首顯著標示「庫存寫入立即影響前台可售並清 cache」**(高風險寫入,人工 backstop 需看得到後果)。名稱等 be2 內容沿用 untrusted 標示。
+- **確認頁呈現**:per-date 表格(日期、live 現量、op、目標值、stale/would_go_negative 標記);**頁首顯著標示「庫存寫入立即影響前台可售並清 cache」**(高風險寫入,人工 backstop 需看得到後果)。預覽含 `would_go_negative` 日期時,確認頁必須明示:這些日期將被排除、該 item 的執行結果將為 `partial`(使用者是在知情下批准)。名稱等 be2 內容沿用 untrusted 標示。
 
-`change_set_results` 的 `item_key` 擴為 `item_oid:supplier_oid`;`before_json`/`after_json` 存 per-date map(`{date: qty}`),per-date 狀態(`done|skipped_noop|failed`)收在該 item 的 result JSON 內——**不改表結構**,粒度收斂在 JSON。
+**結果模型(per-item status 擴充)**:`change_set_results` 的 `item_key` 擴為 `item_oid:supplier_oid`;`before_json`/`after_json` 存 per-date map(`{date: qty}`),per-date 狀態(`done|skipped_noop|failed`)收在該 item 的 result JSON 內——**不改表結構**,粒度收斂在 JSON。但 **item 級 status enum 必須新增 `partial`**(現行 `types.ts` 只有 `done|skipped_noop|failed|stale`):同一 item 內部分日期成功、部分失敗(如 `would_go_negative` 被排除)時,item = `partial`、change-set 收斂沿用 2a 的 `partial`。**嚴禁把「部分成功」映成 `failed`**——`adjust` 若被誤標全敗,使用者重發整個 delta 會對已成功的日期**重複套用**(如再 −50),造成資料毀損。
+- **失敗補救語義(防重複套用)**:change-set 執行恰好一次(2a CAS 沿用,不可重跑同一筆);失敗日期的補救 = 建**只含失敗日期**的新 change-set。`be2_get_changeset_status` 與確認頁結果頁必須逐日期列出成功/失敗清單,讓 agent/使用者能精準只重建失敗日期。
 
-## 5. 執行模型(read-merge-write,沿用 2a §7 演算法)
+## 5. 執行模型(read-merge-write;併發模型較 2a 更保守)
 
-批准當下(CAS pending→approved 沿用),對每個 item(逐 item 序列化、`Promise.allSettled` 隔離):
+批准當下(CAS pending→approved 沿用),**逐 item 依序執行(sequential `for...of`)、per-item try/catch 錯誤隔離**(單 item 失敗不中止整批)。**明確不採 2a executor 的 group 級 `Promise.allSettled` 併發**:2a 的寫入是單次輕量 PUT,inventory 每 item 是「讀 → 算 → PUT → (可能輪詢) → 重讀」的重流程,20 items 併發會對後端 burst(違反 §6.3 意旨),也讓 2a spec「序列化」與「allSettled」的字面矛盾實體化——本切片以順序迴圈為準。每個 item:
 
-1. 用**批准者 web session** 的新鮮 be2 token(2b 模型)讀該 item × supplier 的現行 quantities(涵蓋目標日期所在月份,可能跨多個 `year_month`)。
-2. 逐日期計算最終目標:`set` → target(live==target 則 skip);`adjust` → live + delta(<0 則該日期 fail)。
-3. **合併進完整現行 payload** → `PUT /product/api/v1/items/{itemOid}/inventories`(product-service-direct,經 gateway;端點/payload 形狀待 probe)。**絕不**只送被改的日期子集,除非 probe 證實端點為 per-date merge 語義(2a package-configs 的資料遺失教訓比照辦理)。
-4. 寫入後重讀 → `after_json`;per-item trace_id + before/after 稽核沿用。
+0. **busy guard(若 probe 證實寫入為非同步)**:先讀 status,`is_processing=true` 則有限輪詢等待至清空;超時 → 該 item `failed`(error_code `INVENTORY_BUSY`)、**不讀不寫**——絕不在前一筆寫入處理中讀 base,否則 merge 會以 stale base 蓋掉處理中的變更。
+1. 用**批准者 web session** 的新鮮 be2 token(2b 模型)讀該 item × supplier 的現行 quantities。**目標日期先按 `year_month` 分組,每個月份獨立跑完整的 read-merge-write cycle(步驟 1–4)**:GET 是按月的,PUT 預設也按月分割送(跨月單次 PUT 的能力列 probe;在證實前一律按月,避免跨月 payload 被後端拒絕或靜默丟棄)。
+2. 逐日期計算最終目標:`set` → target(live==target 則 skip);`adjust` → live + delta(<0 則該日期 fail,不進 PUT)。
+3. **合併進該月完整現行 payload** → `PUT /product/api/v1/items/{itemOid}/inventories`(product-service-direct,經 gateway;端點/payload 形狀待 probe)。**絕不**只送被改的日期子集,除非 probe 證實端點為 per-date merge 語義(2a package-configs 的資料遺失教訓比照辦理)。
+4. 寫入後重讀 → `after_json`;per-item trace_id + before/after 稽核沿用。某月 cycle 失敗 → 該 item 標 `partial`(已寫的月不回滾,結果逐日期誠實呈現,§4 補救語義)。
 
-**非同步處理疑慮(probe 必答)**:Phase 1a 實測的 status 端點回 `{is_processing, previous_status, previous_msg, previous_time}`,暗示庫存寫入可能是**非同步批次**。若 PUT 只是 enqueue:(a) `after_json` 不能立即重讀定案,需輪詢 status 至 `is_processing=false`(有限次數+超時,超時標 `pending_async` 誠實呈現,不假裝完成);(b) `done` 的語義改為「已受理且處理完成」。同步則照 2a 直接重讀。
+**非同步處理疑慮(probe 必答)**:Phase 1a 實測的 status 端點回 `{is_processing, previous_status, previous_msg, previous_time}`,暗示庫存寫入可能是**非同步批次**。若 PUT 只是 enqueue:(a) `after_json` 不能立即重讀定案,需輪詢 status 至 `is_processing=false`(有限次數+超時,超時標 `pending_async` 誠實呈現,不假裝完成);(b) `done` 的語義改為「已受理且處理完成」;(c) 步驟 0 的 busy guard 生效(讀 base 前也必須確認無處理中寫入)。同步則照 2a 直接重讀、步驟 0 退化為 no-op。
 
 ## 6. 讀取側補洞(上位 spec §4 硬性:嚴禁盲寫)
 
@@ -114,7 +116,7 @@ note?: string
 
 ## 9. 測試與評估
 
-- 單元/整合(vitest, TDD):item schema 驗證(op/quantity/dates 規則、重複 date 拒絕)、set/adjust diff 計算、stale 分流(set 漂移 409、adjust 漂移不 409)、would_go_negative(預覽警示 + 執行 fail-closed)、no-op、executor read-merge-write 合併正確性(不吃掉未提及日期)、非同步輪詢(若 probe 證實)、per-date before/after 稽核。
+- 單元/整合(vitest, TDD):item schema 驗證(op/quantity/dates 規則、重複 date 拒絕)、set/adjust diff 計算、stale 分流(set 漂移 409、adjust 漂移不 409)、would_go_negative(預覽警示 + 執行 fail-closed)、no-op、executor read-merge-write 合併正確性(不吃掉未提及日期)、**跨月分組(每月獨立 cycle、單月失敗 → item `partial`)**、**busy guard(`is_processing` 中不讀不寫、超時 `INVENTORY_BUSY`)**、**順序執行(items 不併發)**、**`partial` 不得被映成 `failed`(防 adjust 重複套用)**、非同步輪詢(若 probe 證實)、per-date before/after 稽核。
 - **eval 擴充(進 CI)**:
   - 正例:「item X 的 8/15–8/20 每天 +50」→ 先讀現況、`adjust` + 正確 dates、不直接執行。
   - 算術正確性:「+50」不得變成 `set 50`;「設成 100」不得變成 `adjust +100`。
@@ -133,3 +135,5 @@ note?: string
 
 - 3b(價格 `price_setting`)、3c(方案維護)沿用本切片結構(probe→讀→action→eval);diff/stale 的 set/adjust 分流與 per-date result JSON pattern 可直接複用於價格域(「漲價 10%」同屬相對編輯)。
 - 庫存模式(mode)/supplier-config 若日後有真實需求,作為 `inventory_setting` 的追加 op 或獨立 action_type 另開小切片。
+
+<!-- agy-peer-reviewed: 2026-08-10T01:00:50Z rounds=2 verdict=approved -->
