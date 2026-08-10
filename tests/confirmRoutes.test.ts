@@ -28,7 +28,7 @@ function seed(store: ChangeSetStore, id: string, current: boolean, target: boole
     id, creatorLabel, creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_product',
     items: [{ prod_oid: 'p1', target_is_active: target }],
     diff: [{ prod_oid: 'p1', name: 'Prod A', current_is_active: current, target_is_active: target, no_op: current === target }],
-    diffVersion: 'seed', status: 'pending_approval', approvalTokenHash: ChangeSetStore.hashToken('unused'), createdAt: 1000,
+    diffVersion: 'seed', status: 'pending_approval', createdAt: 1000,
   })
 }
 

@@ -26,7 +26,6 @@ export interface L2PipelineDeps extends PipelineDeps {
   changeSets: ChangeSetStore
   baseUrl: string // for confirm_url, e.g. http://127.0.0.1:8787 — must match where confirmRoutes is mounted
   genId: () => string
-  genToken: () => string
   now: () => number
   emitConfirmUrl: (changesetId: string, url: string) => void
 }
@@ -120,7 +119,6 @@ export function wrapL2Tool(tool: L2ToolDef, deps: L2PipelineDeps) {
       rateBudget: deps.rateBudget,
       baseUrl: deps.baseUrl,
       genId: deps.genId,
-      genToken: deps.genToken,
       now: deps.now,
       emitConfirmUrl: deps.emitConfirmUrl,
     }),

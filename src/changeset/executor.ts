@@ -33,28 +33,33 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
     byOid.set(it.prod_oid, g)
   }
 
+  // Spec §6.3/§7: writes are serialized per prod_oid — one group's write(s) complete (or fail)
+  // before the next group starts. A 20-item change-set must never burst up to 20 concurrent PUTs
+  // against be2 gateway. Per-group failure isolation is preserved: a group that throws is recorded
+  // as failed for its items and the loop continues to the next group (no abort-on-first-failure).
   const groups = [...byOid.entries()]
-  const settled = await Promise.allSettled(groups.map(([oid, items]) =>
-    tracer.startActiveSpan(`changeset.execute/${rec.actionType}`, async span => {
-      const traceId = span.spanContext().traceId
-      try {
-        if (rec.actionType === 'shelf_toggle_product') {
-          return await execProduct(deps, at, modifyUser, oid, items[0].target_is_active, traceId)
-        }
-        return await execPlan(deps, at, modifyUser, oid, items, traceId)
-      } finally {
-        span.end()
-      }
-    })))
-
   const results: ItemResult[] = []
-  settled.forEach((s, i) => {
-    if (s.status === 'fulfilled') results.push(...s.value)
-    else results.push(...groups[i][1].map(it => ({
-      item_key: itemKey(it), status: 'failed' as const, error_code: 'EXEC_ERROR',
-      error_message: (s.reason as Error).message, trace_id: 'n/a',
-    })))
-  })
+  for (const [oid, items] of groups) {
+    try {
+      const groupResults = await tracer.startActiveSpan(`changeset.execute/${rec.actionType}`, async span => {
+        const traceId = span.spanContext().traceId
+        try {
+          if (rec.actionType === 'shelf_toggle_product') {
+            return await execProduct(deps, at, modifyUser, oid, items[0].target_is_active, traceId)
+          }
+          return await execPlan(deps, at, modifyUser, oid, items, traceId)
+        } finally {
+          span.end()
+        }
+      })
+      results.push(...groupResults)
+    } catch (e) {
+      results.push(...items.map(it => ({
+        item_key: itemKey(it), status: 'failed' as const, error_code: 'EXEC_ERROR',
+        error_message: (e as Error).message, trace_id: 'n/a',
+      })))
+    }
+  }
   deps.changeSets.recordResults(changesetId, results)
   for (const r of results) {
     deps.audit.record({

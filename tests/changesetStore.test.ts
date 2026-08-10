@@ -8,7 +8,7 @@ function rec(over: Partial<ChangeSetRecord> = {}): ChangeSetRecord {
     id: 'cs1', creatorLabel: 'p@kkday.com', creatorBearerHash: 'bh', sessionId: 's1',
     actionType: 'shelf_toggle_product', items: [{ prod_oid: '1', target_is_active: false }],
     diff: [{ prod_oid: '1', target_is_active: false, no_op: false, current_is_active: true }],
-    diffVersion: 'v1', status: 'pending_approval', approvalTokenHash: ChangeSetStore.hashToken('tok'),
+    diffVersion: 'v1', status: 'pending_approval',
     createdAt: 1000, ...over,
   }
 }
@@ -52,10 +52,6 @@ describe('ChangeSetStore', () => {
       { item_key: 'm-mid', status: 'done', trace_id: 'tr' },
     ])
     expect(s.getResults('cs1').map(r => r.item_key)).toEqual(['a-first', 'm-mid', 'z-last'])
-  })
-  it('hashToken is sha256 hex and stable', () => {
-    expect(ChangeSetStore.hashToken('x')).toMatch(/^[0-9a-f]{64}$/)
-    expect(ChangeSetStore.hashToken('x')).toBe(ChangeSetStore.hashToken('x'))
   })
   it('casStatus transitions only when current status matches `from`, and reports who won', () => {
     const s = new ChangeSetStore(openDb(':memory:'), { now: () => 1000 })

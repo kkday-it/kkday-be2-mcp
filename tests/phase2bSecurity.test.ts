@@ -44,7 +44,7 @@ function seed(id: string, creatorLabel = 'owner@kkday.com') {
     // (used by the real server code under test) reads the REAL Date.now() — unlike this file's
     // local `store`, it has no frozen clock — so a stale createdAt would make the server's own
     // TTL check (ChangeSetStore.get()) flip the row to 'expired' the moment the server reads it.
-    diffVersion: 'seed', status: 'pending_approval', approvalTokenHash: ChangeSetStore.hashToken('unused'), createdAt: Date.now(),
+    diffVersion: 'seed', status: 'pending_approval', createdAt: Date.now(),
   })
 }
 

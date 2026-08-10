@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import type { L2ToolContext, L2ToolDef } from '../server/l2Context.js'
-import { ChangeSetStore } from './store.js'
 import { computeShelfDiff, diffVersionHash } from './diff.js'
 import { makeEnvelope, toEnvelopeError } from '../tools/envelope.js'
 import type { ActionType, ChangeSetItem } from './types.js'
@@ -32,10 +31,10 @@ export const createChangesetTool: L2ToolDef = {
   name: 'be2_create_changeset',
   description:
     'Stage a DRAFT shelf-on/off change for products (shelf_toggle_product) or plans (shelf_toggle_plan) — max 20 items. ' +
-    'Returns { changeset_id, status, diff } — a preview only; it does NOT apply anything and returns NO approval link. ' +
-    'A human operator receives the one-time approval link out-of-band (on the be2-mcp server console) and approves it there; ' +
-    'only then does the write execute. You CANNOT approve or execute, and you do not receive the approval link — ' +
-    'report the changeset_id and the diff to the user and tell them to approve it from the server-provided link. ' +
+    'Returns { changeset_id, status, diff } — a preview only; it does NOT apply anything and returns NO confirm link. ' +
+    'A human operator must open the confirm page for this change-set in a browser and log in via be2-auth SSO to review ' +
+    'and approve or reject it there; only then does the write execute. You CANNOT approve or execute this change-set ' +
+    'yourself — report the changeset_id and the diff to the user and tell them to open the confirm page to decide. ' +
     'Only pass oids you already looked up this session.',
   inputShape,
   async handler(args, ctx: L2ToolContext) {
@@ -60,7 +59,6 @@ export const createChangesetTool: L2ToolDef = {
       const diff = await computeShelfDiff(actionType, items, { gateway: ctx.gateway, accessToken: ctx.accessToken, userLabel: ctx.userLabel })
       const diffVersion = diffVersionHash(diff)
       const id = ctx.genId()
-      const token = ctx.genToken()
       ctx.changeSets.create({
         id,
         creatorLabel: ctx.userLabel,
@@ -72,14 +70,15 @@ export const createChangesetTool: L2ToolDef = {
         diffVersion,
         note: args.note,
         status: 'pending_approval',
-        approvalTokenHash: ChangeSetStore.hashToken(token),
         createdAt: ctx.now(),
       })
       const readOidsOut = [...new Set(items.flatMap(i => [i.prod_oid, i.pkg_oid].filter((x): x is string => !!x)))]
-      // Fix 1: the confirm_url (and the raw token it embeds) must NOT enter the model's context —
-      // deliver it out-of-band to the human instead. The tool response carries only the
-      // changeset_id, status, and diff (data for the agent to summarize to the human in chat).
-      ctx.emitConfirmUrl(id, `${ctx.baseUrl}/confirm/${id}?token=${token}`)
+      // Fix 1: the confirm_url must NOT enter the model's context — deliver it out-of-band to the
+      // human instead. The tool response carries only the changeset_id, status, and diff (data
+      // for the agent to summarize to the human in chat). Phase 2b: the URL carries no capability
+      // token — approval on the confirm page is gated by a be2-auth SSO session cookie, not a
+      // secret in the URL (see confirmRoutes.ts).
+      ctx.emitConfirmUrl(id, `${ctx.baseUrl}/confirm/${id}`)
       return makeEnvelope([{
         changeset_id: id,
         status: 'pending_approval',

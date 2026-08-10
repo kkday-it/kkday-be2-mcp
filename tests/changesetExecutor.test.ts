@@ -25,7 +25,7 @@ function actApply(path: string, before: any, body: any) {
 function seedProduct(store: ChangeSetStore, target: boolean) {
   store.create({ id: 'cs1', creatorLabel: 'owner@kkday.com', creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_product',
     items: [{ prod_oid: 'p1', target_is_active: target }], diff: [{ prod_oid: 'p1', target_is_active: target, no_op: false }],
-    diffVersion: 'v', status: 'approved', approvalTokenHash: 'h', createdAt: 1000 })
+    diffVersion: 'v', status: 'approved', createdAt: 1000 })
 }
 describe('executeChangeSet', () => {
   it('product toggle: writes, records before/after, status done', async () => {
@@ -67,7 +67,7 @@ describe('executeChangeSet', () => {
     const gateway = { get: async (p: string) => state[p.split('?')[0]], put: async (_p: string, _t: string, body: any) => { putBody = body; return { ok: true } } } as never
     const d: ExecutorDeps = { changeSets: store, gateway, audit: new AuditLog(db, () => 1000), now: () => 1000 }
     store.create({ id: 'cs2', creatorLabel: 'owner@kkday.com', creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_plan',
-      items: [{ prod_oid: 'p1', pkg_oid: 'k1', target_is_active: false }], diff: [{ prod_oid: 'p1', pkg_oid: 'k1', target_is_active: false, no_op: false }], diffVersion: 'v', status: 'approved', approvalTokenHash: 'h', createdAt: 1000 })
+      items: [{ prod_oid: 'p1', pkg_oid: 'k1', target_is_active: false }], diff: [{ prod_oid: 'p1', pkg_oid: 'k1', target_is_active: false, no_op: false }], diffVersion: 'v', status: 'approved', createdAt: 1000 })
     await executeChangeSet(d, 'cs2', WHO)
     // read-merge-write: PUT config_data MUST include BOTH k1 (flipped) and k2 (preserved),
     // and MUST preserve each pkg's other fields (name), not strip to {is_active}.
@@ -84,5 +84,53 @@ describe('executeChangeSet', () => {
     const { deps: d, store } = deps({ '/product/api/v1/product-configs/p1/switch': { is_active: true } })
     seedProduct(store, false); store.setStatus('cs1', 'pending_approval')
     await expect(executeChangeSet(d, 'cs1', WHO)).rejects.toThrow()
+  })
+  it('serializes writes across prod_oid groups (no burst): max 1 concurrent PUT, and a failing group does not abort the rest', async () => {
+    // Spec §6.3/§7: groups run one prod_oid at a time. p2's read is made to throw (unhandled
+    // inside execProduct — the same kind of failure a real gateway outage would produce) to prove
+    // per-group failure isolation still holds under the sequential loop: p2 is recorded failed but
+    // p1 and p3 still execute. Concurrency is asserted via the PUT call, which the OLD
+    // Promise.allSettled(groups.map(...)) implementation would fire for p1 and p3 in the same tick
+    // (both groups' async work starts before either awaits its artificial 15ms PUT delay) — so this
+    // test fails (maxInFlight === 2) against the pre-fix concurrent executor and passes (=== 1)
+    // against the sequential one.
+    const db = openDb(':memory:'); const store = new ChangeSetStore(db, { now: () => 1000 })
+    const state: Record<string, any> = {
+      '/product/api/v1/product-configs/p1/switch': { is_active: true },
+      '/product/api/v1/product-configs/p3/switch': { is_active: true },
+    }
+    let inFlight = 0, maxInFlight = 0
+    const gateway = {
+      get: async (p: string) => {
+        const path = p.split('?')[0]
+        if (path.includes('/p2/')) throw new Error('p2 read failed')
+        return state[path]
+      },
+      put: async (p: string, _t: string, body: any) => {
+        inFlight++
+        maxInFlight = Math.max(maxInFlight, inFlight)
+        await new Promise(r => setTimeout(r, 15))
+        state[p.split('?')[0]] = { ...state[p.split('?')[0]], is_active: body.is_active }
+        inFlight--
+        return { ok: true }
+      },
+    } as never
+    const d: ExecutorDeps = { changeSets: store, gateway, audit: new AuditLog(db, () => 1000), now: () => 1000 }
+    store.create({
+      id: 'cs-multi', creatorLabel: 'owner@kkday.com', creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_product',
+      items: [
+        { prod_oid: 'p1', target_is_active: false },
+        { prod_oid: 'p2', target_is_active: false },
+        { prod_oid: 'p3', target_is_active: false },
+      ],
+      diff: [], diffVersion: 'v', status: 'approved', createdAt: 1000,
+    })
+    const out = await executeChangeSet(d, 'cs-multi', WHO)
+    expect(maxInFlight).toBe(1)
+    expect(out.status).toBe('partial')
+    const byKey = Object.fromEntries(out.results.map(r => [r.item_key, r.status]))
+    expect(byKey.p1).toBe('done')
+    expect(byKey.p2).toBe('failed')
+    expect(byKey.p3).toBe('done')
   })
 })

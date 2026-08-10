@@ -51,7 +51,6 @@ CREATE TABLE IF NOT EXISTS change_sets (
   diff_version         TEXT NOT NULL,
   note                 TEXT,
   status               TEXT NOT NULL,
-  approval_token_hash  TEXT NOT NULL,
   created_at           INTEGER NOT NULL,
   decided_at           INTEGER
 );

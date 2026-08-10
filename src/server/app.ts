@@ -1,5 +1,5 @@
 import express from 'express'
-import { randomUUID, randomBytes } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import type Database from 'better-sqlite3'
@@ -94,18 +94,14 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     changeSets,
     baseUrl: `http://127.0.0.1:${config.port}`,
     genId: randomUUID,
-    genToken: () => randomBytes(24).toString('hex'),
     now: Date.now,
-    // Fix 1: the confirm_url (embedding the raw one-time approval token) never reaches the tool
-    // response / the model's context — it is printed to the be2-mcp SERVER's own stdout, which
-    // only the human running `npm run dev` sees. The agent has no way to read this terminal.
-    // Whole-branch-review Fix 3: the `?token=` capability param that tools.ts still embeds in
-    // `url` is dead surface — Task 5 moved confirm-page auth to the be2-auth SSO session cookie,
-    // and confirmRoutes.ts never reads req.query at all now (see phase2bSecurity.test.ts's
-    // self-approval-closed tests). Logging it here is misleading (implies it still matters), so
-    // strip the query string before logging. approvalTokenHash generation itself is untouched —
-    // out of scope for this fix.
-    emitConfirmUrl: (id, url) => { console.log(`[be2-mcp] change-set ${id} awaiting approval: ${url.split('?')[0]}`) },
+    // Fix 1: the confirm_url never reaches the tool response / the model's context — it is
+    // printed to the be2-mcp SERVER's own stdout, which only the human running `npm run dev`
+    // sees. The agent has no way to read this terminal. Phase 2b moved confirm-page auth to the
+    // be2-auth SSO session cookie, so the URL carries no capability token to begin with (the
+    // dead `?token=` capability-token surface from Phase 2a — mint, store, and embed — has been
+    // removed entirely; confirmRoutes.ts never reads req.query at all).
+    emitConfirmUrl: (id, url) => { console.log(`[be2-mcp] change-set ${id} awaiting approval: ${url}`) },
   }
 
   const transports = new Map<string, StreamableHTTPServerTransport>()

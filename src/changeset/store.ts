@@ -1,5 +1,4 @@
 import type Database from 'better-sqlite3'
-import { createHash } from 'node:crypto'
 import type { ChangeSetRecord, ChangeSetStatus, ItemResult } from './types.js'
 
 export class ChangeSetStore {
@@ -11,14 +10,10 @@ export class ChangeSetStore {
     this.ttlMs = opts.ttlMs ?? 24 * 3600_000
   }
 
-  static hashToken(raw: string): string {
-    return createHash('sha256').update(raw).digest('hex')
-  }
-
   create(rec: ChangeSetRecord): void {
     this.db.prepare(`
-      INSERT INTO change_sets (id, creator_label, creator_bearer_hash, session_id, action_type, items_json, diff_json, diff_version, note, status, approval_token_hash, created_at, decided_at)
-      VALUES (@id,@creatorLabel,@creatorBearerHash,@sessionId,@actionType,@itemsJson,@diffJson,@diffVersion,@note,@status,@approvalTokenHash,@createdAt,@decidedAt)
+      INSERT INTO change_sets (id, creator_label, creator_bearer_hash, session_id, action_type, items_json, diff_json, diff_version, note, status, created_at, decided_at)
+      VALUES (@id,@creatorLabel,@creatorBearerHash,@sessionId,@actionType,@itemsJson,@diffJson,@diffVersion,@note,@status,@createdAt,@decidedAt)
     `).run({
       ...rec,
       note: rec.note ?? null,
@@ -47,7 +42,6 @@ export class ChangeSetStore {
       diffVersion: r.diff_version as string,
       note: (r.note as string) ?? undefined,
       status,
-      approvalTokenHash: r.approval_token_hash as string,
       createdAt: r.created_at as number,
       decidedAt: (r.decided_at as number) ?? undefined,
     }

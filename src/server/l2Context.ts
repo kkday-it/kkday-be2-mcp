@@ -21,13 +21,14 @@ export interface L2ToolContext {
   rateBudget: RateBudget
   baseUrl: string // for confirm_url, e.g. http://127.0.0.1:8787
   genId: () => string
-  genToken: () => string
   now: () => number
-  // Delivers the confirm_url (which embeds the raw one-time approval token) OUT-OF-BAND to a
-  // human — never through the tool response, which lands in the model's context. In Claude Code
-  // the agent also has Bash/curl on loopback, so returning the token in-band would let it
-  // self-approve (curl the confirm route itself), defeating draft-only (鐵則 #4). app.ts wires
-  // this to the be2-mcp server's own stdout (the terminal the human runs `npm run dev` in).
+  // Delivers the confirm_url OUT-OF-BAND to a human — never through the tool response, which
+  // lands in the model's context. In Claude Code the agent also has Bash/curl on loopback, so
+  // returning a clickable link in-band would let it try to self-approve by curling the confirm
+  // route itself; app.ts wires this to the be2-mcp server's own stdout (the terminal the human
+  // runs `npm run dev` in). The URL itself carries no secret (Phase 2b: approval is gated by a
+  // be2-auth SSO session cookie on the confirm page, not a capability token in the URL) — the
+  // out-of-band delivery is defense in depth, not the security boundary.
   emitConfirmUrl: (changesetId: string, url: string) => void
 }
 

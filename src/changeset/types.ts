@@ -37,7 +37,6 @@ export interface ChangeSetRecord {
   diffVersion: string
   note?: string
   status: ChangeSetStatus
-  approvalTokenHash: string
   createdAt: number
   decidedAt?: number
 }
