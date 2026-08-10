@@ -50,7 +50,7 @@ describe('be2_get_inventory_settings', () => {
     expect(env.errors).toEqual([])
     expect(seenQuery).toEqual({ year_month: '2026-09' })
     const item = env.items[0] as Record<string, unknown>
-    expect(item.inventories).toEqual([{ date: '2026-09-01', quantity: 5 }])
+    expect(item.inventories).toEqual({ '2026-09-01': 5 })
   })
 
   it('supplier_oid given but quantities call fails (403) -> status still returned, non-fatal error recorded', async () => {

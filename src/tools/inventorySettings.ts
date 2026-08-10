@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { ToolDef } from './types.js'
 import { makeEnvelope, toEnvelopeError, type EnvelopeError } from './envelope.js'
+import { parseQuantities } from './inventoryShape.js'
 
 // Trim to decision-relevant fields only (spec §4: no raw dumps).
 // Status shape verified live against SIT be2-220 (product-service-direct):
@@ -20,7 +21,7 @@ export function trimInventory(itemOid: string, statusRaw: unknown, quantitiesRaw
     const q = quantitiesRaw as Record<string, any>
     const pick = (...keys: string[]) => keys.map(k => q?.[k]).find(v => v !== undefined)
     out.inventory_setting = pick('inventorySetting', 'inventory_setting')
-    out.inventories = pick('itemInventory', 'item_inventory', 'inventories', 'quantities')
+    out.inventories = parseQuantities(quantitiesRaw).byDate
     out.suppliers = (pick('itemSupplierMapping', 'item_supplier_mapping') as any[] | undefined)
       ?.map(x => ({ supplier_oid: x?.supplier_oid ?? x?.supplierOid, is_default: x?.is_default ?? x?.isDefault }))
   }
