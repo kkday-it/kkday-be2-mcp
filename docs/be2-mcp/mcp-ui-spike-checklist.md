@@ -14,7 +14,7 @@
 ## 前置
 
 - [ ] 開新分支或 git worktree（`spike/mcp-apps`），與 `feat/phase1a` 隔離。
-- [ ] 裝 SDK：`npm i @mcp-ui/server @modelcontextprotocol/ext-apps`（server 端）。client 端渲染是 host 的事，我們只出 resource。
+- [ ] 裝 SDK：`npm i @modelcontextprotocol/ext-apps`（**只需這一個**；`@mcp-ui/server` 是第三方 host 端框架、server 端不需要——2026-08-11 實查 ext-apps repo 更正）。server 端 API 走 `@modelcontextprotocol/ext-apps/server` 的 `registerAppTool`/`registerAppResource`/`RESOURCE_MIME_TYPE`；面板內用 `@modelcontextprotocol/ext-apps` 的 `App` class。client 端渲染是 host 的事，我們只出 resource。
 - [ ] 決定測試 host：**Claude Desktop**（本機、最貼近我們目標）優先；claude.ai 為輔。**Claude Code 終端預期渲不出**（正好拿來驗 T-degrade）。
 
 ## 步驟
@@ -50,6 +50,13 @@
 - [ ] **通過標準**：按鈕 → 面板送出 → server 收到該 tool call → 面板/對話看得到回應。
 - [ ] 附驗（給 L2 用）：payload 能不能帶「使用者實際勾選的每一筆」+ 一個 nonce 欄位。
 
+### Step 4.5 — T5 app-only tool visibility（2026-08-11 追加，重要度僅次 T2）
+ext-apps 支援 `_meta: { ui: { visibility: ["app"] } }` 的 tool：只給面板呼叫、**不對 model 曝光**（見 `examples/system-monitor-server` 的輪詢 tool）。若實測成立，L2 nonce 與 L3 confirm URL 都可改走這條規格級通道，不必賭 T2 的 host 行為。
+- [ ] 註冊一個 app-only tool `spike_secret`（回傳一個獨特字串，如 `NONCE-9K4T`），面板按鈕經 `app.callServerTool()` 呼叫並顯示。
+- [ ] 驗證一：`tools/list` / 對話中問模型「你有哪些工具」→ **不應**出現 `spike_secret`。
+- [ ] 驗證二：面板呼叫完後，問模型「有沒有看到 NONCE 開頭的字串」→ **答不出** = app-only 結果不進 model context。
+- [ ] **通過標準**：兩個驗證都成立 → nonce/confirm-URL 走 app-only 通道（`next-iteration-eval.md` §1.2）。
+
 ### Step 5 — T-degrade 降級
 - [ ] 在 **Claude Code 終端**掛同一個 server，觸發 `spike_show_panel`。
 - [ ] **通過標準**：不會壞掉；至少看得到工具的**文字 fallback**。→ 確認「渲不出就走文字」這條退路存在。
@@ -64,6 +71,7 @@
 | **T2 注入 canary（被當指令?）** | ⬜ 不受影響(想要) / ⬜ 被影響 | 注入面 |
 | T3 link 開真瀏覽器 | ⬜ pass / ⬜ fail | 系統瀏覽器 or webview？ |
 | T4 tool action round-trip | ⬜ pass / ⬜ fail | 能否帶逐筆勾選+nonce |
+| **T5 app-only tool 隔離** | ⬜ 隔離成立(想要) / ⬜ 不成立 | 成立則 nonce/confirm-URL 走此通道，T2 降為次要 |
 | T-degrade Code 文字 fallback | ⬜ pass / ⬜ fail | Code 顯示什麼 |
 
 ## 決策 gate（spike 完回填 exploration doc）
