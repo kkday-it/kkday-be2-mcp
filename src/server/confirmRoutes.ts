@@ -1,6 +1,7 @@
 import express from 'express'
 import { computeChangesetDiff, diffVersionHash } from '../changeset/diff.js'
-import { executeChangeSet, type ExecutorDeps } from '../changeset/executor.js'
+import type { ExecutorDeps } from '../changeset/executor.js'
+import { approveAndExecute } from '../changeset/confirmService.js'
 import type { TokenManager } from '../auth/tokenManager.js'
 import type { WebSessionStore } from './webSessionStore.js'
 import { TokenStore } from '../store/tokenStore.js'
@@ -124,33 +125,24 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     if (!who) { loginRedirect(res, `/confirm/${req.params.id}`); return }
     const rec = deps.changeSets.get(String(req.params.id))
     if (!rec || !sameUser(rec.creatorLabel, who.userLabel) || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
-    const { diff, version } = await liveDiff(rec, who.accessToken)
-    if (version !== String(req.body?.diff_version)) { res.status(409).send(render(rec.actionType, rec.id, diff, version, '<p style="color:#b00">目標欄位已被改動,請重新確認。</p>')); return }
-    // CRITICAL ordering (agy round-2): resolve modifyUser BEFORE the CAS below. modifyUserFrom can
-    // throw (the Fix-4 placeholder guard throws unless an env flag is set; a real resolver could
-    // 5xx) — if that throw happened AFTER pending_approval -> approved, the change-set would be
-    // stranded in 'approved' forever (never executes, never fails). Resolving first means a throw
-    // here aborts the whole request (the `h()` wrapper turns it into a 500) while the change-set is
-    // still 'pending_approval' — retryable, not stranded.
-    const modifyUser = deps.modifyUserFrom(who.accessToken)
-    // Atomic compare-and-swap: two concurrent approves (double-click / client retry) can both
-    // pass the `status === 'pending_approval'` check above (that read is stale by the time we
-    // get here, since liveDiff() awaits and yields the event loop). Only the request that wins
-    // the pending_approval -> approved transition may proceed to executeChangeSet; the loser gets
-    // a 409 and never touches the gateway. This is what guarantees execute-exactly-once.
-    const wonCas = deps.changeSets.casStatus(rec.id, 'pending_approval', 'approved', deps.now())
-    if (!wonCas) { res.status(409).send('已被處理或已過期'); return }
-    // Audit the human DECISION itself (governance event "human approved change-set X at T"),
-    // separate from the per-item audit rows executeChangeSet writes under tool='changeset.execute'.
-    // Attributed to the approving WEB SESSION, not the change-set's original creator — Phase 2b
-    // closes the Phase 2a self-approval hole where those could differ without any check.
-    deps.audit.record({
-      userLabel: who.userLabel, sessionId: who.sessionId,
-      clientInfo: 'confirm-page:' + String(req.headers['user-agent'] ?? '').slice(0, 80),
-      tool: 'changeset.approve', params: { changeset_id: rec.id, ip: req.ip },
-      status: 'ok', traceId: 'n/a', durationMs: 0,
+    // Task 11: the actual recompute-diff -> staleness -> CAS -> resolve-modify_user -> execute ->
+    // audit sequence now lives in src/changeset/confirmService.ts's approveAndExecute — shared
+    // with the MCP Apps panel's app_confirm_changeset tool so there is exactly one implementation
+    // of this security-critical sequence. The confirm page never passes confirmedKeys (it has no
+    // per-item checkboxes; stays whole-batch, unchanged from Phase 2a/2b). Any throw here (e.g.
+    // modifyUserFrom failing) propagates to the `h()` wrapper -> 500, with the change-set left
+    // 'pending_approval' (retryable, not stranded) — same as before the extraction.
+    const out = await approveAndExecute(deps, {
+      rec, who, expectedDiffVersion: String(req.body?.diff_version),
+      channel: 'confirm_page',
+      audit: { ip: req.ip, clientInfo: req.header('user-agent') },
     })
-    const out = await executeChangeSet(deps, rec.id, { accessToken: who.accessToken, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId })
+    if (out.stale) {
+      const { diff, version } = await liveDiff(rec, who.accessToken)
+      res.status(409).send(render(rec.actionType, rec.id, diff, version, '<p style="color:#b00">目標欄位已被改動,請重新確認。</p>'))
+      return
+    }
+    if (out.casFailed) { res.status(409).send('已被處理或已過期'); return }
     res.status(200).send(`<!doctype html><meta charset=utf-8><h1>執行結果:${esc(out.status)}</h1><pre>${esc(JSON.stringify(out.results, null, 2))}</pre>`)
   }))
 

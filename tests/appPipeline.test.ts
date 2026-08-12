@@ -56,6 +56,9 @@ function fakeAppDeps(over: Partial<AppPipelineDeps> = {}): AppPipelineDeps {
     now: Date.now,
     genId: () => 'id1',
     baseUrl: 'http://127.0.0.1:8787',
+    // Task 11: required by AppPipelineDeps (feeds the approveAndExecute closure); unused by the
+    // read-only tools this suite drives (appGetChangesetViewTool), but must satisfy the type.
+    modifyUserFrom: (at: string) => 'MU:' + at,
     ...over,
   }
 }

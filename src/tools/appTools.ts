@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import type { AppToolDef, AppToolContext } from '../server/appPipeline.js'
-import { makeEnvelope } from './envelope.js'
+import { makeEnvelope, toEnvelopeError } from './envelope.js'
 
 // 無 existence leak：找不到 id 與「id 存在但非自己建立」回同一種錯誤，讓外部觀察者無法用
 // error 差異探測他人 change-set 是否存在。
@@ -38,4 +38,49 @@ export const appGetConfirmLinkTool: AppToolDef = {
   },
 }
 
-export const APP_TOOLS: AppToolDef[] = [appGetChangesetViewTool, appGetConfirmLinkTool]
+// Task 11: panel-side approve/reject. This is the ONLY caller besides confirmRoutes.ts's
+// /confirm/:id/approve that may transition a change-set out of pending_approval — both funnel
+// through the single shared src/changeset/confirmService.ts#approveAndExecute (injected here as
+// ctx.approveAndExecute by wrapAppTool), so there is exactly one execution implementation.
+//
+// Self-approval defense (spec §4.3, spike T6): the nonce is verified+consumed FIRST, before
+// anything else. The nonce is the primary defense — it is only ever returned by
+// app_get_changeset_view (an app-only tool a prompt-injected/hallucinating model structurally
+// cannot call, per T6) and never enters model context. creator-bound NOT_FOUND check (no
+// existence leak for a different user's change-set) still applies on top, same as the other
+// app-only tools.
+export const appConfirmChangesetTool: AppToolDef = {
+  name: 'app_confirm_changeset',
+  description: 'Panel-only: approve or reject a change-set the caller created (requires the panel-issued nonce).',
+  inputShape: {
+    changeset_id: z.string().min(1),
+    decision: z.enum(['approve', 'reject']),
+    nonce: z.string().min(1),
+    diff_version: z.string().min(1),
+    confirmed_keys: z.array(z.string()),
+  } as never,
+  async handler(args, ctx: AppToolContext) {
+    const rec = ctx.changeSets.get(args.changeset_id)
+    if (!rec || rec.creatorLabel !== ctx.userLabel) return NOT_FOUND(args.changeset_id)
+    // nonce 先驗（單次消耗）—— 這是防 model 自我批准的主防線。
+    const ok = ctx.nonces.verifyAndConsume(args.nonce, { changesetId: rec.id, diffVersion: args.diff_version, sessionId: ctx.sessionId })
+    if (!ok) return makeEnvelope([], [{ key: rec.id, code: 'NONCE_INVALID', message: 'Approval token invalid/expired; reopen the panel to refresh.' }])
+    if (args.decision === 'reject') {
+      ctx.changeSets.setStatus(rec.id, 'rejected', ctx.now())
+      return makeEnvelope([{ changeset_id: rec.id, status: 'rejected' }])
+    }
+    // approve：交給共用 service。service 內部依序做 confirmed_keys 校驗 → liveDiff → stale → CAS →
+    // executeChangeSet → audit（channel:'panel'）。confirmed_keys 必須與 change-set items 完全一致，
+    // 否則 service throw CONFIRMED_KEYS_MISMATCH（面板取消勾選不能讓後端仍全量執行 —— spec §4.3）。
+    try {
+      const out = await ctx.approveAndExecute({ rec, expectedDiffVersion: args.diff_version, confirmedKeys: args.confirmed_keys, channel: 'panel' })
+      if (out.stale) return makeEnvelope([], [{ key: rec.id, code: 'DIFF_STALE', message: 'Change-set state moved; panel will reload the new diff.' }])
+      if (out.casFailed) return makeEnvelope([], [{ key: rec.id, code: 'ALREADY_PROCESSED', message: 'This change-set was already approved/executed (possibly via the confirm page).' }])
+      return makeEnvelope([{ changeset_id: rec.id, status: out.status, results: out.results }])
+    } catch (e) {
+      return makeEnvelope([], [toEnvelopeError(rec.id, e)])   // CONFIRMED_KEYS_MISMATCH 等
+    }
+  },
+}
+
+export const APP_TOOLS: AppToolDef[] = [appGetChangesetViewTool, appGetConfirmLinkTool, appConfirmChangesetTool]

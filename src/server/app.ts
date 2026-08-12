@@ -127,6 +127,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     nonces: new ApprovalNonceStore(),
     now: Date.now, genId: randomUUID,
     baseUrl: `http://127.0.0.1:${config.port}`,
+    modifyUserFrom: modifyUserFromPlaceholder,
   }
 
   const transports = new Map<string, StreamableHTTPServerTransport>()

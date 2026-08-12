@@ -113,7 +113,10 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
   return { status, results }
 }
 
-function itemKey(it: ChangeSetItem): string {
+// Exported for src/changeset/confirmService.ts (Task 11): the panel's confirmed_keys validation
+// needs the SAME key rule the executor itself groups/reports results by, so a panel "uncheck an
+// item" check can never silently disagree with what the executor considers one item.
+export function itemKey(it: ChangeSetItem): string {
   return it.pkg_oid ? `${it.prod_oid}:${it.pkg_oid}` : it.prod_oid
 }
 

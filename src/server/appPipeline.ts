@@ -9,6 +9,7 @@ import type { AppRateBudget } from '../limits/appRateBudget.js'
 import { TokenStore } from '../store/tokenStore.js'
 import type { Envelope } from '../tools/envelope.js'
 import { AppError, AuthError, RateError } from '../errors.js'
+import { approveAndExecute as approveAndExecuteService, type ApproveParams, type ApproveResult } from '../changeset/confirmService.js'
 
 // app-only（面板專用）工具的執行環境：與 L2ToolContext 同源身分資訊（sessionId/bearerHash/
 // businessList 皆由 token 推導、絕不接受 input 自報身分），但服務對象是面板輪詢而非 LLM 對話。
@@ -24,6 +25,11 @@ export interface AppToolContext {
   now: () => number
   genId: () => string
   baseUrl: string // for confirm_url, e.g. http://127.0.0.1:8787
+  // Task 11: the shared approve+execute sequence (src/changeset/confirmService.ts), pre-bound to
+  // this request's identity by wrapAppTool below. `who` is injected by the closure — never taken
+  // from tool input — so an app tool can never approve/execute AS someone other than the caller
+  // this session's bearer resolved to.
+  approveAndExecute: (p: Omit<ApproveParams, 'who'>) => Promise<ApproveResult>
 }
 
 export interface AppToolDef {
@@ -43,6 +49,10 @@ export interface AppPipelineDeps {
   now: () => number
   genId: () => string
   baseUrl: string
+  // Same lazy-resolver contract as confirmRoutes.ts's ConfirmDeps.modifyUserFrom (src/server/
+  // app.ts's modifyUserFromPlaceholder) — only ever invoked LAZILY inside approveAndExecute, never
+  // here at pipeline-construction/request time.
+  modifyUserFrom: (accessToken: string) => string
 }
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; structuredContent?: Record<string, unknown>; isError?: boolean }
@@ -73,6 +83,14 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
           businessList: user.businessList, changeSets: deps.changeSets, nonces: deps.nonces,
           now: deps.now, genId: deps.genId,
           baseUrl: deps.baseUrl,
+          // Closure binds THIS request's resolved identity (accessToken/userLabel/sessionId) —
+          // never taken from tool args. modifyUser stays unresolved until approveAndExecute needs
+          // it (lazy), so read-only app tools (e.g. app_get_changeset_view) never pay the cost of
+          // — or fail on — modify_user resolution.
+          approveAndExecute: p => approveAndExecuteService(
+            { changeSets: deps.changeSets, gateway: deps.gateway, audit: deps.audit, now: deps.now, modifyUserFrom: deps.modifyUserFrom },
+            { ...p, who: { accessToken: user.accessToken, userLabel, sessionId: reqCtx.sessionId } },
+          ),
         })
         if (envelope.items.length === 0 && envelope.errors.length > 0) {
           status = 'error'; const f = envelope.errors[0]; message = f.code ? `${f.code}: ${f.message}` : f.message
