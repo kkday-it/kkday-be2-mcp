@@ -355,7 +355,7 @@ function newServer(caps: unknown): McpServer {
         await newServer(initCaps).connect(transport)
 ```
 
-（新 session 一律由 initialize POST 建立，故 `initCaps` 在建 session 當下必有值；後續同 session 的請求復用同一 transport、不重建 server。）
+（新 session 一律由 initialize POST 建立，故 `initCaps` 在建 session 當下必有值；後續同 session 的請求復用同一 transport、不重建 server。防禦性：若 `req.body` 是 JSON-RPC batch 陣列，取 `Array.isArray(req.body) ? req.body.find(m => m?.method === 'initialize')?.params?.capabilities : ...`——本 SDK 的 initialize 不走 batch，但這樣寫嚴格合規、零成本。）
 
 - [ ] **Step 5: 跑 CI 確認零回歸**
 
@@ -761,6 +761,8 @@ export class AppRateBudget {
       throw new RateError('RATE_APP', `Panel call budget exhausted (${this.perMinute}/min). The panel will retry with backoff.`, 429)
     }
   }
+  // 防記憶體洩漏：session 關閉時由 app.ts 的 onsessionclosed 呼叫，清掉該 session 的時間戳陣列。
+  release(sessionId: string): void { this.hits.delete(sessionId) }
 }
 ```
 
@@ -976,7 +978,8 @@ Expected: PASS。
 `src/server/app.ts`：
 1. 建 `const appRateBudget = new AppRateBudget()`（import）。
 2. 建 `appDeps: AppPipelineDeps = { tokenManager, appRateBudget, audit, gateway, changeSets, now: Date.now, genId: randomUUID, baseUrl: \`http://127.0.0.1:${config.port}\` }`。
-3. `newServer` 內、`appsOk` 為真時註冊：
+3. **防洩漏**：`/mcp` handler 的 `onsessionclosed` callback 現有 `transports.delete(id); sessionOwner.delete(id)`，追加 `appRateBudget.release(id)`（釋放該 session 的時間戳陣列）。
+4. `newServer` 內、`appsOk` 為真時註冊：
 
 ```typescript
     if (appsOk) {
@@ -1150,7 +1153,7 @@ export class ApprovalNonceStore {
 
 - [ ] **Step 4: view 在 pending_approval 附 nonce**
 
-`appPipeline.ts` 的 `AppToolContext`/`AppPipelineDeps` 加 `nonces: ApprovalNonceStore`，`wrapAppTool` 建 ctx 帶入。`appTools.ts` 的 `appGetChangesetViewTool` 在 `rec.status === 'pending_approval'` 時：
+`appPipeline.ts`：`AppToolContext` 與 `AppPipelineDeps` 都加 `nonces: ApprovalNonceStore`；`wrapAppTool` 建 ctx 的物件字面量**明確加一行 `nonces: deps.nonces`**（否則 TS 缺欄位報錯）；`app.ts` 的 `appDeps` 加 `nonces: new ApprovalNonceStore()`（單例；nonce 綁 sessionId 三元組故跨 session 共用安全）。`appTools.ts` 的 `appGetChangesetViewTool` 在 `rec.status === 'pending_approval'` 時：
 
 ```typescript
     const view: Record<string, unknown> = { changeset_id: rec.id, status: rec.status, action_type: rec.actionType, note: rec.note, diff: { items: rec.diff } }
@@ -1187,15 +1190,23 @@ git commit -m "feat(apps): approvalNonce 發放/驗證/消耗 + view 於 pending
 - Test: `tests/appConfirm.test.ts`
 
 **Interfaces:**
-- Produces: `approveAndExecute(deps, args): Promise<ApproveResult>`，其中驗證鏈為 liveDiff → diff_version 比對（stale 409）→ `casStatus(pending_approval→approved)` → `executeChangeSet` → audit。`app_confirm_changeset` 與 `confirmRoutes` approve 都呼叫它（**執行邏輯唯一實作**）。
+- Produces: `approveAndExecute(deps, params): Promise<ApproveResult>`（**執行邏輯唯一實作**；`app_confirm_changeset` 與 `confirmRoutes` approve 都呼叫它）。
+  - `params: { rec: ChangeSetRecord; who: { accessToken: string; userLabel: string; sessionId: string }; expectedDiffVersion: string; confirmedKeys?: string[]; channel: 'panel' | 'confirm_page'; audit?: { ip?: string; clientInfo?: string } }`
+  - `ApproveResult = { stale?: true; casFailed?: true; status?: 'done' | 'partial' | 'failed'; results?: ItemResult[] }`（三個失敗旗標互斥於成功；成功時填 status+results）。
+  - 驗證鏈（順序固定）：**confirmed_keys 校驗**（若提供，須與 change-set items 的 key 集合完全一致，否則回 `{ casFailed: false }`... 不，回專用 → 見下 Step 說明，用 throw `AppError('CONFIRMED_KEYS_MISMATCH')`）→ liveDiff → `diff_version` 比對（不符回 `{ stale: true }`）→ `casStatus(pending_approval→approved)`（失敗回 `{ casFailed: true }`）→ `executeChangeSet` → audit（channel + 選填 ip/clientInfo）。
+  - **modifyUser 一律在 approveAndExecute 內部 lazy 解析**（`modifyUserFromPlaceholder(who.accessToken)`）——絕不在 AppToolContext 建立時 eager 呼叫（該函式在未設 `BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER=1` 時會 throw，eager 呼叫會讓連 `app_get_changeset_view` 這種唯讀工具都爆）。
 - `appConfirmChangesetTool: AppToolDef` — input `{ changeset_id, decision: 'approve'|'reject', nonce, diff_version, confirmed_keys: string[] }`。
 
 - [ ] **Step 1: 抽共用 confirmService（重構既有 confirmRoutes approve，行為不變）**
 
-把 `confirmRoutes.ts` `/confirm/:id/approve` 內「liveDiff → version 比對 → casStatus → executeChangeSet → audit」抽成 `src/changeset/confirmService.ts` 的 `approveAndExecute(deps, { rec, who, expectedDiffVersion, channel })`，`confirmRoutes` 改呼叫它。跑既有確認頁測試確保零回歸（TDD：先跑既有測試綠 → 重構 → 再跑綠）。
+把 `confirmRoutes.ts` `/confirm/:id/approve` 內「liveDiff → version 比對 → casStatus → executeChangeSet → audit」抽成 `src/changeset/confirmService.ts` 的 `approveAndExecute`，簽章與回傳如上 Interfaces。要點：
+- **保留既有稽核欄位**：確認頁原本記 `ip: req.ip`、`clientInfo: req.headers['user-agent']`（tool `changeset.approve`）。`approveAndExecute` 的 `audit.record` 用 `params.audit?.ip` / `params.audit?.clientInfo`（confirmRoutes 傳 `req.ip` 與 UA、面板路徑傳 `reqCtx.clientInfo`），**不得掉 IP 稽核**。稽核 tool 名維持 `changeset.approve`，多記一欄 `channel`。
+- **confirmRoutes 呼叫方式**：`confirmRoutes` 的 approve handler 改為呼叫 `approveAndExecute({ rec, who, expectedDiffVersion: req.body.diff_version, channel: 'confirm_page', audit: { ip: req.ip, clientInfo: req.header('user-agent') } })`，依回傳的 `stale` / `casFailed` 各自回 409（維持既有 HTTP 語義），成功則渲染既有結果頁。**confirmRoutes 不傳 confirmedKeys**（確認頁沒有逐筆勾選，維持全量批准）。
+- **CAS 失敗語義**：原碼 `wonCas = casStatus(...)` 為 false 時回 409。抽出後改由 `approveAndExecute` 回 `{ casFailed: true }`，confirmRoutes 據此回 409。
+- TDD：先跑既有 confirm 測試綠 → 重構 → 再跑綠（行為不變）。
 
 Run: `npm run ci`（重構後）
-Expected: 既有 confirm 測試全綠。
+Expected: 既有 confirm 測試全綠（含 IP 稽核、stale 409、CAS 409）。
 
 - [ ] **Step 2: 寫失敗測試（自我批准回歸為核心）**
 
@@ -1234,6 +1245,21 @@ it('他人 changeset → NOT_FOUND、不執行', async () => {
   const env = await appConfirmChangesetTool.handler({ changeset_id: 'cs1', decision: 'approve', nonce: 'good', diff_version: 'v1', confirmed_keys: [] }, c)
   expect(env.errors[0].code).toBe('NOT_FOUND')
   expect(c._executed).toEqual([])
+})
+it('confirmed_keys 與 items 不一致 → 拒、不執行（取消勾選不得後端全量執行）', async () => {
+  const c = ctx({ approveAndExecute: async ({ confirmedKeys }: any) => {
+    // 模擬 service：keys 不吻合就 throw（真實 service 用 AppError CONFIRMED_KEYS_MISMATCH）
+    if ((confirmedKeys ?? []).length === 0) { throw Object.assign(new Error('mismatch'), { code: 'CONFIRMED_KEYS_MISMATCH' }) }
+    return { status: 'done', results: [] }
+  } })
+  const env = await appConfirmChangesetTool.handler({ changeset_id: 'cs1', decision: 'approve', nonce: 'good', diff_version: 'v1', confirmed_keys: [] }, c)
+  expect(env.errors[0].code).toBe('CONFIRMED_KEYS_MISMATCH')
+  expect(c._executed).toEqual([])
+})
+it('CAS 失敗（已被確認頁批准）→ ALREADY_PROCESSED、不重複執行', async () => {
+  const c = ctx({ approveAndExecute: async () => ({ casFailed: true }) })
+  const env = await appConfirmChangesetTool.handler({ changeset_id: 'cs1', decision: 'approve', nonce: 'good', diff_version: 'v1', confirmed_keys: [] }, c)
+  expect(env.errors[0].code).toBe('ALREADY_PROCESSED')
 })
 it('reject → 設 rejected、不執行', async () => {
   const setStatus: string[] = []
@@ -1274,15 +1300,24 @@ export const appConfirmChangesetTool: AppToolDef = {
       ctx.changeSets.setStatus(rec.id, 'rejected', ctx.now())
       return makeEnvelope([{ changeset_id: rec.id, status: 'rejected' }])
     }
-    // approve：交給共用 service（liveDiff → stale 409 → CAS → executeChangeSet → audit）。
-    const out = await ctx.approveAndExecute({ rec, expectedDiffVersion: args.diff_version, confirmedKeys: args.confirmed_keys, channel: 'panel' })
-    if (out.stale) return makeEnvelope([], [{ key: rec.id, code: 'DIFF_STALE', message: 'Change-set state moved; panel will reload the new diff.' }])
-    return makeEnvelope([{ changeset_id: rec.id, status: out.status, results: out.results }])
+    // approve：交給共用 service。service 內部依序做 confirmed_keys 校驗 → liveDiff → stale → CAS →
+    // executeChangeSet → audit（channel:'panel'）。confirmed_keys 必須與 change-set items 完全一致，
+    // 否則 service throw CONFIRMED_KEYS_MISMATCH（面板取消勾選不能讓後端仍全量執行 —— spec §4.3）。
+    try {
+      const out = await ctx.approveAndExecute({ rec, expectedDiffVersion: args.diff_version, confirmedKeys: args.confirmed_keys, channel: 'panel' })
+      if (out.stale) return makeEnvelope([], [{ key: rec.id, code: 'DIFF_STALE', message: 'Change-set state moved; panel will reload the new diff.' }])
+      if (out.casFailed) return makeEnvelope([], [{ key: rec.id, code: 'ALREADY_PROCESSED', message: 'This change-set was already approved/executed (possibly via the confirm page).' }])
+      return makeEnvelope([{ changeset_id: rec.id, status: out.status, results: out.results }])
+    } catch (e) {
+      return makeEnvelope([], [toEnvelopeError(rec.id, e)])   // CONFIRMED_KEYS_MISMATCH 等
+    }
   },
 }
 ```
 
-`AppToolContext` 加 `approveAndExecute`（由 appPipeline 注入，內部組 `ExecutorDeps` + `ExecutorIdentity`，身分 = 本 session 使用者、`modifyUser` 用 `modifyUserFromPlaceholder(accessToken)`）。把 `appConfirmChangesetTool` 加進 `APP_TOOLS`。
+`appTools.ts` 頂部 import 補 `toEnvelopeError`（`./envelope.js`）。`AppToolContext` 加 `approveAndExecute: (p: Omit<ApproveParams, 'who' | 'deps'>) => Promise<ApproveResult>`——由 `wrapAppTool` 注入一個 **closure**，closure 內才組 `ExecutorDeps` + `ExecutorIdentity`（身分 = 本 session 使用者 accessToken/userLabel/sessionId），**且在 closure 內才呼叫 `modifyUserFromPlaceholder(accessToken)`（lazy）**——不可在 ctx 建立時 eager 解析（否則未設 flag 時連唯讀 app tool 都 throw）。`confirmedKeys` 校驗在 `approveAndExecute` 內做（見 confirmService）。把 `appConfirmChangesetTool` 加進 `APP_TOOLS`。
+
+confirmService 的 confirmed_keys 校驗（Step 1 一併實作）：change-set item 的 key 用與 executor `itemKey` 相同的規則產生（`src/changeset/executor.ts` 既有 `itemKey`；inventory 用 item×supplier×date 或 change-set 既定 key 規則）。`confirmedKeys` 提供時，其集合須 `===` change-set 全部 item key 集合（無多、無缺），否則 `throw new AppError('CONFIRMED_KEYS_MISMATCH', '...', 409)`。confirmRoutes 不傳 confirmedKeys（跳過此校驗）。
 
 - [ ] **Step 5: 跑測試確認通過**
 
@@ -1369,3 +1404,5 @@ git commit -m "feat(apps): 面板批准 UI（勾選+nonce）或退化分支 + ev
 ## Execution Handoff
 
 見對話。
+
+<!-- agy-peer-reviewed: 2026-08-12T09:00:25Z rounds=2 verdict=approved -->
