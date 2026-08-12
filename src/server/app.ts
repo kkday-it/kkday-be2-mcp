@@ -18,6 +18,7 @@ import { requestContext } from './requestContext.js'
 import { wrapTool, wrapL2Tool, type PipelineDeps, type L2PipelineDeps } from './toolPipeline.js'
 import { buildConfirmRouter } from './confirmRoutes.js'
 import { buildSsoRouter } from './ssoRoutes.js'
+import { registerAppResources } from './appResources.js'
 import { findProductsTool } from '../tools/findProducts.js'
 import { productPlansTool } from '../tools/productPlans.js'
 import { inventorySettingsTool } from '../tools/inventorySettings.js'
@@ -121,8 +122,9 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
 
   // caps = client 在 initialize 宣告的 capabilities（見 /mcp handler 的 initCaps）。只對支援 MCP
   // Apps 的 host（hostSupportsApps）且該 tool 掛了 uiResourceUri（Task 3）才走 registerAppTool
-  // 帶面板；否則維持既有 registerTool 純文字路徑。目前無任何 tool 設 uiResourceUri，故此改動對
-  // 現有 199 個測試行為中立（appsOk 分支永不觸發）。
+  // 帶面板；否則維持既有 registerTool 純文字路徑。Task 6 起 findProducts/productPlans/
+  // inventorySettings/createChangeset/getChangesetStatus 皆掛了 uiResourceUri，故此分支對支援
+  // Apps 的 host 已會實際觸發（見 tests/serverIntegration.test.ts 的 real-path 整合測試）。
   function newServer(caps: unknown): McpServer {
     const server = new McpServer({ name: 'be2-mcp', version: '0.1.0' })
     const appsOk = hostSupportsApps(caps)
@@ -150,6 +152,8 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
           wrapL2Tool(tool, l2Deps) as never)
       }
     }
+    // 面板永遠是增強層：dist/ui 缺檔時 registerAppResources 內部 warn+略過，不影響上面的工具註冊。
+    if (appsOk) registerAppResources(server)
     return server
   }
 

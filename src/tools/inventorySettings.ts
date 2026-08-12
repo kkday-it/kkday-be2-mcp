@@ -40,6 +40,7 @@ export const inventorySettingsTool: ToolDef<typeof inputShape> = {
     'Read a be2 item\'s inventory status flags, and (when supplier_oid is given) per-date quantities for one month. ' +
     'Read-only, no side effects. item_oid comes from be2_get_product_plans (1 plan = 1 item).',
   inputShape,
+  uiResourceUri: 'ui://be2/products-panel.html',
   async handler(args, ctx) {
     const oid = encodeURIComponent(args.item_oid)
     const calls: Promise<unknown>[] = [ctx.gateway.get(`/product/api/v1/items/${oid}/inventories/status`, ctx.accessToken)]

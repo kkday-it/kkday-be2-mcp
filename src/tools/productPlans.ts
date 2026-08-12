@@ -36,6 +36,7 @@ export const productPlansTool: ToolDef<typeof inputShape> = {
     'List a be2 product\'s plans (packages) with each plan\'s on/off-shelf state: pkg_oid, item_oid, plan name, is_active. ' +
     'Read-only, no side effects. Use to inspect plan-level shelf status before/without any change.',
   inputShape,
+  uiResourceUri: 'ui://be2/products-panel.html',
   async handler(args, ctx) {
     const oid = encodeURIComponent(args.prod_oid)
     const [pkgsResult, cfgResult] = await Promise.allSettled([

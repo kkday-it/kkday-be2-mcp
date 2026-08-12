@@ -58,6 +58,7 @@ export const createChangesetTool: L2ToolDef = {
     'inventory_setting stages per-date inventory quantity changes ({item_oid, supplier_oid, op: set|adjust, quantity, dates}); ' +
     'read the item inventory first — adjust is computed against live quantities at approval time.',
   inputShape,
+  uiResourceUri: 'ui://be2/changeset-panel.html',
   async handler(args, ctx: L2ToolContext) {
     const items = args.items as AnyChangeSetItem[]
     const actionType = args.action_type as ActionType
@@ -138,6 +139,7 @@ export const getChangesetStatusTool: L2ToolDef = {
   name: 'be2_get_changeset_status',
   description: 'Query a change-set you created: its approval/execution status and per-item before/after results. Read-only.',
   inputShape: { changeset_id: z.string().min(1) },
+  uiResourceUri: 'ui://be2/changeset-panel.html',
   async handler(args, ctx) {
     const rec = ctx.changeSets.get(args.changeset_id as string)
     if (!rec || rec.creatorLabel !== ctx.userLabel) return makeEnvelope([], [{ key: args.changeset_id as string, code: 'NOT_FOUND', message: 'No such change-set for this user.' }])

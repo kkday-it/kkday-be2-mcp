@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server'
 import { buildApp } from '../src/server/app.js'
 import { openDb } from '../src/store/db.js'
 import { TokenStore } from '../src/store/tokenStore.js'
@@ -46,6 +47,21 @@ function mcpClient(bearer?: string) {
     client: new Client({ name: 'it-test', version: '0.0.1' }),
     transport: new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
       requestInit: bearer ? { headers: { authorization: `Bearer ${bearer}` } } : undefined,
+    }),
+  }
+}
+
+// Task 6 carried-forward requirement (from Task 4 review): Task 4's newServer dispatch branch
+// (registerAppTool vs plain registerTool, gated on hostSupportsApps(caps)) was only ever
+// exercised against the bare SDK (capabilityGate.test.ts) — never through the real /mcp
+// initialize -> tools/list path, and no real tool had uiResourceUri set yet so the appsOk
+// branch never actually fired. Task 6 binds uiResourceUri onto the 5 real tools, so this test
+// drives the real path end to end via a Client that declares the ui extension capability.
+function mcpClientWithCapabilities(bearer: string, capabilities: Record<string, unknown>) {
+  return {
+    client: new Client({ name: 'it-test-apps', version: '0.0.1' }, { capabilities: capabilities as never }),
+    transport: new StreamableHTTPClientTransport(new URL(`${base}/mcp`), {
+      requestInit: { headers: { authorization: `Bearer ${bearer}` } },
     }),
   }
 }
@@ -117,5 +133,28 @@ describe('MCP server integration', () => {
     expect(res.status).toBe(200)
     const text = await res.text()
     expect(text).toContain('loginFlow=POPUP')
+  })
+})
+
+describe('MCP Apps dispatch — real path (Task 6 carried-forward from Task 4 review)', () => {
+  it('host declares the ui extension -> real tools carry _meta.ui.resourceUri', async () => {
+    const { client, transport } = mcpClientWithCapabilities(BEARER, {
+      extensions: { 'io.modelcontextprotocol/ui': { mimeTypes: [RESOURCE_MIME_TYPE] } },
+    })
+    await client.connect(transport)
+    const { tools } = await client.listTools()
+    const findProducts = tools.find(t => t.name === 'be2_find_products')!
+    expect((findProducts._meta as any)?.ui?.resourceUri).toBe('ui://be2/products-panel.html')
+    const createChangeset = tools.find(t => t.name === 'be2_create_changeset')!
+    expect((createChangeset._meta as any)?.ui?.resourceUri).toBe('ui://be2/changeset-panel.html')
+    await client.close()
+  })
+  it('host does NOT declare the ui extension -> real tools carry no _meta.ui (plain registerTool path)', async () => {
+    const { client, transport } = mcpClient(BEARER)
+    await client.connect(transport)
+    const { tools } = await client.listTools()
+    const findProducts = tools.find(t => t.name === 'be2_find_products')!
+    expect((findProducts._meta as any)?.ui).toBeUndefined()
+    await client.close()
   })
 })
