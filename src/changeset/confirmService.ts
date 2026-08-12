@@ -57,10 +57,18 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
 
   // (1) confirmed_keys 校驗（面板專用；確認頁不傳此欄位、跳過本步）——見 spec §4.3:面板取消勾選
   // 某個項目後,後端不得仍全量執行整批。集合須完全一致(無多、無缺)。
+  //
+  // Task 12 review Finding 1: 不可用 Set 比對——inventory change-set 合法允許兩個項目共用同一
+  // (item_oid, supplier_oid) 但 dates 不相交(validateInventoryItems 只檢查 (item,supplier,date)
+  // 三元組唯一性),兩者在面板上會渲染成同一把 key。若用 Set,expected 的 [k,k] 會被去重成 {k},
+  // 使用者取消勾選其中一列後 confirmedKeys 送出的 [k] 也去重成 {k}——集合大小、內容都對得上,
+  // mismatch 檢查永遠不會觸發,導致使用者想取消的那一列仍隨整批一起執行。改用「排序後逐一比對
+  // 的 multiset」:重複次數必須相同,長度不同或排序後任一位置不同即視為不符。唯一 key 的情境下
+  // 與舊 Set 邏輯行為一致(既有測試不受影響)。
   if (confirmedKeys) {
-    const expected = new Set(itemKeysOf(rec))
-    const got = new Set(confirmedKeys)
-    const same = expected.size === got.size && [...expected].every(k => got.has(k))
+    const expected = [...itemKeysOf(rec)].sort()
+    const got = [...confirmedKeys].sort()
+    const same = expected.length === got.length && expected.every((k, i) => k === got[i])
     if (!same) {
       throw new AppError('CONFIRMED_KEYS_MISMATCH', "confirmed_keys does not match the change-set's item-key set", 409)
     }

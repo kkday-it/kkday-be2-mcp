@@ -166,6 +166,46 @@ describe('approveAndExecute — real confirmed_keys validation (Task 11 Finding 
     }
   })
 
+  it('(f) inventory duplicate key: TWO items share (item_oid,supplier_oid) with disjoint dates — Set-equality bug vs multiset fix', async () => {
+    // Task 12 review Finding 1: validateInventoryItems only enforces (item, supplier, date)
+    // uniqueness — two items with the SAME (item_oid, supplier_oid) but disjoint `dates` are
+    // legal and both collapse to the SAME rendered key `i1:s1` in the panel. Under Set-based
+    // comparison, expected=[k,k] dedups to {k}; confirmedKeys=[k] (user unchecked ONE of the two
+    // rows) also dedups to {k} — sizes match, contents match, the mismatch check never fires,
+    // and the full batch (including the row the user tried to uncheck) executes. This test pins
+    // the multiset fix: (b) below MUST throw CONFIRMED_KEYS_MISMATCH, which it would NOT under
+    // the old Set logic (non-vacuous regression pin).
+    const items: InventoryItem[] = [
+      { item_oid: 'i1', supplier_oid: 's1', op: 'set', quantity: 10, dates: ['2026-08-15'] },
+      { item_oid: 'i1', supplier_oid: 's1', op: 'set', quantity: 20, dates: ['2026-08-16'] },
+    ]
+    const qty = { 'i1:s1': { '2026-08-15': 5, '2026-08-16': 7 } }
+
+    // (a) confirmed_keys = both keys ['i1:s1','i1:s1'] (both rows still checked) — passes the gate.
+    {
+      const gw = invGateway(structuredClone(qty))
+      const { store, deps } = makeDeps(gw)
+      const rec = seedInventory(store, 'cs-f-both', items)
+      const version = await realInventoryDiffVersion(rec, gw)
+      const out = await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: ['i1:s1', 'i1:s1'], channel: 'panel' })
+      expect(out.stale).toBeUndefined()
+      expect(out.casFailed).toBeUndefined()
+      expect(out.status).toBeDefined()
+    }
+
+    // (b) confirmed_keys = ONE key ['i1:s1'] (user unchecked one of the two same-key rows) — must
+    // throw CONFIRMED_KEYS_MISMATCH (reject the whole batch), not silently execute it.
+    {
+      const gw = invGateway(structuredClone(qty))
+      const { store, deps } = makeDeps(gw)
+      const rec = seedInventory(store, 'cs-f-one', items)
+      const version = await realInventoryDiffVersion(rec, gw)
+      await expect(approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: ['i1:s1'], channel: 'panel' }))
+        .rejects.toMatchObject({ code: 'CONFIRMED_KEYS_MISMATCH' })
+      expect(store.get('cs-f-one')!.status).toBe('pending_approval')   // untouched — never reached CAS
+    }
+  })
+
   it('(e) confirm_page channel never sends confirmedKeys — validation is skipped (existing whole-batch behavior)', async () => {
     const gw = shelfGateway()
     const { store, deps } = makeDeps(gw)

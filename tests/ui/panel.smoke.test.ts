@@ -27,7 +27,12 @@ describe.skipIf(process.env.CI)('panel smoke', () => {
     const html = readFileSync(builtChangeset, 'utf8')
     // Task 12（T6 PASS 分支）：nonce+diff_version 通道、逐筆勾選、確認/拒絕、高風險 banner。
     // 中文按鈕文字在 esbuild 輸出中會被轉成 \uXXXX 逸出序列，故以下只斷言 ASCII 識別字/常數，
-    // 不斷言中文字面（那些已由 tests/ui/panelApproval.test.ts 之類的行為測試涵蓋，見 CI 全綠）。
+    // 不斷言中文字面。**如實聲明**：面板目前只有這份 build-artifact 字串斷言 + tsc 型別檢查，
+    // 沒有 DOM 行為測試（如模擬勾選/取消勾選、驗證 checkedKeys() 實際收集邏輯）——
+    // 不存在名為 tests/ui/panelApproval.test.ts 的檔案，之前這裡的註解誤宣稱有，已更正。
+    // 面板 checkbox 收集邏輯（每個 checkbox 各自一筆、不去重）的行為正確性，由
+    // tests/confirmService.test.ts 對 src/changeset/confirmService.ts 的 confirmed_keys
+    // multiset 比對做間接驗證（伺服器端行為），而非對 src/ui/changeset-panel.ts 本身跑 DOM 測試。
     expect(html).toContain('app_confirm_changeset')
     expect(html).toContain('confirmed_keys')
     expect(html).toContain('diff_version')
