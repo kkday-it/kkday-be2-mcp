@@ -1,6 +1,6 @@
 # be2 MCP — MCP Apps 面板首波實作 design spec
 
-日期：2026-08-12　狀態：draft（待使用者審 + agy-peer-review）
+日期：2026-08-12　狀態：已過 agy-peer-review（rounds=5）、**待使用者審**
 > 前置文件：`docs/be2-mcp/mcp-ui-spike-checklist.md`（spike findings，T1–T5 全 pass）、`docs/be2-mcp/next-iteration-eval.md` §1、`docs/be2-mcp/mcp-ui-exploration.md`（分級批准模型）。
 > **使用者離線期間以建議選項定案的假設（審查時可推翻）**：(1) 首波面板**不碰批准**，批准仍 100% 走 be2-auth SSO 確認頁；(2) spec 預留 L1/L2 面板批准介面但不實作；(3) 三塊 UI 併成兩個面板資源；(4) 打包用 esbuild 不引入 vite。
 
@@ -46,7 +46,7 @@
 批准（不變）：系統瀏覽器 → be2-auth SSO 確認頁（be2mcp_sid cookie）→ /approve
 ```
 
-面板與對話共用同一條 MCP session：app-only tool 的呼叫一樣過 bearer 驗證、稽核、rate budget（走既有 `wrapL2Tool` 管線）。
+面板與對話共用同一條 MCP session：app-only tool 的呼叫一樣過 bearer 驗證與稽核（`wrapAppTool`，rate 治理獨立，見 §4.3）。
 
 ## 4. 元件設計
 
