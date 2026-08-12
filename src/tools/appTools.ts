@@ -66,7 +66,12 @@ export const appConfirmChangesetTool: AppToolDef = {
     const ok = ctx.nonces.verifyAndConsume(args.nonce, { changesetId: rec.id, diffVersion: args.diff_version, sessionId: ctx.sessionId })
     if (!ok) return makeEnvelope([], [{ key: rec.id, code: 'NONCE_INVALID', message: 'Approval token invalid/expired; reopen the panel to refresh.' }])
     if (args.decision === 'reject') {
-      ctx.changeSets.setStatus(rec.id, 'rejected', ctx.now())
+      // Finding 2（Task 11 review）: 不可無條件 setStatus——若此 change-set 已透過確認頁(confirm
+      // page)以外的路徑批准/執行完畢,面板帶著仍有效的 nonce 按「拒絕」會把已執行結果覆寫成
+      // rejected(status-integrity 破洞)。改用 casStatus,只有仍是 pending_approval 才轉態成功;
+      // 否則回 ALREADY_PROCESSED,不覆寫。與 confirmRoutes.ts 的 reject 路徑同一套紀律。
+      const won = ctx.changeSets.casStatus(rec.id, 'pending_approval', 'rejected', ctx.now())
+      if (!won) return makeEnvelope([], [{ key: rec.id, code: 'ALREADY_PROCESSED', message: 'This change-set was already approved/executed or is no longer pending.' }])
       return makeEnvelope([{ changeset_id: rec.id, status: 'rejected' }])
     }
     // approve：交給共用 service。service 內部依序做 confirmed_keys 校驗 → liveDiff → stale → CAS →

@@ -92,9 +92,13 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
   // tool='changeset.execute'. Preserves the confirm-page's original ip/clientInfo audit fields
   // (params.audit) verbatim — dropping IP audit here was an explicitly called-out regression risk
   // during this extraction.
+  // Finding 3（Task 11 review）: 沿用抽出前 confirmRoutes.ts 原本的 'confirm-page:'（連字號）字首,
+  // 不可讓 channel 字面值('confirm_page',底線)直接滲入可觀察的 audit 紀錄——那是這次抽取造成的
+  // clientInfo 漂移,不是刻意設計。面板(panel)沒有「原本」可沿用,取一個獨立字首。
+  const clientInfoPrefix = channel === 'confirm_page' ? 'confirm-page' : 'panel'
   deps.audit.record({
     userLabel: who.userLabel, sessionId: who.sessionId,
-    clientInfo: `${channel}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
+    clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
     tool: 'changeset.approve',
     params: { changeset_id: rec.id, ip: audit?.ip, channel },
     status: 'ok', traceId: 'n/a', durationMs: 0,
