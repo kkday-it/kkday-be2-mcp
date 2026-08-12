@@ -11,7 +11,8 @@
     "probe-sit": "tsx scripts/probe-sit.ts",
     "probe-sit-write": "tsx scripts/probe-sit-write.ts",
     "probe-sit-inventory": "tsx scripts/probe-sit-inventory.ts",
-    "ci": "npm run typecheck && npm run test"
+    "build:ui": "node scripts/build-ui.mjs",
+    "ci": "npm run build:ui && npm run typecheck && npm run test"
   },
   "keywords": [],
   "author": "",
@@ -34,6 +35,7 @@
     "@types/better-sqlite3": "^9.6.0",
     "@types/express": "^5.0.6",
     "@types/node": "^26.2.0",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.11",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
