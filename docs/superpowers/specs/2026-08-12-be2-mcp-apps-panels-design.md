@@ -68,11 +68,17 @@
 - `ToolResult` 加 `structuredContent?: Record<string, unknown>`。
 - `wrapTool`／`wrapL2Tool`：envelope **同時**放 `content[0].text`（給 model，格式不變＝零回歸）與 `structuredContent`（給面板）。
 - 綁面板的工具補 `outputSchema`（envelope 的 zod shape：`data_origin`/`untrusted_note`/`items`/`errors`/`read_oids`）——MCP 規範 structuredContent 需宣告 outputSchema。
+- **安全假設：`structuredContent` 視同 model 可見**。spike T2 只驗證了「resource HTML 不進 context」，沒驗 structuredContent；在有實測反證前，**任何不想給 model 的資料（如 confirm URL）都不得放進 structuredContent**，只能走 app-only tool 回傳（T5 已實測被 host 過濾）。
 - `src/tools/types.ts`：`ToolDef` 加選填 `uiResourceUri`；`newServer()` 依此欄位決定 `registerTool` vs `registerAppTool`。
 
 ### 4.3 App-only tools（新增 `src/tools/appTools.ts`）
 
-兩支都是 L2ToolDef、走既有管線（稽核 actor＝bearer 使用者、rate budget 照扣）：
+兩支走**新的 `wrapAppTool` 包裝**（auth 驗證與稽核與 `wrapL2Tool` 相同；rate 治理獨立，見下）：
+
+**Rate 治理（agy round-1 修正）**：不可共用既有 `RateBudget`（session 100／user 每日 500 是為 LLM runaway 設計的；面板輪詢每 3s 一次，掛著 5 分鐘就燒光 session 額度、25 分鐘鎖死整天）。`wrapAppTool` 改用獨立的 app-call 池：per-session sliding window **120 次/分鐘**（容納多面板併發輪詢——單面板 3s 輪詢 ≈20/分鐘，120 容 5-6 個活躍面板，仍能擋 bug 迴圈），**不扣** LLM 工具的 RateBudget。面板端收到 rate 錯誤時**指數退避重試**（3s→6s→12s，上限 30s），不得直接進 error 終態。面板端輪詢規則（agy round-2 修正，涵蓋「核准發生在外部瀏覽器、面板收不到 callback」）：
+- `executing`：自動輪詢（≥3s）。
+- `pending_approval`：預設不輪詢；**點「前往核准」後開一段主動輪詢窗**（3s × 最多 3 分鐘，逾時退回手動「重新整理」按鈕）——使用者從瀏覽器核准回來時面板已自動切到執行/ledger 視圖。
+- 終態（done/partial/failed/rejected）：停止輪詢。
 
 | tool | input | 回傳 | 用途 |
 |---|---|---|---|
@@ -110,12 +116,12 @@
 | `dist/ui` 缺檔 | 啟動警告、resource 不註冊；tool 照常 |
 | 面板 handshake 失敗 | 面板自帶 fallback 文案（spike 教訓：Desktop 給無提示空白） |
 | app-only tool 收到他人 changeset_id | NOT_FOUND（IDOR 語義沿用） |
-| 輪詢打爆 rate budget | rate budget 照扣照擋——面板端 ≥3s 節流 + 執行終態停止輪詢 |
+| 面板輪詢失控（bug 迴圈） | app-call 獨立 sliding window（120/分鐘）擋下，**不影響** LLM 工具的 RateBudget；面板收到 rate 錯誤走指數退避（3s→6s→12s，cap 30s），不進 error 終態。輪詢狀態機照 §4.3：`executing` 自動輪詢、`pending_approval` 僅「前往核准」後 3 分鐘主動窗、終態停止 |
 | 面板資料含惡意字串 | 一律 textContent 渲染；面板不 eval 任何資料 |
 
 ## 7. 測試
 
-- **單元/整合（vitest，進 CI）**：capability-gate（宣告 ui extension 的 session 才看得到 app-only tools；未宣告的 `tools/list` 不含）、structuredContent 與 text 同源一致、appResources 註冊與缺檔降級、`app_get_confirm_link`/`app_get_changeset_view` 的 creator-bound 與稽核寫入、outputSchema 校驗。
+- **單元/整合（vitest，進 CI）**：capability-gate（宣告 ui extension 的 session 才看得到 app-only tools；未宣告的 `tools/list` 不含）、structuredContent 與 text 同源一致、appResources 註冊與缺檔降級、`app_get_confirm_link`/`app_get_changeset_view` 的 creator-bound 與稽核寫入、outputSchema 校驗、app-call sliding window 超限被擋且**不影響** LLM 工具 RateBudget。
 - **面板煙霧測試（不進 CI）**：泛化 spike 的 playwright 手法——本機 http 起 `dist/ui/*.html`，驗 DOM 渲染與（mock host 下的）按鈕 wiring。
 - **Live 驗收（人工，照 spike 流程）**：Desktop 實渲染兩面板 + 「前往核准」開瀏覽器全流程一次。
 - **eval**：加案例「agent 被要求代點『前往核准』」→ 應說明無法（工具面拿不到 confirm URL 或 host 已濾）。
@@ -133,3 +139,5 @@ L1/L2 面板批准的介面預留（本波**只**確保不用改架構就能加�
 2. **Apps spec 演進**（2026-01-26 穩定版、SDK 1.7.x）：面板層薄、重寫成本低；風險可接受。
 3. **同 session 的面板與 agent 不可區分**（server 端視角）：本波 app-only tools 只回讀取性資料 + confirm URL（洩漏不破防），故可接受；下一輪面板批准必須重新評估此點（nonce 的意義即在此）。
 4. 挑選器面板的勾選如何回流對話（首波：使用者口述/貼上；未來可用 `app.sendMessage` 注入對話，需另評注入面）——**開放**，不擋首波。
+
+<!-- agy-peer-reviewed: 2026-08-12T05:21:56Z rounds=5 verdict=approved -->
