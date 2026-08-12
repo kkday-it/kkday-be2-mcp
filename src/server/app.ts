@@ -12,10 +12,12 @@ import { AuthServiceClient } from '../auth/authServiceClient.js'
 import { GatewayClient } from '../gateway/client.js'
 import { AuditLog } from '../audit/auditLog.js'
 import { RateBudget } from '../limits/rateBudget.js'
+import { AppRateBudget } from '../limits/appRateBudget.js'
 import { ChangeSetStore } from '../changeset/store.js'
 import { WebSessionStore } from './webSessionStore.js'
 import { requestContext } from './requestContext.js'
 import { wrapTool, wrapL2Tool, type PipelineDeps, type L2PipelineDeps } from './toolPipeline.js'
+import { wrapAppTool, type AppPipelineDeps } from './appPipeline.js'
 import { buildConfirmRouter } from './confirmRoutes.js'
 import { buildSsoRouter } from './ssoRoutes.js'
 import { registerAppResources } from './appResources.js'
@@ -23,6 +25,7 @@ import { findProductsTool } from '../tools/findProducts.js'
 import { productPlansTool } from '../tools/productPlans.js'
 import { inventorySettingsTool } from '../tools/inventorySettings.js'
 import { createChangesetTool, getChangesetStatusTool } from '../changeset/tools.js'
+import { APP_TOOLS } from '../tools/appTools.js'
 import type { ToolDef } from '../tools/types.js'
 import type { L2ToolDef } from './l2Context.js'
 import { AppError } from '../errors.js'
@@ -114,6 +117,16 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     emitConfirmUrl: (id, url) => { console.log(`[be2-mcp] change-set ${id} awaiting approval: ${url}`) },
   }
 
+  // 面板輪詢（app-only tools）獨立限流，見 src/limits/appRateBudget.ts 的說明——與 rateBudget
+  // (LLM 工具用) 完全分離的 in-memory sliding window。session 關閉時必須 release，見下方
+  // onsessionclosed，否則長跑 server 的 hits Map 會無限累積已關閉的 session。
+  const appRateBudget = new AppRateBudget()
+  const appDeps: AppPipelineDeps = {
+    tokenManager, appRateBudget, audit, gateway, changeSets,
+    now: Date.now, genId: randomUUID,
+    baseUrl: `http://127.0.0.1:${config.port}`,
+  }
+
   const transports = new Map<string, StreamableHTTPServerTransport>()
   // Binds a session-id to the bearer that created it (spec §6.2): prevents an enrolled
   // bearer B from reusing bearer A's mcp-session-id to piggyback on A's session state
@@ -150,6 +163,17 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
       } else {
         server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputShape },
           wrapL2Tool(tool, l2Deps) as never)
+      }
+    }
+    // app-only（面板專用）工具：僅在 host 支援 MCP Apps 時註冊，且 visibility:['app'] 表明不
+    // 給 model 用——非 Apps host 的 agent 連工具存在都看不到（capability-gate 已把關，這裡的
+    // visibility 只是對支援 Apps 的 host 表明「這是面板用的、別餵給 LLM」的雙重保險）。
+    if (appsOk) {
+      for (const t of APP_TOOLS) {
+        registerAppTool(server, t.name, {
+          description: t.description, inputSchema: t.inputShape as never,
+          _meta: { ui: { visibility: ['app'] } },
+        }, wrapAppTool(t, appDeps) as never)
       }
     }
     // 面板永遠是增強層：dist/ui 缺檔時 registerAppResources 內部 warn+略過，不影響上面的工具註冊。
@@ -196,7 +220,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: randomUUID,
           onsessioninitialized: id => { transports.set(id, transport!); sessionOwner.set(id, TokenStore.hashBearer(bearer)) },
-          onsessionclosed: id => { transports.delete(id); sessionOwner.delete(id) },
+          onsessionclosed: id => { transports.delete(id); sessionOwner.delete(id); appRateBudget.release(id) },
         })
         await newServer(initCaps).connect(transport)
       } else if (sessionOwner.get(sessionId!) !== TokenStore.hashBearer(bearer)) {

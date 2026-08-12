@@ -21,6 +21,7 @@ export interface AppToolContext {
   changeSets: ChangeSetStore
   now: () => number
   genId: () => string
+  baseUrl: string // for confirm_url, e.g. http://127.0.0.1:8787
 }
 
 export interface AppToolDef {
@@ -38,6 +39,7 @@ export interface AppPipelineDeps {
   changeSets: ChangeSetStore
   now: () => number
   genId: () => string
+  baseUrl: string
 }
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; structuredContent?: Record<string, unknown>; isError?: boolean }
@@ -66,6 +68,7 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
           gateway: deps.gateway, accessToken: user.accessToken, userLabel,
           sessionId: reqCtx.sessionId, bearerHash: TokenStore.hashBearer(reqCtx.bearer),
           businessList: user.businessList, changeSets: deps.changeSets, now: deps.now, genId: deps.genId,
+          baseUrl: deps.baseUrl,
         })
         if (envelope.items.length === 0 && envelope.errors.length > 0) {
           status = 'error'; const f = envelope.errors[0]; message = f.code ? `${f.code}: ${f.message}` : f.message

@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { AppRateBudget } from '../src/limits/appRateBudget.js'
 import { RateError } from '../src/errors.js'
+import { wrapAppTool, type AppPipelineDeps } from '../src/server/appPipeline.js'
+import { requestContext } from '../src/server/requestContext.js'
+import { appGetChangesetViewTool } from '../src/tools/appTools.js'
 
 describe('AppRateBudget', () => {
   it('同一 session 超過 perMinute 丟 RateError', () => {
@@ -29,5 +32,63 @@ describe('AppRateBudget', () => {
     expect(() => b.consume('s1')).toThrow(RateError)
     b.release('s1')
     expect(() => b.consume('s1')).not.toThrow()
+  })
+})
+
+// Task 8 carry-forward from Task 7 review: wrapAppTool had no runtime test — it was only ever
+// exercised indirectly (its collaborators individually). Now that a real app tool exists
+// (appGetChangesetViewTool), drive wrapAppTool through it end to end for the three branches
+// that mirror wrapTool's runWrapped (see tests/structuredContent.test.ts for the pattern).
+function fakeAppDeps(over: Partial<AppPipelineDeps> = {}): AppPipelineDeps {
+  return {
+    tokenManager: { getFreshAccessToken: async () => ({ accessToken: 'AT', userLabel: 'alice', businessList: [] }) } as never,
+    appRateBudget: new AppRateBudget(),
+    audit: { record() {} } as never,
+    gateway: {} as never,
+    changeSets: {
+      get: (id: string) => id === 'cs1'
+        ? { id: 'cs1', creatorLabel: 'alice', status: 'pending_approval', actionType: 'shelf_toggle_product', note: undefined, diff: [{ a: 1 }] }
+        : undefined,
+      getResults: () => [],
+    } as never,
+    now: Date.now,
+    genId: () => 'id1',
+    baseUrl: 'http://127.0.0.1:8787',
+    ...over,
+  }
+}
+
+describe('wrapAppTool（runtime，透過真實 app tool 驅動三條分支）', () => {
+  it('無 requestContext -> NO_AUTH_CONTEXT（面板 call 缺身分脈絡即擋）', async () => {
+    const wrapped = wrapAppTool(appGetChangesetViewTool, fakeAppDeps())
+    const out = await wrapped({ changeset_id: 'cs1' }) // 刻意不包 requestContext.run
+    expect(out.isError).toBe(true)
+    expect(out.content[0].text).toContain('NO_AUTH_CONTEXT')
+  })
+
+  it('appRateBudget 超額 -> denied_rate（RATE_APP），不動 changeSets', async () => {
+    const deps = fakeAppDeps({ appRateBudget: new AppRateBudget({ perMinute: 1 }) })
+    const wrapped = wrapAppTool(appGetChangesetViewTool, deps)
+    const call = () => requestContext.run({ bearer: 'b', sessionId: 's1', clientInfo: 'test' }, () => wrapped({ changeset_id: 'cs1' }))
+    const first = await call()
+    expect(first.isError).toBeUndefined()
+    const second = await call()
+    expect(second.isError).toBe(true)
+    expect(second.content[0].text).toContain('RATE_APP')
+  })
+
+  it('成功路徑：雙軌 result（text 同源於 structuredContent）+ audit.record 記 app/ 前綴的 tool 名', async () => {
+    const records: Array<Record<string, unknown>> = []
+    const deps = fakeAppDeps({ audit: { record: (e: Record<string, unknown>) => { records.push(e) } } as never })
+    const wrapped = wrapAppTool(appGetChangesetViewTool, deps)
+    const out = await requestContext.run(
+      { bearer: 'b', sessionId: 's1', clientInfo: 'test' },
+      () => wrapped({ changeset_id: 'cs1' }),
+    )
+    expect(out.isError).toBeUndefined()
+    expect(out.structuredContent).toBeDefined()
+    expect(JSON.stringify(out.structuredContent)).toBe(out.content[0].text)
+    expect(records).toHaveLength(1)
+    expect(records[0]).toMatchObject({ tool: 'app/app_get_changeset_view', userLabel: 'alice', status: 'ok', sessionId: 's1' })
   })
 })
