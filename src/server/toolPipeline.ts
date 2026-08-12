@@ -30,7 +30,11 @@ export interface L2PipelineDeps extends PipelineDeps {
   emitConfirmUrl: (changesetId: string, url: string) => void
 }
 
-type ToolResult = { content: Array<{ type: 'text'; text: string }>; isError?: boolean }
+type ToolResult = {
+  content: Array<{ type: 'text'; text: string }>
+  structuredContent?: Record<string, unknown>
+  isError?: boolean
+}
 
 function errResult(code: string, message: string): ToolResult {
   return { content: [{ type: 'text', text: JSON.stringify({ error: { code, message } }) }], isError: true }
@@ -72,7 +76,12 @@ function runWrapped<Ctx>(
           const first = envelope.errors[0]
           message = first.code ? `${first.code}: ${first.message}` : first.message
         }
-        result = { content: [{ type: 'text', text: JSON.stringify(envelope) }] }
+        // 一份結果兩個受眾：text 給 model（格式不變＝零回歸）、structuredContent 給面板。
+        // envelope 是純資料物件，直接當 structuredContent。敏感值一律不在 envelope 裡（見計畫 Global Constraints）。
+        result = {
+          content: [{ type: 'text', text: JSON.stringify(envelope) }],
+          structuredContent: envelope as unknown as Record<string, unknown>,
+        }
       } catch (e) {
         status = e instanceof RateError ? 'denied_rate' : e instanceof AuthError ? 'denied_auth' : 'error'
         span.recordException(e as Error)
