@@ -46,7 +46,8 @@
    - 擋得住：籠統的「approve 全部」注入（因為要回傳精確勾選集）。
    - **擋不住**：一個知道自己 change-set 內容的 agent 自我批准（它本來就知道要勾哪些）。
    - 真正能咬的是「**對 model context 隱藏的 per-render nonce**」——面板渲染時 server 埋一個一次性、綁 `diff_version` 的 nonce，批准須回傳它。但這只在「host 不把面板 HTML 回灌 model context」時有效（見 §6 未知）。
-   - 結論：**L2 走 mcp-ui 的殘餘自我批准風險是「有意識地接受」**——用「中影響 + 可逆 + stale check + 稽核」兜底，而非宣稱完全關閉。這條線畫在這裡是合理的取捨，但要寫明白、別自欺。
+   - **【2026-08-12 spike 實測結果】兩個前提都成立**（Claude Desktop）：(a) 面板 HTML **未進** model context（換 canary + 全新對話驗證，模型寫不出 canary 碼；注入 canary 也未觸發）→ per-render nonce 可行；(b) **更好的通道**：`visibility:["app"]` 的 app-only tool 在 Desktop 被 host 濾出模型工具清單、其結果也不進 context（面板實呼叫過、模型答不出 NONCE）→ **nonce 發放/回收首選 app-only tool**（規格級語義），面板 HTML 隱藏降為次要防線。**唯一附帶條件**：app-only 過濾是 host 行為、非協定保證（wire 層 `tools/list` 照列；Claude Code 這種非 Apps host 全曝光）→ server 必須 capability-gate：只對 initialize 宣告 `io.modelcontextprotocol/ui` extension 的 session 註冊 app-only tools。
+   - 結論：**L2 走 mcp-ui 的殘餘自我批准風險是「有意識地接受」**——用「中影響 + 可逆 + stale check + 稽核」兜底，而非宣稱完全關閉。這條線畫在這裡是合理的取捨，但要寫明白、別自欺。（spike 後修正：有 app-only nonce 通道墊底，殘餘風險比原評估再小一階——agent 拿不到 nonce 就無法組出合法批准呼叫。）
 4. **L3 = 面板負責漂亮、be2-auth 負責簽核**：mcp-ui 面板把 diff 呈現得易懂 + 一顆 `link` 按鈕開 be2-auth 確認頁；使用者在**正確的憑證域**用自己身分簽核、留獨立證據。**唯一不行的是把 L3 最終簽核塞進 mcp-ui 的 tool action**（那會與 agent 共用憑證域，破壞命脈）。
 5. **stale check 三級通用**：任何等級，執行前都重抓 live state 重算 diff，對不上就退回（避免「批准當下現況已變」盲蓋）。
 
@@ -57,15 +58,15 @@ host 渲染不出 mcp-ui（如 Claude Code 終端）→ **優雅降級走純文�
 - L1/L2 文字版仍要 intent binding（要使用者確認具體項目，非一句 yes）。
 - 換句話說：**mcp-ui 是體驗增強層，不是安全層**；安全等級由 server 分級決定，跟渲染與否無關。
 
-## 6. Host 與技術未知（必驗）
+## 6. Host 與技術未知（2026-08-12 spike 已驗，詳見 `mcp-ui-spike-checklist.md` Findings）
 
-| 未知 | 為何關鍵 |
-|---|---|
-| **Claude host 會不會把 `ui://` 面板 HTML 回灌 model context** | 決定 §4.3 的 per-render nonce 有沒有用（若 model 看得到 nonce，L2 的強化就漏）。**這是最關鍵的一題。** |
-| host 粒度（Desktop/web ✅、Code 終端 ✗） | 友善 UI 只對 GUI host 有意義；Code 一律走 §5 文字降級 |
-| `link` action 能否穩定在使用者**真實瀏覽器**開確認頁 | L3 link-out 的前提；要能帶既有 be2-auth cookie 才能靜默 SSO |
-| iframe 內是否可持有 be2-auth session（進階選項） | 若可，L3 也能「iframe 內嵌確認頁、自己 SSO、直打 /approve（不經 MCP tool）」，體驗更順——但需威脅建模，**先不做** |
-| mcp-ui/MCP Apps 規格流動性 | 綁還在演進的標準有版本風險 |
+| 未知 | 為何關鍵 | **實測結果** |
+|---|---|---|
+| **Claude host 會不會把 `ui://` 面板 HTML 回灌 model context** | 決定 §4.3 的 per-render nonce 有沒有用（若 model 看得到 nonce，L2 的強化就漏）。**這是最關鍵的一題。** | ✅ **不會**（Desktop）。且 app-only tool（`visibility:["app"]`）連工具本身與結果都被 host 濾出 context → nonce 首選走這條。host 只往 context 注入一段「widget 已渲染」提示文字 |
+| host 粒度（Desktop/web ✅、Code 終端 ✗） | 友善 UI 只對 GUI host 有意義；Code 一律走 §5 文字降級 | ✅ 如預期：Desktop 渲染成功（**需 mcp-remote stdio shim**，直連 loopback HTTP connector 未成）；Code 文字 fallback 不壞。⚠️ Code 端 app-only tool **全曝光**（host 不認得 visibility）→ server 須 capability-gate 註冊 |
+| `link` action 能否穩定在使用者**真實瀏覽器**開確認頁 | L3 link-out 的前提；要能帶既有 be2-auth cookie 才能靜默 SSO | ✅ 開在**系統瀏覽器（Chrome）**，非內嵌 webview → 靜默 SSO 前提成立 |
+| iframe 內是否可持有 be2-auth session（進階選項） | 若可，L3 也能「iframe 內嵌確認頁、自己 SSO、直打 /approve（不經 MCP tool）」，體驗更順——但需威脅建模，**先不做** | ⬜ 未驗（維持先不做） |
+| mcp-ui/MCP Apps 規格流動性 | 綁還在演進的標準有版本風險 | 部分緩解：spec 2026-01-26 穩定版；ext-apps SDK 1.7.5 實測 API 與文件一致。tool action round-trip 亦驗過（逐筆勾選+nonce 完整帶回） |
 
 ## 7. 分階段（小步驗證）
 
@@ -83,9 +84,10 @@ host 渲染不出 mcp-ui（如 Claude Code 終端）→ **優雅降級走純文�
 - **L3 link-out be2-auth** ≈ 「逐筆人核准」。
 - mcp-ui 面板 = 「核准介面」的一種更友善的殼，與「常駐待批清單頁 / 手機 push」並列（RD 版 §5.7）。
 
-## 9. Open questions（給 RD spike 回答）
+## 9. Open questions（2026-08-12 spike 後更新）
 
-- host 是否把面板 HTML 餵進 model context？（決定 nonce 策略）
-- Desktop 與 claude.ai 的 mcp-ui 支援是否有差異？各自 link action 行為？
+- ~~host 是否把面板 HTML 餵進 model context？~~ **已解**：不會（§6）；nonce 首選 app-only tool 通道。
+- Desktop 與 **claude.ai** 的 mcp-ui 支援是否有差異？各自 link action 行為？（Desktop 已驗；claude.ai 未驗——首波不做公網 host，暫不驗。）
 - L1/L2/L3 的**自動分級規則**具體長怎樣（action_type × 批量 × 可逆性 → 等級）？
-- 降級偵測：server 怎麼知道 host 渲不渲染得出來（capability 協商 or 一律附文字 fallback）？
+- ~~降級偵測：server 怎麼知道 host 渲不渲染得出來？~~ **已解**：initialize 的 `capabilities.extensions["io.modelcontextprotocol/ui"]` 就是 capability 協商訊號（Desktop 有帶、Code 沒帶）；tool text result 一律附文字 fallback + app-only tools 依此 gate 註冊。
+- 新增：面板 JS handshake 失敗時 Desktop 呈現**無提示空白**——正式面板需自帶 error/loading fallback 與（可行的話）`sendLog` 回報。

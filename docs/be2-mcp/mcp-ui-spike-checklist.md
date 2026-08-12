@@ -1,6 +1,6 @@
 # MCP Apps（mcp-ui）Spike — 可執行 checklist
 
-日期：2026-08-11　狀態：待執行（在實作 session 做）
+日期：2026-08-11　狀態：**已完成（2026-08-12，T1–T5 + T-degrade 全數收齊，結論見 Findings 與決策 gate）**
 > 搭配讀 `docs/be2-mcp/mcp-ui-exploration.md`（分級模型、安全界線）。
 > **這是丟棄式 spike**：目標是回答可行性與那個「首要未知」，**不接真實 be2 寫入**、用假資料、開新分支或 worktree、驗完可刪。
 
@@ -62,25 +62,30 @@ ext-apps 支援 `_meta: { ui: { visibility: ["app"] } }` 的 tool：只給面板
 - [x] **通過標準**：不會壞掉；模型收到純文字 `panel shown`，無 HTML、無報錯。→「渲不出就走文字」退路成立。
 - [x] **⚠️ 重要副發現**：Code（不支援 MCP Apps 的 host）對 `visibility:["app"]` **完全不過濾**——`spike_secret` 出現在 model 可見工具清單。wire 層 `tools/list` 本來就會列出 app-only tool（隔離是 **host 端過濾行為，不是協定保證**）。→ 設計後果：app-only nonce/confirm-URL 通道在「不支援 Apps 的 host」上會直接漏給 agent；server 端不能假設 app-only tool 的呼叫者一定是面板（需 per-session 綁定或在非 Apps host 上不註冊——client 是否支援可從 initialize 的 `capabilities.extensions` 判斷）。
 
-## Findings（spike 時填）
+## Findings（2026-08-12 實測，host = Claude Desktop）
 
 | 測項 | 結果 | 備註 |
 |---|---|---|
-| T1 Desktop 渲染 | ⬜ pass / ⬜ fail | |
-| **T2 讀取 canary（HTML 進 context?）** | ⬜ 未進(想要) / ⬜ 有進 | 決定 nonce 策略 |
-| **T2 注入 canary（被當指令?）** | ⬜ 不受影響(想要) / ⬜ 被影響 | 注入面 |
-| T3 link 開真瀏覽器 | ⬜ pass / ⬜ fail | 系統瀏覽器 or webview？ |
-| T4 tool action round-trip | ⬜ pass / ⬜ fail | 能否帶逐筆勾選+nonce |
-| **T5 app-only tool 隔離** | ⬜ 隔離成立(想要) / ⬜ 不成立 | 成立則 nonce/confirm-URL 走此通道，T2 降為次要。**Code 端已證不隔離**（見 Step 5 副發現）；Desktop 端待驗 |
+| T1 Desktop 渲染 | ☑ **pass** | 經 **mcp-remote stdio shim** 連（`npx -y mcp-remote http://127.0.0.1:8788/mcp --transport http-only`）；直連 loopback HTTP custom connector 未成（§1.5 答案：**要 shim**）。Desktop initialize 宣告 `extensions["io.modelcontextprotocol/ui"].mimeTypes=["text/html;profile=mcp-app"]`、會主動 `resources/read` 面板 |
+| **T2 讀取 canary（HTML 進 context?）** | ☑ **未進**（想要的結果） | 換新 canary + 全新對話驗證：模型明說看不到面板內容、寫不出 canary 碼（第一輪 7Q2X 是使用者自己打過、模型引用，虛驚）。→ per-render nonce 可行 |
+| **T2 注入 canary（被當指令?）** | ☑ **不受影響**（想要的結果） | 面板 HTML 內的注入指令全程未觸發（模型從未回 PWNED） |
+| T3 link 開真瀏覽器 | ☑ **pass，系統瀏覽器（Chrome）** | 非內嵌 webview → L3 link-out 可帶既有 be2-auth cookie 靜默 SSO 的前提成立 |
+| T4 tool action round-trip | ☑ **pass** | server log 實錄 `{"items":["FAKE-1002"],"nonce":"PANEL-NONCE-3F8Z"}`——逐筆勾選 + nonce 欄位可完整帶回 |
+| **T5 app-only tool 隔離** | ☑ **Desktop 隔離成立** / ⚠ 非 Apps host 不成立 | 面板實際呼叫過 `spike_secret`（server log 為證），模型的工具清單只剩 2 個（`spike_secret` 被 host 濾掉）、也答不出 NONCE 字串。**但**隔離是 host 過濾行為、非協定保證：wire 層 `tools/list` 照列，Claude Code（不支援 Apps）全曝光 → server 端須依 initialize 的 `capabilities.extensions` 決定要不要註冊 app-only tools |
 | T-degrade Code 文字 fallback | ☑ **pass**（2026-08-11） | 模型只收到 `panel shown` 純文字，不壞。⚠️ 但 app-only tool 對 model 曝光（host 不認得 visibility） |
 
-## 決策 gate（spike 完回填 exploration doc）
+**追加觀察**：
+- host 會在 tool result 後附一段給 model 的文字（`[This tool call rendered an interactive widget… do not repeat it in text]`）——host 有自己的 context 注入通道，但**不含**面板 HTML 本體。
+- 面板 JS 掛掉（handshake 不成）時 Desktop 只顯示一塊**無錯誤提示的空白**——正式實作要有面板側 fallback/監控（spike 期間我們自己的 bundle 語法錯就是這樣呈現的）。
 
-- **T2 = HTML 未進 context** → L2 走「per-render nonce（藏在面板、批准須回傳）」，如 exploration §4.3。
-- **T2 = HTML 有進 context** → nonce 藏不住 → L2 的自我批准防護降級為「靠可逆+stale+稽核兜底」，或把 L2 也推去 L3 link-out。**在 exploration §4.3 註明實測結果。**
-- **T1/T3 任一 fail** → 友善 UI 路徑在該 host 不成立 → 該 host 一律走 §5 文字降級；重新評估 mcp-ui 的投入。
+## 決策 gate — 結論（2026-08-12）
+
+- **T2 = HTML 未進 context 成立** → L2 per-render nonce 可行。
+- **T5 Desktop 隔離成立** → nonce/confirm-URL **首選 app-only tool 通道**（規格級語義，T2 降為次要防線）；但因非 Apps host 不過濾，**server 必須 capability-gate**：只對 initialize 宣告 `io.modelcontextprotocol/ui` 的 session 註冊 app-only tools，否則（如 Claude Code）一律不註冊、走文字降級。
+- T1/T3/T4 全 pass → 友善 UI 路徑在 Desktop 成立；Code 走 §5 文字降級（T-degrade 已證不壞）。
+- 部署形態：Desktop 需 **mcp-remote stdio shim**（直連 loopback HTTP connector 未成）——正式版把 shim 寫進 pilot 接入文件即可，不必改 server 架構。
 
 ## 完成後
-- [ ] 把 Findings 回填 `mcp-ui-exploration.md`（§4.3、§6）。
-- [ ] spike 分支/worktree 可刪（丟棄式）。
-- [ ] 若 T1–T4 大致 pass → 進主管線 brainstorming → 寫正式 spec（`docs/superpowers/specs/`）。
+- [x] 把 Findings 回填 `mcp-ui-exploration.md`（§4.3、§6）。
+- [x] spike 分支/worktree 可刪（丟棄式；分支 `spike/mcp-apps`，tip 含 panel 打包修復——留著參考或刪皆可）。
+- [ ] T1–T5 全 pass → 進主管線 brainstorming → 寫正式 spec（`docs/superpowers/specs/`）。
