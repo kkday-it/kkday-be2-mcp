@@ -1,5 +1,8 @@
 import { connectApp, renderText, backoffPoll } from './panelShared.js'
 
+// 終態清單：抽成單一常數，refresh() 與 ontoolresult 都用它，避免兩處漏加同一狀態而導致無限輪詢。
+const TERMINAL_STATUSES = ['done', 'partial', 'failed', 'rejected', 'expired']
+
 const statusEl = document.getElementById('status')!
 const bodyEl = document.getElementById('body')!
 const fallback = document.getElementById('fallback') as HTMLPreElement
@@ -35,11 +38,10 @@ connectApp('be2-changeset-panel').then(app => {
       const r = await app.callServerTool({ name: 'app_get_changeset_view', arguments: { changeset_id: changesetId } })
       const env = (r as any).structuredContent ?? {}
       const rec = env.items?.[0]
-      if (rec) {
-        statusEl.textContent = `狀態：${rec.status}`
-        renderDiff(env)
-        if (['done', 'partial', 'failed', 'rejected'].includes(rec.status)) return 'stop'
-      }
+      if (!rec) return 'stop' // 找不到記錄（如 NOT_FOUND 回 items: []），沒有東西可等，停止輪詢
+      statusEl.textContent = `狀態：${rec.status}`
+      renderDiff(env)
+      if (TERMINAL_STATUSES.includes(rec.status)) return 'stop'
       return 'ok'
     } catch { return 'rate' }
   }
@@ -58,7 +60,7 @@ connectApp('be2-changeset-panel').then(app => {
       changesetId = rec.changeset_id
       statusEl.textContent = `狀態：${rec.status ?? '未知'}`
       renderDiff(env)
-      if (['done', 'partial', 'failed', 'rejected'].includes(rec.status)) { stopPolling?.(); stopPolling = undefined }
+      if (TERMINAL_STATUSES.includes(rec.status)) { stopPolling?.(); stopPolling = undefined }
       else startPolling(rec.status)
     } catch (e) { showFallback('渲染失敗：' + String(e)) }
   }

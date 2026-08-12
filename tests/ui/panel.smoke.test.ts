@@ -19,5 +19,6 @@ describe.skipIf(process.env.CI)('panel smoke', () => {
     expect(html).toContain('app_get_changeset_view')
     expect(html).toContain('app_get_confirm_link')
     expect(html).toContain('openLink')
+    expect(html).toContain('expired') // TERMINAL_STATUSES 常數需含 'expired'，否則 expired 的 change-set 會被無限輪詢
   })
 })
