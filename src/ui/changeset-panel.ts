@@ -1,4 +1,4 @@
-import { connectApp, renderText } from './panelShared.js'
+import { connectApp, renderText, backoffPoll } from './panelShared.js'
 
 const statusEl = document.getElementById('status')!
 const bodyEl = document.getElementById('body')!
@@ -16,12 +16,50 @@ function renderDiff(env: any) {
 }
 
 connectApp('be2-changeset-panel').then(app => {
+  let changesetId: string | undefined
+  let stopPolling: (() => void) | undefined
+
+  const btn = document.createElement('button'); btn.textContent = '前往核准（確認頁）'
+  btn.onclick = async () => {
+    if (!changesetId) return
+    const r = await app.callServerTool({ name: 'app_get_confirm_link', arguments: { changeset_id: changesetId } })
+    const env = (r as any).structuredContent ?? {}
+    const url = env.items?.[0]?.confirm_url
+    if (url) { const o = await app.openLink({ url }); if (o.isError) showFallback('host 拒絕開啟連結：' + url) }
+  }
+  document.body.appendChild(btn)
+
+  async function refresh(): Promise<'ok' | 'stop' | 'rate'> {
+    if (!changesetId) return 'ok'
+    try {
+      const r = await app.callServerTool({ name: 'app_get_changeset_view', arguments: { changeset_id: changesetId } })
+      const env = (r as any).structuredContent ?? {}
+      const rec = env.items?.[0]
+      if (rec) {
+        statusEl.textContent = `狀態：${rec.status}`
+        renderDiff(env)
+        if (['done', 'partial', 'failed', 'rejected'].includes(rec.status)) return 'stop'
+      }
+      return 'ok'
+    } catch { return 'rate' }
+  }
+
+  function startPolling(status: string) {
+    stopPolling?.()
+    stopPolling = undefined
+    if (status === 'executing') stopPolling = backoffPoll(refresh, { baseMs: 3000 })
+    else if (status === 'pending_approval') stopPolling = backoffPoll(refresh, { baseMs: 20000 })
+  }
+
   app.ontoolresult = params => {
     try {
       const env = (params as any).structuredContent ?? {}
       const rec = env.items?.[0] ?? {}
+      changesetId = rec.changeset_id
       statusEl.textContent = `狀態：${rec.status ?? '未知'}`
       renderDiff(env)
+      if (['done', 'partial', 'failed', 'rejected'].includes(rec.status)) { stopPolling?.(); stopPolling = undefined }
+      else startPolling(rec.status)
     } catch (e) { showFallback('渲染失敗：' + String(e)) }
   }
 }).catch(e => showFallback('無法連上 host：' + String(e)))
