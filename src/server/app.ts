@@ -1,6 +1,6 @@
 import express from 'express'
 import { randomUUID } from 'node:crypto'
-import { getUiCapability, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server'
+import { getUiCapability, registerAppTool, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import type Database from 'better-sqlite3'
@@ -119,15 +119,36 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // (read_oids, rate budget) while acting — and being audited — as A.
   const sessionOwner = new Map<string, string>()
 
-  function newServer(): McpServer {
+  // caps = client 在 initialize 宣告的 capabilities（見 /mcp handler 的 initCaps）。只對支援 MCP
+  // Apps 的 host（hostSupportsApps）且該 tool 掛了 uiResourceUri（Task 3）才走 registerAppTool
+  // 帶面板；否則維持既有 registerTool 純文字路徑。目前無任何 tool 設 uiResourceUri，故此改動對
+  // 現有 199 個測試行為中立（appsOk 分支永不觸發）。
+  function newServer(caps: unknown): McpServer {
     const server = new McpServer({ name: 'be2-mcp', version: '0.1.0' })
+    const appsOk = hostSupportsApps(caps)
     for (const tool of TOOLS) {
-      server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputShape },
-        wrapTool(tool, deps) as never)
+      if (tool.uiResourceUri && appsOk) {
+        registerAppTool(server, tool.name, {
+          description: tool.description, inputSchema: tool.inputShape,
+          ...(tool.outputShape ? { outputSchema: tool.outputShape } : {}),
+          _meta: { ui: { resourceUri: tool.uiResourceUri } },
+        }, wrapTool(tool, deps) as never)
+      } else {
+        server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputShape },
+          wrapTool(tool, deps) as never)
+      }
     }
     for (const tool of L2_TOOLS) {
-      server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputShape },
-        wrapL2Tool(tool, l2Deps) as never)
+      if (tool.uiResourceUri && appsOk) {
+        registerAppTool(server, tool.name, {
+          description: tool.description, inputSchema: tool.inputShape,
+          ...(tool.outputShape ? { outputSchema: tool.outputShape } : {}),
+          _meta: { ui: { resourceUri: tool.uiResourceUri } },
+        }, wrapL2Tool(tool, l2Deps) as never)
+      } else {
+        server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputShape },
+          wrapL2Tool(tool, l2Deps) as never)
+      }
     }
     return server
   }
@@ -161,12 +182,19 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
       let transport = sessionId ? transports.get(sessionId) : undefined
       if (!transport) {
         if (req.method !== 'POST') { res.status(400).json({ error: { code: 'NO_SESSION', message: 'unknown mcp session' } }); return }
+        // 新 session 一律由 initialize POST 建立，client capabilities 在此請求 body 的
+        // params.capabilities（非 batch 陣列時）；防禦性處理 batch 陣列型式（本 SDK 目前
+        // initialize 不走 batch，但這樣寫零成本且嚴格合規）。
+        const initCaps: unknown = Array.isArray(req.body)
+          ? (req.body as Array<{ method?: string; params?: { capabilities?: unknown } }>)
+              .find(m => m?.method === 'initialize')?.params?.capabilities
+          : req.body?.method === 'initialize' ? req.body?.params?.capabilities : undefined
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: randomUUID,
           onsessioninitialized: id => { transports.set(id, transport!); sessionOwner.set(id, TokenStore.hashBearer(bearer)) },
           onsessionclosed: id => { transports.delete(id); sessionOwner.delete(id) },
         })
-        await newServer().connect(transport)
+        await newServer(initCaps).connect(transport)
       } else if (sessionOwner.get(sessionId!) !== TokenStore.hashBearer(bearer)) {
         res.status(403).json({ error: { code: 'SESSION_OWNER_MISMATCH', message: 'session does not belong to this bearer' } })
         return
