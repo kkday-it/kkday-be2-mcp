@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { AppRateBudget } from '../src/limits/appRateBudget.js'
 import { RateError } from '../src/errors.js'
 import { wrapAppTool, type AppPipelineDeps } from '../src/server/appPipeline.js'
+import { ApprovalNonceStore } from '../src/changeset/approvalNonce.js'
 import { requestContext } from '../src/server/requestContext.js'
 import { appGetChangesetViewTool } from '../src/tools/appTools.js'
 
@@ -47,10 +48,11 @@ function fakeAppDeps(over: Partial<AppPipelineDeps> = {}): AppPipelineDeps {
     gateway: {} as never,
     changeSets: {
       get: (id: string) => id === 'cs1'
-        ? { id: 'cs1', creatorLabel: 'alice', status: 'pending_approval', actionType: 'shelf_toggle_product', note: undefined, diff: [{ a: 1 }] }
+        ? { id: 'cs1', creatorLabel: 'alice', status: 'pending_approval', actionType: 'shelf_toggle_product', note: undefined, diff: [{ a: 1 }], diffVersion: 'v1' }
         : undefined,
       getResults: () => [],
     } as never,
+    nonces: new ApprovalNonceStore(),
     now: Date.now,
     genId: () => 'id1',
     baseUrl: 'http://127.0.0.1:8787',

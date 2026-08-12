@@ -14,6 +14,7 @@ import { AuditLog } from '../audit/auditLog.js'
 import { RateBudget } from '../limits/rateBudget.js'
 import { AppRateBudget } from '../limits/appRateBudget.js'
 import { ChangeSetStore } from '../changeset/store.js'
+import { ApprovalNonceStore } from '../changeset/approvalNonce.js'
 import { WebSessionStore } from './webSessionStore.js'
 import { requestContext } from './requestContext.js'
 import { wrapTool, wrapL2Tool, type PipelineDeps, type L2PipelineDeps } from './toolPipeline.js'
@@ -123,6 +124,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   const appRateBudget = new AppRateBudget()
   const appDeps: AppPipelineDeps = {
     tokenManager, appRateBudget, audit, gateway, changeSets,
+    nonces: new ApprovalNonceStore(),
     now: Date.now, genId: randomUUID,
     baseUrl: `http://127.0.0.1:${config.port}`,
   }

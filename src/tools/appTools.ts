@@ -14,7 +14,16 @@ export const appGetChangesetViewTool: AppToolDef = {
     const rec = ctx.changeSets.get(args.changeset_id)
     if (!rec || rec.creatorLabel !== ctx.userLabel) return NOT_FOUND(args.changeset_id)
     const results = ['pending_approval', 'approved'].includes(rec.status) ? undefined : ctx.changeSets.getResults(rec.id)
-    return makeEnvelope([{ changeset_id: rec.id, status: rec.status, action_type: rec.actionType, note: rec.note, diff: { items: rec.diff }, ...(results ? { results } : {}) }])
+    const view: Record<string, unknown> = { changeset_id: rec.id, status: rec.status, action_type: rec.actionType, note: rec.note, diff: { items: rec.diff } }
+    if (rec.status === 'pending_approval') {
+      // nonce 只在 app-only tool 回傳裡發放（model 讀不到，見 T6）；面板批准操作（Task 11）需帶
+      // 這個 nonce + diff_version，把「按下批准」綁到一個 model 拿不到的一次性密碼。
+      view.diff_version = rec.diffVersion
+      view.nonce = ctx.nonces.issue({ changesetId: rec.id, diffVersion: rec.diffVersion, sessionId: ctx.sessionId })
+    } else if (results) {
+      view.results = results
+    }
+    return makeEnvelope([view])
   },
 }
 

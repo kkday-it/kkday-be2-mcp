@@ -4,6 +4,7 @@ import type { TokenManager } from '../auth/tokenManager.js'
 import type { AuditLog } from '../audit/auditLog.js'
 import type { GatewayClient } from '../gateway/client.js'
 import type { ChangeSetStore } from '../changeset/store.js'
+import type { ApprovalNonceStore } from '../changeset/approvalNonce.js'
 import type { AppRateBudget } from '../limits/appRateBudget.js'
 import { TokenStore } from '../store/tokenStore.js'
 import type { Envelope } from '../tools/envelope.js'
@@ -19,6 +20,7 @@ export interface AppToolContext {
   bearerHash: string
   businessList: unknown[]
   changeSets: ChangeSetStore
+  nonces: ApprovalNonceStore
   now: () => number
   genId: () => string
   baseUrl: string // for confirm_url, e.g. http://127.0.0.1:8787
@@ -37,6 +39,7 @@ export interface AppPipelineDeps {
   audit: AuditLog
   gateway: GatewayClient
   changeSets: ChangeSetStore
+  nonces: ApprovalNonceStore
   now: () => number
   genId: () => string
   baseUrl: string
@@ -67,7 +70,8 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
         const envelope = await tool.handler(args, {
           gateway: deps.gateway, accessToken: user.accessToken, userLabel,
           sessionId: reqCtx.sessionId, bearerHash: TokenStore.hashBearer(reqCtx.bearer),
-          businessList: user.businessList, changeSets: deps.changeSets, now: deps.now, genId: deps.genId,
+          businessList: user.businessList, changeSets: deps.changeSets, nonces: deps.nonces,
+          now: deps.now, genId: deps.genId,
           baseUrl: deps.baseUrl,
         })
         if (envelope.items.length === 0 && envelope.errors.length > 0) {
