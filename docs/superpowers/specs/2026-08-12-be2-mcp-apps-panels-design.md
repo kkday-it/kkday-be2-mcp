@@ -173,3 +173,5 @@
 | **失敗** | 面板批准**剔除**；本波 = 唯讀/挑選面板 + change-set **diff 審閱面板（唯讀呈現）** + 「前往核准」`app.openLink` 開確認頁（回到 v1 的 link-out，但 confirm URL 仍走 app-only tool 取得——注意：若 T6 失敗，連 confirm URL 都可能被 model 撈到；此時 confirm URL 洩漏不破防，因確認頁 SSO 憑證域分離仍在，故可接受）。批准 100% 留在確認頁。 |
 
 T6 應在實作計畫的**第一個 task** 跑（半天內），結果決定後續 task 是否含面板批准。**在 T6 之前，plan 不得排入 `app_confirm_changeset` 與 nonce 相關實作。**
+
+<!-- agy-peer-reviewed: 2026-08-12T05:42:45Z rounds=7 verdict=approved -->
