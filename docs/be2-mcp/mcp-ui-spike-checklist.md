@@ -13,16 +13,16 @@
 
 ## 前置
 
-- [ ] 開新分支或 git worktree（`spike/mcp-apps`），與 `feat/phase1a` 隔離。
-- [ ] 裝 SDK：`npm i @modelcontextprotocol/ext-apps`（**只需這一個**；`@mcp-ui/server` 是第三方 host 端框架、server 端不需要——2026-08-11 實查 ext-apps repo 更正）。server 端 API 走 `@modelcontextprotocol/ext-apps/server` 的 `registerAppTool`/`registerAppResource`/`RESOURCE_MIME_TYPE`；面板內用 `@modelcontextprotocol/ext-apps` 的 `App` class。client 端渲染是 host 的事，我們只出 resource。
+- [x] 開新分支或 git worktree（`spike/mcp-apps`），與 `feat/phase1a` 隔離。（2026-08-11，branch `spike/mcp-apps`，spike 檔案在 `spike/`）
+- [x] 裝 SDK：`npm i @modelcontextprotocol/ext-apps`（**只需這一個**；`@mcp-ui/server` 是第三方 host 端框架、server 端不需要——2026-08-11 實查 ext-apps repo 更正）。server 端 API 走 `@modelcontextprotocol/ext-apps/server` 的 `registerAppTool`/`registerAppResource`/`RESOURCE_MIME_TYPE`；面板內用 `@modelcontextprotocol/ext-apps` 的 `App` class。client 端渲染是 host 的事，我們只出 resource。
 - [ ] 決定測試 host：**Claude Desktop**（本機、最貼近我們目標）優先；claude.ai 為輔。**Claude Code 終端預期渲不出**（正好拿來驗 T-degrade）。
 
 ## 步驟
 
 ### Step 0 — 最小面板 tool（純假資料、零風險）
-- [ ] 用 `createUIResource` 建一個 `ui://spike/panel` 的 HTML resource（靜態 HTML 即可）。
-- [ ] 用 `registerAppResource` + `registerAppTool`，工具 `spike_show_panel` 以 `_meta.ui.resourceUri` 連到該 resource。**走 MCP Apps 模式，不用 legacy 嵌入式**（見 exploration §1，這對 T2 有利）。
-- [ ] 工具的**文字回傳**只放一句無關的話（如 `panel shown`）——**故意不把面板內容放進 text result**，才驗得出 T2。
+- [x] `spike/panel-template.html` + `spike/panel-src.ts`（App class）→ `node spike/build-panel.mjs` 打成單檔 `spike/panel.html`（esbuild inline，~766KB）。
+- [x] `spike/server.ts`：`registerAppResource` + `registerAppTool`，工具 `spike_show_panel` 以 `_meta.ui.resourceUri` 連到 `ui://spike/panel.html`。**走 MCP Apps 模式**。wire 層已 curl 驗證：MIME `text/html;profile=mcp-app`、`_meta.ui` + legacy `ui/resourceUri` 雙寫、resource 讀得出、canary 在 HTML 內。
+- [x] 工具的**文字回傳**只放 `panel shown`——**故意不把面板內容放進 text result**，才驗得出 T2。
 
 ### Step 1 — T1 渲染
 - [ ] 在 Claude Desktop 掛上 spike server，對話觸發 `spike_show_panel`。
@@ -58,9 +58,9 @@ ext-apps 支援 `_meta: { ui: { visibility: ["app"] } }` 的 tool：只給面板
 - [ ] **通過標準**：兩個驗證都成立 → nonce/confirm-URL 走 app-only 通道（`next-iteration-eval.md` §1.2）。
 
 ### Step 5 — T-degrade 降級
-- [ ] 在 **Claude Code 終端**掛同一個 server，觸發 `spike_show_panel`。
-- [ ] **通過標準**：不會壞掉；至少看得到工具的**文字 fallback**。→ 確認「渲不出就走文字」這條退路存在。
-- [ ] 記錄：Code 端實際顯示什麼（純文字？空白？報錯？）。
+- [x] 在 **Claude Code 終端**掛同一個 server（headless `claude -p` + `--mcp-config`），觸發 `spike_show_panel`。
+- [x] **通過標準**：不會壞掉；模型收到純文字 `panel shown`，無 HTML、無報錯。→「渲不出就走文字」退路成立。
+- [x] **⚠️ 重要副發現**：Code（不支援 MCP Apps 的 host）對 `visibility:["app"]` **完全不過濾**——`spike_secret` 出現在 model 可見工具清單。wire 層 `tools/list` 本來就會列出 app-only tool（隔離是 **host 端過濾行為，不是協定保證**）。→ 設計後果：app-only nonce/confirm-URL 通道在「不支援 Apps 的 host」上會直接漏給 agent；server 端不能假設 app-only tool 的呼叫者一定是面板（需 per-session 綁定或在非 Apps host 上不註冊——client 是否支援可從 initialize 的 `capabilities.extensions` 判斷）。
 
 ## Findings（spike 時填）
 
@@ -71,8 +71,8 @@ ext-apps 支援 `_meta: { ui: { visibility: ["app"] } }` 的 tool：只給面板
 | **T2 注入 canary（被當指令?）** | ⬜ 不受影響(想要) / ⬜ 被影響 | 注入面 |
 | T3 link 開真瀏覽器 | ⬜ pass / ⬜ fail | 系統瀏覽器 or webview？ |
 | T4 tool action round-trip | ⬜ pass / ⬜ fail | 能否帶逐筆勾選+nonce |
-| **T5 app-only tool 隔離** | ⬜ 隔離成立(想要) / ⬜ 不成立 | 成立則 nonce/confirm-URL 走此通道，T2 降為次要 |
-| T-degrade Code 文字 fallback | ⬜ pass / ⬜ fail | Code 顯示什麼 |
+| **T5 app-only tool 隔離** | ⬜ 隔離成立(想要) / ⬜ 不成立 | 成立則 nonce/confirm-URL 走此通道，T2 降為次要。**Code 端已證不隔離**（見 Step 5 副發現）；Desktop 端待驗 |
+| T-degrade Code 文字 fallback | ☑ **pass**（2026-08-11） | 模型只收到 `panel shown` 純文字，不壞。⚠️ 但 app-only tool 對 model 曝光（host 不認得 visibility） |
 
 ## 決策 gate（spike 完回填 exploration doc）
 
