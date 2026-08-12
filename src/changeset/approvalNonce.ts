@@ -16,6 +16,7 @@ export class ApprovalNonceStore {
     this.now = opts.now ?? Date.now
   }
   issue(bind: NonceBind): string {
+    this.sweep()                                     // 惰性清除：把已過期項目擋在成長點之前
     const n = randomUUID() + randomUUID()
     this.live.set(hash(n), { bind: key(bind), exp: this.now() + this.ttlMs })
     return n
@@ -26,5 +27,19 @@ export class ApprovalNonceStore {
     this.live.delete(h)                              // 單次：無論成敗都消耗
     if (rec.exp < this.now()) return false
     return rec.bind === key(bind)
+  }
+  // 面板每 20s 輪詢一次 app_get_changeset_view 就會 issue() 一顆新 nonce；只有真正被
+  // verifyAndConsume 的那顆會被刪除，其餘在 process 生命週期內原本會無限累積（TTL 只讓
+  // verify 回 false，從不驅逐）。issue() 是成長點，故在此惰性掃描、刪除已過期項目，
+  // 把 Map 大小長期維持在「未過期 nonce 數」量級，不需額外計時器。
+  private sweep(): void {
+    const t = this.now()
+    for (const [h, rec] of this.live) {
+      if (rec.exp < t) this.live.delete(h)
+    }
+  }
+  // 僅供測試證明 sweep 真的驅逐了項目（而不只是驗證時判過期）。
+  size(): number {
+    return this.live.size
   }
 }

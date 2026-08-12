@@ -104,8 +104,11 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
         if (status === 'error') console.error(`be2-mcp apptool ${tool.name} failed:`, e)
         result = errResult(code, message)
       } finally {
+        // 安全衛生：nonce 是一次性批准密碼，即使 verifyAndConsume 已消耗掉、對重放已無用，
+        // 仍不該明文留在 audit_log。稽核只記編輯過的副本，handler 收到的 args 不受影響。
+        const auditParams = 'nonce' in args ? { ...args, nonce: '[redacted]' } : args
         deps.audit.record({ userLabel, sessionId: reqCtx.sessionId, clientInfo: reqCtx.clientInfo,
-          tool: `app/${tool.name}`, params: args, status, errorMessage: status === 'ok' ? undefined : message,
+          tool: `app/${tool.name}`, params: auditParams, status, errorMessage: status === 'ok' ? undefined : message,
           traceId, durationMs: Date.now() - started })
         span.end()
       }

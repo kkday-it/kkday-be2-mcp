@@ -96,4 +96,31 @@ describe('wrapAppTool（runtime，透過真實 app tool 驅動三條分支）', 
     expect(records).toHaveLength(1)
     expect(records[0]).toMatchObject({ tool: 'app/app_get_changeset_view', userLabel: 'alice', status: 'ok', sessionId: 's1' })
   })
+
+  // Finding 1（whole-branch review）：app_confirm_changeset 的 input 帶一次性批准 nonce；
+  // wrapAppTool 稽核整包 args 會讓這個 secret（即使已消耗）明文落進 audit_log。驗證：稽核
+  // 副本要 redact，但 handler 實際收到的 args 仍是原始值（不影響工具實際運作）。
+  it('args 含 nonce 時，audit.record 收到的 params 是 redacted 副本；handler 仍拿到真實 nonce', async () => {
+    const records: Array<Record<string, unknown>> = []
+    let handlerSawNonce: unknown
+    const spyTool = {
+      ...appGetChangesetViewTool,
+      handler: async (args: any, ctx: never) => {
+        handlerSawNonce = args.nonce
+        return appGetChangesetViewTool.handler(args, ctx)
+      },
+    }
+    const deps = fakeAppDeps({ audit: { record: (e: Record<string, unknown>) => { records.push(e) } } as never })
+    const wrapped = wrapAppTool(spyTool, deps)
+    const out = await requestContext.run(
+      { bearer: 'b', sessionId: 's1', clientInfo: 'test' },
+      () => wrapped({ changeset_id: 'cs1', nonce: 'real-secret-nonce' }),
+    )
+    expect(out.isError).toBeUndefined()
+    expect(handlerSawNonce).toBe('real-secret-nonce')          // handler 拿到的是真值,不受影響
+    expect(records).toHaveLength(1)
+    const params = records[0].params as Record<string, unknown>
+    expect(params.nonce).toBe('[redacted]')                    // 稽核副本被 redact
+    expect(params.changeset_id).toBe('cs1')                    // 其餘欄位不受影響
+  })
 })
