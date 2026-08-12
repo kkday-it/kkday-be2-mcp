@@ -26,8 +26,9 @@
 | 面板 HTML 不進 model context；面板內注入指令不影響模型 | spike T2 pass（換 canary 重測） |
 | `openLink` 開**系統瀏覽器** | spike T3 pass（Chrome） |
 | 面板 → server tool call 可帶**逐筆勾選 + nonce** | spike T4 pass（server log 實錄）——**面板批准的送出路徑** |
-| `visibility:["app"]` tool 在 Apps host 被濾出 model 工具清單與 context | spike T5 pass——**nonce 發放/回收通道**；但非 Apps host（Claude Code）全曝光 → 必須 capability-gate |
+| `visibility:["app"]` tool 從 model 工具清單與 context 中**消失** | spike T5 pass——但這只證明「遮蔽」，**未**證明「host 會擋掉 model 硬幻覺出的呼叫」（見下 T6 缺口） |
 | 非 Apps host 文字 fallback 不壞 | spike T-degrade pass |
+| **【未驗，阻擋面板批准】** host 會**主動拒絕** model 端發起的 `visibility:["app"]` tool call（不只是不列出） | **T6，待 spike**——見 §4.3 與 §10。若 host 只遮蔽不攔阻，被注入的 model 可幻覺呼叫 `app_get_changeset_view` 撈到 nonce → 自我批准，v2 面板批准的安全前提崩塌 |
 
 ## 3. 架構總覽
 
@@ -82,7 +83,9 @@
 | `app_get_changeset_view` | `{ changeset_id }` | change-set 全貌（狀態、items、diff、per-item 結果、`diff_version`）+ `pending_approval` 時**隨附一次性 `nonce`** | 面板初載與輪詢刷新 |
 | `app_confirm_changeset` | `{ changeset_id, decision: 'approve'\|'reject', nonce, diff_version, confirmed_keys: string[] }` | 執行受理結果（終態由後續 view 輪詢取得） | 面板「確認執行」/「拒絕」 |
 
-**Nonce 生命週期**（防「agent 自我批准」的核心）：
+**⚠️ 前置 gate（agy round-6，關鍵）**：整個 nonce 通道的安全性依賴一個**尚未驗證**的 host 行為——「host 會**主動攔阻** model 端發起的 app-only tool call」。T5 只證明工具從 model 清單消失（遮蔽），沒證明攔阻。若 host 只遮蔽、仍把 model 幻覺出的 `tools/call app_get_changeset_view` 轉發給 server，server 無法區分呼叫來自面板還是 model（同一條 MCP 連線多工），就會把 nonce 回給 model → 自我批准。**因此面板批准（`app_confirm_changeset` 及 nonce 發放）在 spike T6 通過前不得實作**（T6 定義見 §10）。T6 未過 → 本波退化為「唯讀/挑選/diff 面板 + 確認頁批准」（見 §10 決策樹），面板不承載批准。
+
+**Nonce 生命週期**（T6 通過後才啟用；防「agent 自我批准」的核心）：
 - 由 `app_get_changeset_view` 在 `pending_approval` 狀態發放；**單次有效**（被 `app_confirm_changeset` 消耗或再次 view 刷新即輪替）、TTL 10 分鐘、綁定 `(changeset_id, diff_version, mcp_session)` 三元組，server 只存 hash。
 - `app_confirm_changeset` 驗證鏈：nonce 有效且三元組吻合 → `confirmed_keys` 與 change-set items 完全一致（逐筆意圖回傳，spike T4 形態）→ live-diff 重算、`diff_version` 不符回 409 stale（面板重載新 diff + 新 nonce）→ CAS 防重複執行 → executor（身分 = 本 session bearer 使用者；`modify_user` 沿用既有 platformId 解析）→ audit 記 `approval_channel: 'panel'`。
 - 任何一步失敗都不消耗執行權（nonce 已耗則重新 view 取新 nonce）。
@@ -91,13 +94,13 @@
 
 **面板輪詢規則**：
 - `executing`：自動輪詢（≥3s）。
-- `pending_approval`：不需輪詢（批准就在面板內，按下即知結果；手動「重新整理」按鈕保留）。
+- `pending_approval`：面板內批准就地知結果，故不需高頻輪詢；但確認頁退路可能在**外部瀏覽器**批准（面板收不到 callback），故加**慢心跳輪詢（每 20s）**讓面板最終反映 out-of-band 狀態變化（agy round-6 rec）；手動「重新整理」按鈕保留。
 - 終態（done/partial/failed/rejected）：停止輪詢。
 
 守則：
 1. **creator-bound**：兩支都驗「changeset 建立者 == 本 session bearer 對應使用者」，不同人回 NOT_FOUND（無 existence leak，沿用 Phase 2b IDOR 語義）。
 2. **capability-gate（spike T5 教訓）**：在 `server.server.oninitialized` 用 ext-apps `getUiCapability()` 檢查 host 有無宣告 `io.modelcontextprotocol/ui`；**沒有就不註冊**app-only tools、**不發放 nonce**（非 Apps host 的 agent 連工具存在都看不到，批准只剩確認頁退路）。
-3. **誠實的安全定位（v2 重寫）**：面板批准的防自我批准 = 「host 過濾 app-only tool」（T5 實測）+「nonce 不進 model context」（T2 實測）兩層 host 行為保證，**不再是 Phase 2b 的憑證域分離**——這是有意識的信任面調整（使用者拍板：MCP 串接已 be2-auth 認證、批准者即連線者本人）。兜底不變：可逆性、live-diff stale 409、CAS、全鏈路稽核（含 approval_channel）、businessList fail-fast。被注入的 agent 在 wire 層看得到 `app_confirm_changeset` 存在（tools/list 不濾）但拿不到 nonce → 組不出合法呼叫。
+3. **誠實的安全定位（v2 重寫，agy round-6 補強）**：面板批准的防自我批准 = 「host **攔阻** model 發起的 app-only tool call」（**T6 待驗**，非僅 T5 的遮蔽）+「nonce 不進 model context」（T2 實測）——**不再是 Phase 2b 的憑證域分離**，是有意識的信任面調整（使用者拍板：MCP 串接已 be2-auth 認證、批准者即連線者本人）。**此定位僅在 T6 通過時成立**；T6 未過則面板不批准（§10）。兜底不變：可逆性、live-diff stale 409、CAS、全鏈路稽核（含 approval_channel）、businessList fail-fast。
 4. **確認頁退路完整保留**：`/confirm/:id` 及其 SSO 全套不動；終端機 `emitConfirmUrl` 照舊。同一 change-set 兩條路都能批（先到先贏，CAS 保證只執行一次）。
 
 ### 4.4 資源註冊（新增 `src/server/appResources.ts`）
@@ -129,7 +132,8 @@
 | nonce 過期/已耗/三元組不符 | 拒絕 + 面板自動重新 view 取新 diff+nonce；稽核記拒絕原因 |
 | `diff_version` stale | 409 + 面板重載新 diff（與確認頁 stale 語義一致） |
 | 兩條批准路徑競態 | CAS 先到先贏，後到者收「已執行」明確錯誤 |
-| 面板輪詢失控（bug 迴圈） | app-call 獨立 sliding window（120/分鐘）擋下，**不影響** LLM RateBudget；面板 rate 錯誤走指數退避（3s→6s→12s，cap 30s） |
+| 面板輪詢失控（bug 迴圈） | app-call 獨立 sliding window（120/分鐘）擋下，**不影響** LLM RateBudget；面板 rate 錯誤走指數退避（3s→6s→12s，cap 30s）。輪詢狀態機照 §4.3：executing 自動輪詢、pending_approval 慢心跳（20s，涵蓋確認頁退路的 out-of-band 批准）、終態停止 |
+| 確認頁退路在外部瀏覽器批准、面板不知情 | pending_approval 的 20s 慢心跳會拉到新狀態、自動切 ledger 視圖 |
 | 面板資料含惡意字串 | 一律 textContent 渲染；面板不 eval 任何資料 |
 
 ## 7. 測試
@@ -151,7 +155,21 @@
 
 ## 9. 風險與開放問題
 
-1. **信任面調整要寫進資安說明**：防自我批准從「憑證域分離」改為「host 行為保證（T2+T5）+ nonce」——若未來某個 Apps host 實作把 app-only tool 結果餵給 model，此保證弱化；緩解 = capability-gate 白名單心態（目前只信 Desktop）+ 稽核 + 可逆性。claude.ai 上線前需重驗 T2/T5。
+1. **信任面調整要寫進資安說明**：防自我批准從「憑證域分離」改為「host 行為保證（T2 + **T6 待驗**）+ nonce」——核心風險已隔離為 §10 的 T6 前置 gate（未過就不做面板批准）。即使 T6 通過，仍是「信任特定 host 實作」：換 host（claude.ai、未來版本）需重驗 T2/T6；緩解 = capability-gate 白名單心態（目前只信 Desktop）+ 稽核 + 可逆性。
 2. **mcp-remote shim 是第三方套件**：版本釘選寫進 pilot 文件。
 3. **Apps spec 演進**（2026-01-26 穩定版、SDK 1.7.x）：面板層薄、重寫成本低。
 4. 挑選器勾選如何回流對話（首波：使用者口述/貼上；未來 `app.sendMessage` 需另評注入面）——開放，不擋首波。
+
+## 10. 前置 spike T6 + 決策樹（agy round-6，實作前必跑）
+
+**T6 定義**：在 Claude Desktop 掛一個 app-only tool（`visibility:["app"]`），從**對話端誘導 model 直接幻覺呼叫它**（給 model 明確工具名與參數、或用注入 prompt 要它呼叫）。觀察：
+- **通過（想要）**：host **拒絕/不轉發** model 端對 app-only tool 的呼叫（server 收不到，或 host 回錯）。→ nonce 通道成立，§4.3 面板批准可實作。
+- **失敗**：server 收到該呼叫並能回應（host 只遮蔽不攔阻）。→ nonce 藏不住，**本波不做面板批准**。
+
+**決策樹**：
+| T6 結果 | 本波範圍 |
+|---|---|
+| **通過** | 全 spec（含 §4.3 面板批准 + nonce）。 |
+| **失敗** | 面板批准**剔除**；本波 = 唯讀/挑選面板 + change-set **diff 審閱面板（唯讀呈現）** + 「前往核准」`app.openLink` 開確認頁（回到 v1 的 link-out，但 confirm URL 仍走 app-only tool 取得——注意：若 T6 失敗，連 confirm URL 都可能被 model 撈到；此時 confirm URL 洩漏不破防，因確認頁 SSO 憑證域分離仍在，故可接受）。批准 100% 留在確認頁。 |
+
+T6 應在實作計畫的**第一個 task** 跑（半天內），結果決定後續 task 是否含面板批准。**在 T6 之前，plan 不得排入 `app_confirm_changeset` 與 nonce 相關實作。**
