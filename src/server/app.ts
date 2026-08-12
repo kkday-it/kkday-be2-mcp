@@ -1,5 +1,6 @@
 import express from 'express'
 import { randomUUID } from 'node:crypto'
+import { getUiCapability, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import type Database from 'better-sqlite3'
@@ -26,6 +27,14 @@ import type { L2ToolDef } from './l2Context.js'
 import { AppError } from '../errors.js'
 
 export interface ServerDeps { config: Config; db: Database.Database }
+
+// host 在 initialize 的 capabilities.extensions 宣告 MCP Apps 支援才回 true。
+// 用途：capability-gate —— 只對支援 Apps 的 host 註冊 app-only tools（否則非 Apps host
+// 的 agent 連工具存在都看不到）。getUiCapability 回 undefined 代表不支援。
+export function hostSupportsApps(caps: unknown): boolean {
+  const ui = getUiCapability(caps as never)
+  return !!ui?.mimeTypes?.includes(RESOURCE_MIME_TYPE)
+}
 
 const TOOLS: ToolDef[] = [findProductsTool as ToolDef, productPlansTool as ToolDef, inventorySettingsTool as ToolDef]
 const L2_TOOLS: L2ToolDef[] = [createChangesetTool, getChangesetStatusTool]

@@ -36,5 +36,7 @@ export interface L2ToolDef {
   name: string
   description: string
   inputShape: z.ZodRawShape
+  uiResourceUri?: string // 有值 → 走 registerAppTool，面板綁此 ui:// 資源
+  outputShape?: z.ZodRawShape // structuredContent 的 outputSchema（MCP 規範需宣告）
   handler(args: any, ctx: L2ToolContext): Promise<Envelope>
 }
