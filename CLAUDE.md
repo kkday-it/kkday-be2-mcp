@@ -36,7 +36,7 @@
 1. 外殼照抄 dev-tools 的 OAuth 2.1（discovery + DCR + PKCE + redirect_uri allowlist），內核走 auth-service 帳密+2FA login。
 2. 身分一律由 token 推導，input 永不接收使用者身分 / 越權 scope。
 3. be2 授權以 auth-service 的 `businessList` + `/verify` 為準，**不自建 RBAC**。
-4. change-set draft-only：agent 不直接送出寫入，一律人工在確認頁批准。**Phase 2b 起，確認頁（`/confirm/:id` 及其 `/approve`、`/reject`）需先用 be2-auth SSO 登入（瀏覽器 POPUP → `be2mcp_sid` session cookie）才能操作，不再有 Phase 2a 那種一次性 capability URL（`?token=`）——agent 沒有這個 cookie，結構上就無法自我批准。細節見 `docs/be2-mcp/phase2b-runbook.md`。
+4. change-set draft-only：agent 不直接送出寫入，一律人工批准，經**面板 nonce 通道（Apps host）或 be2-auth SSO 確認頁（退路）**。不變式：agent 結構上拿不到批准所需憑證（nonce 或 `be2mcp_sid` cookie）——面板批准工具（`app_confirm_changeset`）是 app-only，model 的工具清單裡沒有它（spike T6 已證 host 會把它從 model 工具陣列濾除）；nonce 只在該工具的回傳裡發放，且只在 app-only 的 `app_get_changeset_view` 才附帶；確認頁則需先用 be2-auth SSO 登入（瀏覽器 POPUP → `be2mcp_sid` session cookie），Phase 2a 那種一次性 capability URL（`?token=`）已移除。細節見 `docs/be2-mcp/phase2b-runbook.md`（確認頁 SSO）與 `docs/be2-mcp/mcp-apps-runbook.md`（面板 nonce 通道）。
 
 ## 開發指令（Phase 1a，`npm run <script>`）
 

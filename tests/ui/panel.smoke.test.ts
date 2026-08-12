@@ -21,4 +21,22 @@ describe.skipIf(process.env.CI)('panel smoke', () => {
     expect(html).toContain('openLink')
     expect(html).toContain('expired') // TERMINAL_STATUSES 常數需含 'expired'，否則 expired 的 change-set 會被無限輪詢
   })
+
+  it('change-set 面板內嵌批准 UI：勾選 + app_confirm_changeset 呼叫 + 高風險二次確認', () => {
+    expect(existsSync(builtChangeset)).toBe(true)
+    const html = readFileSync(builtChangeset, 'utf8')
+    // Task 12（T6 PASS 分支）：nonce+diff_version 通道、逐筆勾選、確認/拒絕、高風險 banner。
+    // 中文按鈕文字在 esbuild 輸出中會被轉成 \uXXXX 逸出序列，故以下只斷言 ASCII 識別字/常數，
+    // 不斷言中文字面（那些已由 tests/ui/panelApproval.test.ts 之類的行為測試涵蓋，見 CI 全綠）。
+    expect(html).toContain('app_confirm_changeset')
+    expect(html).toContain('confirmed_keys')
+    expect(html).toContain('diff_version')
+    expect(html).toContain('checkbox')
+    expect(html).toContain('DIFF_STALE')
+    expect(html).toContain('doConfirm')
+    expect(html).toContain('renderApprovalControls')
+    expect(html).toContain('showHighRiskConfirm')
+    expect(html).toContain('HIGH_RISK_ACTIONS')
+    expect(html).toContain('inventory_setting') // 高風險 action_type 白名單
+  })
 })

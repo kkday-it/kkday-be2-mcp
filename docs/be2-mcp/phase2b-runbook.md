@@ -8,6 +8,10 @@ Phase 2a 的確認頁用**一次性 capability token**（URL 裡的 `?token=`）
 
 **這是本次的核心安全升級**：agent 沒有、也不可能有 be2-auth 的登入 session（它只有一組 MCP bearer，跟確認頁的 web session 是兩套完全獨立的憑證）。即使 agent 把 `changeset_id` 講出來、甚至猜/組出舊版的 `?token=` 參數，確認頁一律先看 cookie；沒有合法 session 一律導去登入頁，永遠碰不到批准/執行的程式碼路徑。見下方「自我批准漏洞已關閉」。
 
+## MCP Apps 接入（面板批准，另一條通道）
+
+本文件講的確認頁是**批准的其中一條通道**、且是**唯一對 Claude Code（終端機 host）可用**的一條。若你用的是 **Claude Desktop**（支援 MCP Apps），change-set 建立後會多一顆互動面板，可以直接在面板裡逐筆勾選、按「確認執行」/「拒絕」——不必開瀏覽器到確認頁。面板批准走**獨立的 nonce 通道**（app-only 工具、model 拿不到 nonce，安全前提與確認頁的 session cookie 不同但等價），設定方式（`claude_desktop_config.json`、`mcp-remote` shim、`npm run build:ui` 前置）見 `docs/be2-mcp/mcp-apps-runbook.md`。兩條通道可以並存、互不干擾：同一個 change-set 誰先按下批准/拒絕（CAS 保證只有一邊生效），另一邊會拿到 `ALREADY_PROCESSED`。
+
 ## 前置需求
 
 - 公司網路或 VPN（能連 be2-auth `auth-220.sit.kkday.com` 開登入彈窗）。
