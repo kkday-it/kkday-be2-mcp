@@ -4,7 +4,6 @@ import { openDb } from '../src/store/db.js'
 import { ChangeSetStore } from '../src/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
-import { TokenStore } from '../src/store/tokenStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { AuthError } from '../src/errors.js'
 import { buildConfirmRouter } from '../src/server/confirmRoutes.js'
@@ -63,8 +62,8 @@ beforeEach(async () => {
   } as never
 
   const sessionTokens: Record<string, { accessToken: string; userLabel: string }> = {
-    [TokenStore.hashBearer(SID_A)]: { accessToken: 'sess-tok-A', userLabel: 'owner@kkday.com' },
-    [TokenStore.hashBearer(SID_B)]: { accessToken: 'sess-tok-B', userLabel: 'other@kkday.com' },
+    [CredentialStore.hash(SID_A)]: { accessToken: 'sess-tok-A', userLabel: 'owner@kkday.com' },
+    [CredentialStore.hash(SID_B)]: { accessToken: 'sess-tok-B', userLabel: 'other@kkday.com' },
   }
   const tokenManager = {
     getFreshByCredHash: async (hash: string) => {

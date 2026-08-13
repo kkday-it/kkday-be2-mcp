@@ -9,7 +9,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server'
 import { z } from 'zod'
 import { openDb } from '../src/store/db.js'
-import { TokenStore } from '../src/store/tokenStore.js'
+import { randomUUID } from 'node:crypto'
+import { IdentityStore } from '../src/store/identityStore.js'
+import { CredentialStore } from '../src/store/credentialStore.js'
 import type { Config } from '../src/config.js'
 import type Database from 'better-sqlite3'
 
@@ -59,10 +61,14 @@ describe('app-only tools 的 capability-gate（透過真實 buildApp /mcp path�
 
   beforeAll(async () => {
     db = openDb(':memory:')
-    new TokenStore(db).upsert({
-      bearerHash: TokenStore.hashBearer(BEARER), userLabel: 'pilot@kkday.com',
+    const identityId = randomUUID()
+    new IdentityStore(db).upsert({
+      identityId, userLabel: 'pilot@kkday.com',
       accessToken: fakeJwt(Math.floor(Date.now() / 1000) + 3600), refreshToken: 'r', businessList: [],
       accessExpiresAt: Date.now() + 3600_000, updatedAt: Date.now(),
+    })
+    new CredentialStore(db).insert({
+      credHash: CredentialStore.hash(BEARER), identityId, kind: 'static_bearer', expiresAt: null, updatedAt: Date.now(),
     })
     const config: Config = {
       authsvcUrl: 'https://auth.invalid', gatewayUrl: 'https://gw.invalid',

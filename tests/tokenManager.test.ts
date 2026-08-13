@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { openDb } from '../src/store/db.js'
-import { TokenStore } from '../src/store/tokenStore.js'
+import { IdentityStore } from '../src/store/identityStore.js'
+import { CredentialStore } from '../src/store/credentialStore.js'
 import { TokenManager } from '../src/auth/tokenManager.js'
 import { AppError, AuthError } from '../src/errors.js'
 
@@ -10,13 +11,17 @@ function fakeJwt(expSec: number): string {
 }
 
 function setup(expiresInMs: number) {
-  const store = new TokenStore(openDb(':memory:'))
+  const db = openDb(':memory:')
+  const identities = new IdentityStore(db)
+  const credentials = new CredentialStore(db)
   const now = 1_000_000_000_000
-  store.upsert({
-    bearerHash: TokenStore.hashBearer('b1'), userLabel: 'pilot@kkday.com',
+  const identityId = 'ident-b1'
+  identities.upsert({
+    identityId, userLabel: 'pilot@kkday.com',
     accessToken: 'old-access', refreshToken: 'old-refresh', businessList: [],
     accessExpiresAt: now + expiresInMs, updatedAt: now,
   })
+  credentials.insert({ credHash: CredentialStore.hash('b1'), identityId, kind: 'static_bearer', expiresAt: null, updatedAt: now })
   const freshJwt = fakeJwt(Math.floor((now + 50 * 60_000) / 1000))
   let calls = 0
   const auth = {
@@ -26,8 +31,8 @@ function setup(expiresInMs: number) {
       return { accessToken: freshJwt, refreshToken: `r-${calls}`, businessList: [{ fresh: true }] }
     }),
   }
-  const mgr = new TokenManager({ identities: store.identities, credentials: store.credentials }, auth as never, { now: () => now })
-  return { mgr, store, auth, freshJwt }
+  const mgr = new TokenManager({ identities, credentials }, auth as never, { now: () => now })
+  return { mgr, identities, identityId, auth, freshJwt }
 }
 
 describe('TokenManager', () => {
@@ -38,11 +43,11 @@ describe('TokenManager', () => {
     expect(auth.refresh).not.toHaveBeenCalled()
   })
   it('refreshes when within skew, persists rotated tokens + fresh businessList', async () => {
-    const { mgr, store, auth, freshJwt } = setup(60_000) // 1min left < 5min skew
+    const { mgr, identities, identityId, auth, freshJwt } = setup(60_000) // 1min left < 5min skew
     const ctx = await mgr.getFreshAccessToken('b1')
     expect(auth.refresh).toHaveBeenCalledWith('old-refresh')
     expect(ctx.accessToken).toBe(freshJwt)
-    const rec = store.getByBearer('b1')!
+    const rec = identities.get(identityId)!
     expect(rec.refreshToken).toBe('r-1')
     expect(rec.businessList).toEqual([{ fresh: true }])
   })

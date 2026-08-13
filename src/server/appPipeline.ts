@@ -6,7 +6,7 @@ import type { GatewayClient } from '../gateway/client.js'
 import type { ChangeSetStore } from '../changeset/store.js'
 import type { ApprovalNonceStore } from '../changeset/approvalNonce.js'
 import type { AppRateBudget } from '../limits/appRateBudget.js'
-import { TokenStore } from '../store/tokenStore.js'
+import { CredentialStore } from '../store/credentialStore.js'
 import type { Envelope } from '../tools/envelope.js'
 import { AppError, AuthError, RateError } from '../errors.js'
 import { approveAndExecute as approveAndExecuteService, type ApproveParams, type ApproveResult } from '../changeset/confirmService.js'
@@ -79,7 +79,7 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
         deps.appRateBudget.consume(reqCtx.sessionId)   // 獨立限流，不碰 RateBudget
         const envelope = await tool.handler(args, {
           gateway: deps.gateway, accessToken: user.accessToken, userLabel,
-          sessionId: reqCtx.sessionId, bearerHash: TokenStore.hashBearer(reqCtx.bearer),
+          sessionId: reqCtx.sessionId, bearerHash: CredentialStore.hash(reqCtx.bearer),
           businessList: user.businessList, changeSets: deps.changeSets, nonces: deps.nonces,
           now: deps.now, genId: deps.genId,
           baseUrl: deps.baseUrl,

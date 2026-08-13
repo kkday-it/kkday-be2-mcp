@@ -3,15 +3,10 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 const MIGRATIONS = `
-CREATE TABLE IF NOT EXISTS user_tokens (
-  bearer_hash        TEXT PRIMARY KEY,
-  user_label         TEXT NOT NULL,
-  access_token       TEXT NOT NULL,
-  refresh_token      TEXT NOT NULL,
-  business_list_json TEXT NOT NULL,
-  access_expires_at  INTEGER NOT NULL,
-  updated_at         INTEGER NOT NULL
-);
+-- Task 5 (Phase A 收尾): user_tokens 是 Phase 1a 的扁平 token 表，已被
+-- be2_identities + credentials（見下）取代；TokenStore 相容 adapter 已刪除，這裡
+-- 硬砍舊表（fresh :memory: db 本來就沒有這張表，這行只對既有 on-disk db 生效）。
+DROP TABLE IF EXISTS user_tokens;
 CREATE TABLE IF NOT EXISTS audit_log (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   ts           INTEGER NOT NULL,

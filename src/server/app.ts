@@ -5,7 +5,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import type Database from 'better-sqlite3'
 import type { Config } from '../config.js'
-import { TokenStore } from '../store/tokenStore.js'
+import { IdentityStore } from '../store/identityStore.js'
+import { CredentialStore } from '../store/credentialStore.js'
 import { ReadOidStore } from '../store/readOidStore.js'
 import { TokenManager } from '../auth/tokenManager.js'
 import { AuthServiceClient } from '../auth/authServiceClient.js'
@@ -81,15 +82,27 @@ export function modifyUserFromPlaceholder(accessToken: string): string {
 }
 
 export function buildApp({ config, db }: ServerDeps): express.Express {
-  const store = new TokenStore(db)
+  // Task 5：identities/credentials 直接對映 db 兩張表（無內部狀態的薄包裝），不再經
+  // TokenStore 扁平相容 adapter——該 adapter 已隨 Task 1-4 的呼叫端遷移完畢，此任務刪除。
+  const identities = new IdentityStore(db)
+  const credentials = new CredentialStore(db)
+  // 一個 credential 被砍時：若同 identity 已無任何其他 credential 引用，一併砍掉 identity；
+  // 否則保留（同一 identity 常見同時掛 static_bearer + web_session 兩個 credential 並存）。
+  // 供下方 WebSessionStore 的 onDelete 使用（session 登出/idle-expiry/dead-session 皆需回收
+  // 它所擁有的 be2 token，見 Fix 2）。
+  function purgeCredential(hash: string): void {
+    const cred = credentials.get(hash)
+    if (!cred) return
+    credentials.delete(hash)
+    if (credentials.countByIdentity(cred.identityId) === 0) identities.delete(cred.identityId)
+  }
   // Shared across the tool pipeline (TokenManager) and the SSO router (Task 6): both need to
   // exchange/refresh be2 tokens against the same auth-service client, and reusing one instance
   // avoids duplicate config parsing / connection setup.
   const authServiceClient = new AuthServiceClient({ baseUrl: config.authsvcUrl, serviceKey: config.serviceKey })
   // Task 2: TokenManager 直接操作 identity 層（be2 refresh 只在 identity 這格 rotate 一次，
-  // 多個 credential 共用同一 identity 時不會互撞）。identities/credentials 只是 db 的薄包裝
-  // （無內部狀態），沿用 store 內部已 new 好的那兩份即可，不必再對同一個 db 另建一組。
-  const tokenManager = new TokenManager({ identities: store.identities, credentials: store.credentials }, authServiceClient)
+  // 多個 credential 共用同一 identity 時不會互撞）。
+  const tokenManager = new TokenManager({ identities, credentials }, authServiceClient)
   const rateBudget = new RateBudget(db)
   const audit = new AuditLog(db)
   const gateway = new GatewayClient({ baseUrl: config.gatewayUrl })
@@ -100,14 +113,12 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // confirm router (reads sessions to authorize approve/reject).
   // Fix 2 (whole-branch review): every web-session removal (logout, dead-session, idle-expiry —
   // all three funnel through WebSessionStore#delete) must also purge the be2 access+refresh
-  // token that session owns (stored under hash(sessionId) in user_tokens by ssoRoutes.ts), or the
-  // token is orphaned at rest forever with no session left able to reach it.
-  // Task 4 note: since Task 2/3, deleteByBearerHash already operates purely on the credentials/
-  // identities tables and is kind-agnostic (it deletes whatever credential matches the hash, then
-  // drops the identity only if no credential of ANY kind still references it) — so this callback
-  // needs no change now that ssoRoutes.ts mints a 'web_session'-kind credential here instead of
-  // 'static_bearer': hash(sessionId) still resolves to exactly the credential this session owns.
-  const webSessions = new WebSessionStore(db, { onDelete: sid => store.deleteByBearerHash(TokenStore.hashBearer(sid)) })
+  // token that session owns (the credential keyed by hash(sessionId), minted 'web_session' by
+  // ssoRoutes.ts) — otherwise the token is orphaned at rest forever with no session left able to
+  // reach it. purgeCredential (above) is kind-agnostic and only drops the identity once no
+  // credential of ANY kind still references it, so a static_bearer sharing the same identity
+  // survives a confirm-page logout.
+  const webSessions = new WebSessionStore(db, { onDelete: sid => purgeCredential(CredentialStore.hash(sid)) })
   const authOrigin = new URL(config.authsvcUrl).origin
 
   const deps: PipelineDeps = { tokenManager, rateBudget, audit, gateway, readOids }
@@ -139,9 +150,13 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   }
 
   const transports = new Map<string, StreamableHTTPServerTransport>()
-  // Binds a session-id to the bearer that created it (spec §6.2): prevents an enrolled
-  // bearer B from reusing bearer A's mcp-session-id to piggyback on A's session state
-  // (read_oids, rate budget) while acting — and being audited — as A.
+  // Binds a session-id to the IDENTITY the creating bearer resolved to (spec §6.2) — not to the
+  // bearer's own credential hash. Task 5: this is what lets an OAuth reference token rotate
+  // (Phase B) without severing an in-flight MCP session — a rotated token mints a NEW credential
+  // row but keeps pointing at the SAME identity_id, so the owner check below still matches. It
+  // still prevents an unrelated bearer B from reusing bearer A's mcp-session-id to piggyback on
+  // A's session state (read_oids, rate budget) while acting — and being audited — as A, since a
+  // different identity always yields a different value here.
   const sessionOwner = new Map<string, string>()
 
   // caps = client 在 initialize 宣告的 capabilities（見 /mcp handler 的 initCaps）。只對支援 MCP
@@ -200,22 +215,25 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // matches routes in registration order, not by specificity — if the confirm router mounted
   // first, /confirm/:id would swallow /confirm/login (treating "login" as a change-set id) and
   // the login page would be unreachable. The SSO router MUST be mounted first.
-  app.use(buildSsoRouter({ authServiceClient, tokenStore: store, webSessions, authOrigin, now: Date.now }))
+  app.use(buildSsoRouter({ authServiceClient, identities, credentials, webSessions, authOrigin, now: Date.now }))
   app.use(buildConfirmRouter({
-    // Task 4: requireSession's credential-kind gate needs the same credentials store the SSO
-    // router mints web_session credentials into — store.credentials (already the shared
-    // TokenStore-backed CredentialStore instance; no separate store to wire up).
-    changeSets, gateway, tokenManager, audit, webSessions, credentials: store.credentials,
+    // Task 5: requireSession's credential-kind gate needs the same CredentialStore instance the
+    // SSO router mints web_session credentials into — the shared `credentials` above (no
+    // TokenStore adapter layer to route through anymore).
+    changeSets, gateway, tokenManager, audit, webSessions, credentials,
     modifyUserFrom: modifyUserFromPlaceholder,
     now: Date.now,
   }))
 
   app.all('/mcp', (req, res) => {
     void (async () => {
-      // Fast bearer gate: known-bearer check only (NO refresh here — pipeline refreshes per tool call).
+      // Fast bearer gate: known-credential check only (NO refresh here — pipeline refreshes per
+      // tool call). Task 5: looks up the credential directly (OAuth reference token and Phase 1a
+      // static bearer both resolve here — CredentialStore doesn't distinguish them by shape).
       const auth = req.header('authorization') ?? ''
       const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : ''
-      if (!bearer || !store.getByBearer(bearer)) {
+      const cred = bearer ? credentials.getBySecret(bearer) : undefined
+      if (!cred) {
         res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'unknown or missing bearer — run bootstrap-user' } })
         return
       }
@@ -233,11 +251,11 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
           : req.body?.method === 'initialize' ? req.body?.params?.capabilities : undefined
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: randomUUID,
-          onsessioninitialized: id => { transports.set(id, transport!); sessionOwner.set(id, TokenStore.hashBearer(bearer)) },
+          onsessioninitialized: id => { transports.set(id, transport!); sessionOwner.set(id, cred.identityId) },
           onsessionclosed: id => { transports.delete(id); sessionOwner.delete(id); appRateBudget.release(id) },
         })
         await newServer(initCaps).connect(transport)
-      } else if (sessionOwner.get(sessionId!) !== TokenStore.hashBearer(bearer)) {
+      } else if (sessionOwner.get(sessionId!) !== cred.identityId) {
         res.status(403).json({ error: { code: 'SESSION_OWNER_MISMATCH', message: 'session does not belong to this bearer' } })
         return
       }

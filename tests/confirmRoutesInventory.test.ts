@@ -4,7 +4,6 @@ import { openDb } from '../src/store/db.js'
 import { ChangeSetStore } from '../src/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
-import { TokenStore } from '../src/store/tokenStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { buildConfirmRouter } from '../src/server/confirmRoutes.js'
 import type { Server } from 'node:http'
@@ -71,7 +70,7 @@ beforeEach(async () => {
   gw = fakeGw({ qty: { '2026-08-15': 10 } })
 
   const sessionTokens: Record<string, { accessToken: string; userLabel: string }> = {
-    [TokenStore.hashBearer(SID)]: { accessToken: 'sess-tok', userLabel: USER_LABEL },
+    [CredentialStore.hash(SID)]: { accessToken: 'sess-tok', userLabel: USER_LABEL },
   }
   const tokenManager = {
     getFreshByCredHash: async (hash: string) => {

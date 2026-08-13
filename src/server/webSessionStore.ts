@@ -12,11 +12,11 @@ export interface WebSession { sessionId: string; identityId: string; createdAt: 
 export class WebSessionStore {
   private now: () => number
   private idleTtlMs: number
-  // Phase 2b fix: session teardown must also purge the be2 token this session owns (in
-  // user_tokens, keyed by hash(sessionId) — see ssoRoutes.ts). Rather than duplicate that
-  // knowledge here, delete() (the single row-removal path — idle-expiry in get() delegates to
-  // it too) notifies this optional callback so the caller (app.ts) can wire up the purge without
-  // WebSessionStore needing to know about TokenStore.
+  // Phase 2b fix: session teardown must also purge the be2 token this session owns (the
+  // credentials/be2_identities rows keyed by hash(sessionId) — see ssoRoutes.ts). Rather than
+  // duplicate that knowledge here, delete() (the single row-removal path — idle-expiry in get()
+  // delegates to it too) notifies this optional callback so the caller (app.ts) can wire up the
+  // purge without WebSessionStore needing to know about CredentialStore/IdentityStore.
   private onDelete?: (sessionId: string) => void
   constructor(private db: Database.Database, opts: { now?: () => number; idleTtlMs?: number; onDelete?: (sessionId: string) => void } = {}) {
     this.now = opts.now ?? Date.now

@@ -6,7 +6,7 @@ import type { AuditLog } from '../audit/auditLog.js'
 import type { GatewayClient } from '../gateway/client.js'
 import type { ReadOidStore } from '../store/readOidStore.js'
 import type { ChangeSetStore } from '../changeset/store.js'
-import { TokenStore } from '../store/tokenStore.js'
+import { CredentialStore } from '../store/credentialStore.js'
 import type { ToolDef } from '../tools/types.js'
 import type { L2ToolDef, L2ToolContext } from './l2Context.js'
 import type { Envelope } from '../tools/envelope.js'
@@ -121,7 +121,7 @@ export function wrapL2Tool(tool: L2ToolDef, deps: L2PipelineDeps) {
       accessToken: user.accessToken,
       userLabel: user.userLabel,
       sessionId: reqCtx.sessionId,
-      bearerHash: TokenStore.hashBearer(reqCtx.bearer),
+      bearerHash: CredentialStore.hash(reqCtx.bearer),
       businessList: user.businessList,
       readOids: deps.readOids,
       changeSets: deps.changeSets,

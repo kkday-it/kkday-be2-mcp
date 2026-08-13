@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import express from 'express'
 import type { Server } from 'node:http'
 import { openDb } from '../src/store/db.js'
-import { TokenStore } from '../src/store/tokenStore.js'
+import { IdentityStore } from '../src/store/identityStore.js'
+import { CredentialStore } from '../src/store/credentialStore.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 import { buildSsoRouter } from '../src/server/ssoRoutes.js'
 
@@ -10,13 +11,14 @@ function fakeJwt(claims: object): string {
   const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url')
   return `${b64({ alg: 'HS256' })}.${b64(claims)}.sig`
 }
-let server: Server, base: string, tokenStore: TokenStore, webSessions: WebSessionStore
+let server: Server, base: string, identities: IdentityStore, credentials: CredentialStore, webSessions: WebSessionStore
 beforeEach(async () => {
   const db = openDb(':memory:')
-  tokenStore = new TokenStore(db); webSessions = new WebSessionStore(db, { now: () => 1000 })
+  identities = new IdentityStore(db); credentials = new CredentialStore(db)
+  webSessions = new WebSessionStore(db, { now: () => 1000 })
   const jwt = fakeJwt({ authKey: 'approver@kkday.com', exp: Math.floor(Date.now() / 1000) + 3000 })
   const authServiceClient = { exchangeCode: async (_c: string) => ({ accessToken: jwt, refreshToken: 'r', businessList: [] }) } as never
-  const router = buildSsoRouter({ authServiceClient, tokenStore, webSessions, authOrigin: 'https://auth-220.sit.kkday.com', now: () => 1000 })
+  const router = buildSsoRouter({ authServiceClient, identities, credentials, webSessions, authOrigin: 'https://auth-220.sit.kkday.com', now: () => 1000 })
   const app = express(); app.use(express.json()); app.use(router)
   server = app.listen(0); await new Promise(r => server.on('listening', r as () => void))
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
@@ -44,12 +46,13 @@ describe('SSO routes', () => {
     // Task 4: web_sessions now stores identity_id (not userLabel directly) — the identity it
     // points at is what carries the userLabel.
     const sess = webSessions.get(sid)!
-    expect(tokenStore.identities.get(sess.identityId)!.userLabel).toBe('approver@kkday.com')
+    expect(identities.get(sess.identityId)!.userLabel).toBe('approver@kkday.com')
     // the credential minted for this cookie must be kind='web_session' (Task 4 kind gate) —
-    // never 'static_bearer', which is what the old TokenStore.upsert path would have produced.
-    expect(tokenStore.credentials.getBySecret(sid)!.kind).toBe('web_session')
-    // the be2 token was stored under hashBearer(sessionId) so getFreshByHash works later
-    expect(tokenStore.getByBearerHash(TokenStore.hashBearer(sid))!.userLabel).toBe('approver@kkday.com')
+    // never 'static_bearer', which is what enroll.ts's static-bearer path would have produced.
+    const cred = credentials.getBySecret(sid)!
+    expect(cred.kind).toBe('web_session')
+    // the be2 token was stored under hash(sessionId) so getFreshByCredHash works later
+    expect(identities.get(cred.identityId)!.userLabel).toBe('approver@kkday.com')
   })
   it('POST /confirm/session rejects a missing code', async () => {
     const r = await fetch(`${base}/confirm/session`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })

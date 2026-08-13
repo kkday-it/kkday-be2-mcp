@@ -4,7 +4,8 @@ import { buildApp } from '../src/server/app.js'
 import { openDb } from '../src/store/db.js'
 import { ChangeSetStore } from '../src/changeset/store.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
-import { TokenStore } from '../src/store/tokenStore.js'
+import { IdentityStore } from '../src/store/identityStore.js'
+import { CredentialStore } from '../src/store/credentialStore.js'
 import type { Config } from '../src/config.js'
 import type Database from 'better-sqlite3'
 
@@ -49,22 +50,23 @@ function seed(id: string, creatorLabel = 'owner@kkday.com') {
 }
 
 // Task 4: a real confirm-page session is a 'web_session'-kind credential (minted by ssoRoutes.ts's
-// /confirm/session), not the generic 'static_bearer' TokenStore.upsert() produces. Mint it the
-// same way here — via the same TokenStore instance's public identities/credentials stores —
-// so requireSession's credential-kind gate accepts these fixture sessions exactly like a real
-// be2-auth SSO login would.
+// /confirm/session), not the generic 'static_bearer' enroll.ts produces. Mint it the same way
+// here — via IdentityStore/CredentialStore directly against the shared `db` — so requireSession's
+// credential-kind gate accepts these fixture sessions exactly like a real be2-auth SSO login would.
 function seedSession(sid: string, userLabel: string) {
-  const tokenStore = new TokenStore(db)
+  const identities = new IdentityStore(db)
+  const credentials = new CredentialStore(db)
   const identityId = `ident-${sid}`
-  tokenStore.identities.upsert({
+  identities.upsert({
     identityId, userLabel,
     accessToken: fakeJwt({ authKey: userLabel }), refreshToken: 'r', businessList: [],
     accessExpiresAt: Date.now() + 3600_000, updatedAt: Date.now(),
   })
-  tokenStore.credentials.insert({
-    credHash: TokenStore.hashBearer(sid), identityId, kind: 'web_session', expiresAt: null, updatedAt: Date.now(),
+  credentials.insert({
+    credHash: CredentialStore.hash(sid), identityId, kind: 'web_session', expiresAt: null, updatedAt: Date.now(),
   })
   webSessions.create(sid, identityId)
+  return identityId
 }
 
 async function startApp(gatewayUrl = 'https://gw.invalid'): Promise<void> {
@@ -138,24 +140,47 @@ describe('phase2b security — IDOR (a different be2 user cannot touch your chan
   })
 })
 
+// Resolves the be2 identity a session secret's credential currently points at (undefined once the
+// credential — and, if orphaned, the identity — has been purged). Mirrors what
+// TokenStore.getByBearerHash used to answer, without the deleted adapter.
+function identityFor(secret: string) {
+  const cred = new CredentialStore(db).get(CredentialStore.hash(secret))
+  if (!cred) return undefined
+  return new IdentityStore(db).get(cred.identityId)
+}
+
 describe('phase2b security — session teardown purges the be2 token, not just the web-session row (Fix 2)', () => {
   it('POST /confirm/logout purges the be2 token for that session', async () => {
-    const hash = TokenStore.hashBearer('sid-owner')
-    expect(new TokenStore(db).getByBearerHash(hash)).toBeDefined()
+    expect(identityFor('sid-owner')).toBeDefined()
     const res = await fetch(`${base}/confirm/logout`, { method: 'POST', headers: { cookie: 'be2mcp_sid=sid-owner' } })
     expect(res.status).toBe(200)
-    expect(new TokenStore(db).getByBearerHash(hash)).toBeUndefined()
+    expect(identityFor('sid-owner')).toBeUndefined()
   })
 
   it('an idle-expired session, once lazily reaped by requireSession, also purges its be2 token', async () => {
-    const hash = TokenStore.hashBearer('sid-owner')
     // The app's own WebSessionStore instance has no fake clock injected (default idleTtlMs 8h) —
     // backdate last_seen_at directly to simulate 9h of inactivity without a real wait.
     db.prepare('UPDATE web_sessions SET last_seen_at = ? WHERE session_id = ?').run(Date.now() - 9 * 3600_000, 'sid-owner')
-    expect(new TokenStore(db).getByBearerHash(hash)).toBeDefined()
+    expect(identityFor('sid-owner')).toBeDefined()
     const res = await fetch(`${base}/confirm/anything`, { headers: { cookie: 'be2mcp_sid=sid-owner' }, redirect: 'manual' })
     expect(res.status).toBe(302) // idle-expired -> requireSession treats as no-session -> login redirect
-    expect(new TokenStore(db).getByBearerHash(hash)).toBeUndefined()
+    expect(identityFor('sid-owner')).toBeUndefined()
+  })
+
+  it('logout of one credential does NOT orphan an identity another credential (e.g. the Phase 1a static bearer) still references', async () => {
+    // Non-vacuous against purgeCredential's identity-survival branch (src/server/app.ts): if
+    // purgeCredential unconditionally deleted the identity instead of checking
+    // countByIdentity(...) === 0 first, this would fail — the static_bearer credential minted
+    // below would be orphaned even though it never logged out.
+    const credentials = new CredentialStore(db)
+    const sharedIdentityId = seedSession('sid-shared', 'shared@kkday.com')
+    credentials.insert({ credHash: CredentialStore.hash('static-bearer-shared'), identityId: sharedIdentityId, kind: 'static_bearer', expiresAt: null, updatedAt: Date.now() })
+
+    const res = await fetch(`${base}/confirm/logout`, { method: 'POST', headers: { cookie: 'be2mcp_sid=sid-shared' } })
+    expect(res.status).toBe(200)
+
+    expect(identityFor('sid-shared')).toBeUndefined()               // the web_session credential is gone
+    expect(identityFor('static-bearer-shared')).toBeDefined()       // the identity + sibling credential survive
   })
 })
 

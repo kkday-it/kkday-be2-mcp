@@ -1,7 +1,6 @@
-import { TokenStore } from '../store/tokenStore.js'
 import type { Identity } from '../store/identityStore.js'
 import type { IdentityStore } from '../store/identityStore.js'
-import type { CredentialStore } from '../store/credentialStore.js'
+import { CredentialStore } from '../store/credentialStore.js'
 import type { AuthServiceClient } from './authServiceClient.js'
 import { decodeJwtExpMs } from './jwt.js'
 import { AppError, AuthError } from '../errors.js'
@@ -27,18 +26,13 @@ export class TokenManager {
     this.now = opts.now ?? Date.now
   }
 
-  /** 舊呼叫端相容用薄包裝——bearer 的 secret hash 即 credential 的 credHash。 */
+  /** 呼叫端慣用入口——bearer 的 secret hash 即 credential 的 credHash。 */
   async getFreshAccessToken(bearer: string): Promise<UserAuthContext> {
     return this.getFreshBySecret(bearer)
   }
 
-  /** 舊呼叫端相容用薄包裝。 */
-  async getFreshByHash(bearerHash: string): Promise<UserAuthContext> {
-    return this.getFreshByCredHash(bearerHash)
-  }
-
   async getFreshBySecret(secret: string): Promise<UserAuthContext> {
-    return this.getFreshByCredHash(TokenStore.hashBearer(secret))
+    return this.getFreshByCredHash(CredentialStore.hash(secret))
   }
 
   async getFreshByCredHash(credHash: string): Promise<UserAuthContext> {

@@ -29,3 +29,12 @@ it('deleteByIdentity 清掉該 identity 全部 credential', () => {
   cs.deleteByIdentity('I1')
   expect(cs.getBySecret('x')).toBeUndefined()
 })
+// 遷移自 tests/tokenStore.test.ts（Task 5 刪除 TokenStore adapter 時搬移）：這條測的是
+// db.ts 的 schema trigger，與 TokenStore 本身無關，故獨立保留於此。
+it('audit_log rejects UPDATE and DELETE (append-only triggers)', () => {
+  const d = db()
+  d.prepare(`INSERT INTO audit_log (ts, user_label, session_id, client_info, tool, params_json, status, trace_id, duration_ms)
+              VALUES (1,'u','s','c','t','{}','ok','tr',5)`).run()
+  expect(() => d.prepare(`UPDATE audit_log SET status='hacked'`).run()).toThrow(/append-only/)
+  expect(() => d.prepare(`DELETE FROM audit_log`).run()).toThrow(/append-only/)
+})
