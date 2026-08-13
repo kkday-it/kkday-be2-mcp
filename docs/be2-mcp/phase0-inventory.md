@@ -108,6 +108,7 @@
 - **SIT live 實測（A8）**：be2-web 就是用 `auth-220/auth/be2/login?loginFlow=POPUP`（popup + postMessage）跑通。換碼在 be2-web **後端**做（`/v2/api/v1/auth/login-authorization-code/{uuid}`）= be2-mcp 要照抄的模式。
 - **剩下小確認**：(1) be2-mcp 若用 REDIRECT flow（非 POPUP），`redirectPath` 跨網域是否被 `validateOrigin`/allowlist 擋——POPUP 模式已證可用、可直接沿用；(2) POPUP 的 postMessage origin 檢查。**不是要對方開發新功能。**
 - **不解會怎樣**：退回 fallback（be2-mcp 自架登入頁打 REST），能動但 Claude 與確認頁各自登一次、失去 SSO 無縫。
+- **登入腿定案（2026-08-13，OAuth `/oauth/authorize` Task 8 spike + Task 9 落地）：選 POPUP，REDIRECT 延後不做。** POPUP 已 SIT 實測跑通（A8）、可直接復用確認頁 `ssoRoutes.ts` 的 `exchangeCodeToIdentity` + postMessage + origin 檢查機制，實作面零未知；REDIRECT 的跨網域 `redirectPath` allowlist 行為仍未實證，賭它可行會引入一個 live 阻擋點，故不採用。功能等價、對 Claude Code/Desktop 的 OAuth 客戶端無影響（它只在意拿到 authz code 回 redirect_uri）。決策記錄與取捨見 `docs/be2-mcp/spike-oauth-login-leg.md`；接入步驟見 `docs/be2-mcp/oauth-runbook.md`。REDIRECT 若日後想換取更教科書的體驗，留待獨立 live spike，非本波阻擋項。
 
 ### B3 — ingress（誰能連進來）→ 本情境🟢不需要公網（2026-08-09 釐清）
 - **「ingress」= 誰能對 be2-mcp 發起連線**。分 client 看：

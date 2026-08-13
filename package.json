@@ -11,6 +11,7 @@
     "probe-sit": "tsx scripts/probe-sit.ts",
     "probe-sit-write": "tsx scripts/probe-sit-write.ts",
     "probe-sit-inventory": "tsx scripts/probe-sit-inventory.ts",
+    "oauth-purge": "tsx scripts/oauth-purge.ts",
     "build:ui": "node scripts/build-ui.mjs",
     "ci": "npm run build:ui && npm run typecheck && npm run test"
   },

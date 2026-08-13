@@ -44,6 +44,8 @@
 - `test` — 跑 vitest 單元/整合測試。
 - `ci` — `typecheck` + `test`，本地重現 CI gate。
 - `eval` — 跑 agent-eval 案例（需 `ANTHROPIC_API_KEY`；沒設會 SKIP，不算失敗）。
-- `bootstrap-user` — pilot 使用者登入 auth-service 換 be2 token，存進 server 端 SQLite store，印出一次性的 static bearer 供 `claude mcp add` 用（見 `docs/be2-mcp/phase1a-runbook.md`）。
+- **OAuth 接入（首選）** — Claude Code / Desktop 直接 `claude mcp add be2-mcp --transport http http://127.0.0.1:8787/mcp`（不帶 `--header`），瀏覽器跳轉 be2-auth POPUP 登入，免手貼 bearer。步驟、與 static bearer 的關係、SSO-seamless 確認頁行為，見 `docs/be2-mcp/oauth-runbook.md`。
+- `bootstrap-user` — **headless/過渡 fallback**（無瀏覽器環境、CI、或 OAuth 外殼故障時的應急通道）：pilot 使用者登入 auth-service 換 be2 token，存進 server 端 SQLite store，印出一次性的 static bearer 供 `claude mcp add --header` 用（見 `docs/be2-mcp/phase1a-runbook.md`）。
+- `oauth-purge` — 硬刪過期 `oauth_auth_codes`/`oauth_refresh` + 無 credential 引用的 ghost `be2_identities`（見 `docs/be2-mcp/oauth-runbook.md`「Token 生命週期治理」）。建議排程每日跑一次。
 - `probe-sit` — 手動打 SIT `be2-220` 抓真實 endpoint 回應形狀，寫成 sanitized fixtures（絕不寫入 token）。
 - `probe-sit-write` — 手動、可逆地打 SIT `be2-220` 的 write endpoint（`scripts/probe-sit-write.ts`），解 `modify_user` 來源、merge-vs-replace、必填欄位；結果見 `docs/be2-mcp/sit-write-contracts.md`。**永不進 CI**，且需可寫帳號才能跑到底（目前 `.env` 帳號在寫入端點回 403，見該文件 blocker）。
