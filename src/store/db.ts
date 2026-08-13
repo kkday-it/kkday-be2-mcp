@@ -71,6 +71,23 @@ CREATE TABLE IF NOT EXISTS web_sessions (
   created_at   INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS be2_identities (
+  identity_id        TEXT PRIMARY KEY,
+  user_label         TEXT NOT NULL,
+  access_token       TEXT NOT NULL,
+  refresh_token      TEXT NOT NULL,
+  business_list_json TEXT NOT NULL,
+  access_expires_at  INTEGER NOT NULL,
+  updated_at         INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS credentials (
+  cred_hash    TEXT PRIMARY KEY,
+  identity_id  TEXT NOT NULL,
+  kind         TEXT NOT NULL,
+  expires_at   INTEGER,
+  updated_at   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_credentials_identity ON credentials(identity_id);
 `
 
 export function openDb(path: string): Database.Database {
