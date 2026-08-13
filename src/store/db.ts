@@ -116,5 +116,13 @@ export function openDb(path: string): Database.Database {
   const db = new Database(path)
   db.pragma('journal_mode = WAL')
   db.exec(MIGRATIONS)
+  // Task 10：oauth_refresh 補一欄 access_cred_hash——記錄「這顆 refresh 核發當下同批鑄出的
+  // access credential 是哪一列」，供 rotation 精準刪除舊 access（只刪這一列，不誤刪同 identity
+  // 底下其他 credential，如 web_session）。SQLite 沒有 ADD COLUMN IF NOT EXISTS，用
+  // PRAGMA table_info 檢查、只在缺欄位時補一次（對既有 on-disk db 與全新 :memory: db 都適用）。
+  const cols = db.prepare('PRAGMA table_info(oauth_refresh)').all() as Array<{ name: string }>
+  if (!cols.some(c => c.name === 'access_cred_hash')) {
+    db.exec('ALTER TABLE oauth_refresh ADD COLUMN access_cred_hash TEXT')
+  }
   return db
 }

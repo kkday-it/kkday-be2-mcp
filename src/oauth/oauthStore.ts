@@ -9,7 +9,14 @@ export interface OAuthAuthCode {
   codeHash: string; clientId: string; redirectUri: string; codeChallenge: string
   identityId: string; exp: number; consumed: number
 }
-export interface OAuthRefresh { refreshHash: string; identityId: string; clientId: string; exp: number; consumed: number }
+export interface OAuthRefresh {
+  refreshHash: string; identityId: string; clientId: string; exp: number; consumed: number
+  // Task 10: hash of the oauth_access credential minted in the SAME issuance as this refresh
+  // (authorization_code exchange or a prior rotation). Lets rotation delete exactly that one
+  // access credential instead of every oauth_access row for the identity — optional/nullable so
+  // Task 6's existing insertRefresh callers (tests/oauthStore.test.ts) keep compiling untouched.
+  accessCredHash?: string
+}
 
 export class OAuthStore {
   constructor(private db: Database.Database) {}
@@ -41,13 +48,18 @@ export class OAuthStore {
   }
 
   insertRefresh(rec: OAuthRefresh): void {
-    this.db.prepare(`INSERT INTO oauth_refresh (refresh_hash, identity_id, client_id, exp, consumed)
-      VALUES (@refreshHash,@identityId,@clientId,@exp,@consumed)`).run(rec)
+    this.db.prepare(`INSERT INTO oauth_refresh (refresh_hash, identity_id, client_id, exp, consumed, access_cred_hash)
+      VALUES (@refreshHash,@identityId,@clientId,@exp,@consumed,@accessCredHash)`)
+      .run({ ...rec, accessCredHash: rec.accessCredHash ?? null })
   }
   getRefresh(refreshHash: string): OAuthRefresh | undefined {
     const r = this.db.prepare('SELECT * FROM oauth_refresh WHERE refresh_hash = ?').get(refreshHash) as Record<string, unknown> | undefined
     if (!r) return undefined
-    return { refreshHash: r.refresh_hash as string, identityId: r.identity_id as string, clientId: r.client_id as string, exp: r.exp as number, consumed: r.consumed as number }
+    return {
+      refreshHash: r.refresh_hash as string, identityId: r.identity_id as string, clientId: r.client_id as string,
+      exp: r.exp as number, consumed: r.consumed as number,
+      accessCredHash: (r.access_cred_hash as string | null) ?? undefined,
+    }
   }
   markRefreshConsumed(refreshHash: string): void {
     this.db.prepare('UPDATE oauth_refresh SET consumed = 1 WHERE refresh_hash = ?').run(refreshHash)

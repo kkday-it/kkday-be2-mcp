@@ -25,6 +25,7 @@ import { buildSsoRouter } from './ssoRoutes.js'
 import { buildDiscoveryRouter } from '../oauth/discoveryRoutes.js'
 import { buildRegisterRouter } from '../oauth/registerRoutes.js'
 import { buildAuthorizeRouter } from '../oauth/authorizeRoutes.js'
+import { buildTokenRouter } from '../oauth/tokenRoutes.js'
 import { OAuthStore } from '../oauth/oauthStore.js'
 import { registerAppResources } from './appResources.js'
 import { findProductsTool } from '../tools/findProducts.js'
@@ -128,12 +129,16 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // client 註冊；authorization_code/refresh 由 Task 8/9 接續使用同一個 OAuthStore 實例的
   // 其他方法。
   const oauthStore = new OAuthStore(db)
+  // Task 10: shared by l2Deps/appDeps (confirm-page URLs) and the /mcp 401 gate's
+  // WWW-Authenticate header (points the client at discovery, per RFC 9728) — one literal instead
+  // of three copies of the same string.
+  const baseUrl = `http://127.0.0.1:${config.port}`
 
   const deps: PipelineDeps = { tokenManager, rateBudget, audit, gateway, readOids }
   const l2Deps: L2PipelineDeps = {
     ...deps,
     changeSets,
-    baseUrl: `http://127.0.0.1:${config.port}`,
+    baseUrl,
     genId: randomUUID,
     now: Date.now,
     // Fix 1: the confirm_url never reaches the tool response / the model's context — it is
@@ -153,7 +158,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     tokenManager, appRateBudget, audit, gateway, changeSets,
     nonces: new ApprovalNonceStore(),
     now: Date.now, genId: randomUUID,
-    baseUrl: `http://127.0.0.1:${config.port}`,
+    baseUrl,
     modifyUserFrom: modifyUserFromPlaceholder,
   }
 
@@ -230,6 +235,10 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // be2mcp_sid cookie + 鑄一次性 authz code，導回 client 的 redirect_uri。與下面的 SSO/確認頁
   // 路由共用同一批 identities/credentials/webSessions 實例。
   app.use(buildAuthorizeRouter({ oauthStore, authServiceClient, identities, credentials, webSessions, authOrigin, now: Date.now }))
+  // Task 10：token——authorize 鑄的 code 換不透明 access+refresh 的地方（PKCE S256 驗證、
+  // code 一次性、refresh rotation + reuse-detection family revoke）。公開端點（OAuth 2.1
+  // public client 用 PKCE 取代 client secret 作身分驗證，不掛 bearer middleware）。
+  app.use(buildTokenRouter({ oauthStore, credentials, identities, now: Date.now }))
   // CRITICAL route order (agy T4 finding): buildSsoRouter registers GET /confirm/login (+ POST
   // /confirm/session, /confirm/logout); buildConfirmRouter registers GET /confirm/:id. Express
   // matches routes in registration order, not by specificity — if the confirm router mounted
@@ -254,7 +263,14 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
       const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : ''
       const cred = bearer ? credentials.getBySecret(bearer) : undefined
       if (!cred) {
-        res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'unknown or missing bearer — run bootstrap-user' } })
+        // Task 10: RFC 9728 — an unauthenticated/unknown-bearer request to a protected resource
+        // should point the client at protected-resource discovery so an OAuth-aware client (the
+        // whole point of the Task 6-10 shell) can find /oauth/authorize and /oauth/token on its
+        // own instead of failing silently.
+        res
+          .status(401)
+          .set('WWW-Authenticate', `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`)
+          .json({ error: { code: 'UNAUTHORIZED', message: 'unknown or missing bearer — run bootstrap-user' } })
         return
       }
 
