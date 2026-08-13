@@ -24,6 +24,7 @@ import { buildConfirmRouter } from './confirmRoutes.js'
 import { buildSsoRouter } from './ssoRoutes.js'
 import { buildDiscoveryRouter } from '../oauth/discoveryRoutes.js'
 import { buildRegisterRouter } from '../oauth/registerRoutes.js'
+import { buildAuthorizeRouter } from '../oauth/authorizeRoutes.js'
 import { OAuthStore } from '../oauth/oauthStore.js'
 import { registerAppResources } from './appResources.js'
 import { findProductsTool } from '../tools/findProducts.js'
@@ -224,6 +225,11 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // registration_endpoint 打這裡自助建立 public client。redirect_uri allowlist 是唯一防線，
   // 見 src/oauth/redirectUri.ts。
   app.use(buildRegisterRouter({ oauthStore, genId: randomUUID }))
+  // Task 9：authorize——驗 client_id/redirect_uri(allowlist+client 註冊)/PKCE/state，通過才驅動
+  // be2-auth POPUP 登入（復用 Task 4 的 exchangeCodeToIdentity），成功後設 SSO-seamless
+  // be2mcp_sid cookie + 鑄一次性 authz code，導回 client 的 redirect_uri。與下面的 SSO/確認頁
+  // 路由共用同一批 identities/credentials/webSessions 實例。
+  app.use(buildAuthorizeRouter({ oauthStore, authServiceClient, identities, credentials, webSessions, authOrigin, now: Date.now }))
   // CRITICAL route order (agy T4 finding): buildSsoRouter registers GET /confirm/login (+ POST
   // /confirm/session, /confirm/logout); buildConfirmRouter registers GET /confirm/:id. Express
   // matches routes in registration order, not by specificity — if the confirm router mounted
