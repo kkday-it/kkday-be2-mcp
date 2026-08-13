@@ -48,6 +48,10 @@
 
 ## Phase A — identity/credential 重構（行為零回歸）
 
+> **遞增綠燈策略（agy round-1）**：refactor 的讀路徑（`/mcp` gate、requireSession）與寫路徑（enroll、sso）散在不同 task，若逐一抽換會中途炸掉。故 Phase A 用**相容 adapter**：Task 2 把 `TokenStore` **保留為 class、但內部改成架在 `IdentityStore`+`CredentialStore` 上的 adapter**（`getByBearer`/`getByBearerHash`/`upsert`/`deleteByBearerHash`/`hashBearer` 對外簽章不變，內部映射到新表：`getByBearer`→credential→identity 合成 `TokenRecord`；`upsert`→找/建 identity + 確保一筆 credential；一個 bearerHash 對一 identity＝與現行 1:1 行為等價）。→ **所有既有呼叫端（`toolPipeline.ts`、`appPipeline.ts`、`app.ts`、`confirmRoutes.ts`、`webSessionStore.ts`、`enroll.ts`）在 Task 2–4 期間完全不改也能綠**；Task 3–5 再逐一把呼叫端從 adapter 切到直接用 identity/credential（每步綠，adapter 還在）。**Task 5 最後刪除 adapter 內剩餘扁平路徑、drop `user_tokens` 表**。
+>
+> **完整呼叫端清單（實查，Task 5 必須全數不再依賴扁平 TokenStore）**：`src/auth/tokenManager.ts`、`src/auth/enroll.ts`、`src/server/ssoRoutes.ts`、`src/server/confirmRoutes.ts`、`src/server/webSessionStore.ts`、`src/server/app.ts`、`src/server/toolPipeline.ts`（`TokenStore.hashBearer(reqCtx.bearer)` → `creator_bearer_hash`）、`src/server/appPipeline.ts`（同）。`change_sets.creator_bearer_hash` 是 sha256(bearer)，`CredentialStore.hash` 同為 sha256 → 值不變、IDOR gate 用的是 `creatorLabel`（JWT authKey，Phase 2b）不受影響，但 hash 呼叫需改指向 `CredentialStore.hash`。
+
 ### Task 1: 新 schema + IdentityStore + CredentialStore
 
 **Files:**
@@ -208,7 +212,9 @@ git commit -m "feat(auth): be2_identities + credentials schema 與 store（ident
 
 **Interfaces:**
 - Consumes: `IdentityStore`, `CredentialStore`（Task 1）。
-- Produces: `TokenManager` 建構子改收 `{ identities: IdentityStore; credentials: CredentialStore }`；`getFreshBySecret(secret): Promise<UserAuthContext>`（credential→identity→lazy refresh identity）與 `getFreshByCredHash(credHash)`。`UserAuthContext` 不變。refresh 的 single-flight key 改為 `identityId`。舊 `getFreshAccessToken(bearer)`/`getFreshByHash(hash)` 保留為薄包裝（呼叫 getFreshBySecret / getFreshByCredHash），維持既有呼叫端零改動。
+- Produces:
+  - `TokenManager` 建構子改收 `{ identities: IdentityStore; credentials: CredentialStore }`；`getFreshBySecret(secret): Promise<UserAuthContext>`（credential→identity→lazy refresh identity）與 `getFreshByCredHash(credHash)`。`UserAuthContext` 不變。refresh 的 single-flight key 改為 `identityId`。舊 `getFreshAccessToken(bearer)`/`getFreshByHash(hash)` 保留為薄包裝（轉呼叫），既有呼叫端零改動。
+  - **`TokenStore` 改為相容 adapter**（同檔 `src/store/tokenStore.ts`，class 名/方法簽章不變，內部架在 `IdentityStore`+`CredentialStore`）：`getByBearerHash(h)`→`credentials.get(h)`→`identities.get(cred.identityId)`→合成 `TokenRecord`（`bearerHash=h`）；`upsert(rec)`→若 `credentials.get(rec.bearerHash)` 存在則更新其 identity 的 be2 token，否則 `identityId=randomUUID()`+`identities.upsert`+`credentials.insert(kind='static_bearer')`；`deleteByBearerHash(h)`→`credentials.delete(h)`（+ 該 identity 無其他 credential 則 `identities.delete`）；`hashBearer` 不變。→ 所有既有 TokenStore 呼叫端在 Task 2–4 期間無需改動即綠。
 
 - [ ] **Step 1: 寫失敗測試（核心：一 identity 被兩 credential 引用，refresh 只 rotate 一次、兩者皆新鮮）**
 
@@ -259,7 +265,8 @@ Expected: FAIL（`getFreshBySecret` 不存在 / 建構子簽章不符）。
 
 - [ ] **Step 3: 實作**
 
-改 `TokenManager`：建構子收 `{ identities, credentials }`；`freshFromRecord` 改成 `freshFromIdentity(identity, identityId)`；refresh rotate `identities.upsert`；single-flight key = identityId。`getFreshBySecret(secret)`：`credentials.getBySecret(secret)` → `identities.get(cred.identityId)` → freshFromIdentity。`getFreshByCredHash(credHash)` 同理。保留 `getFreshAccessToken`/`getFreshByHash` 為薄包裝（內部轉呼叫），使既有呼叫端不改。doRefresh 的 4xx→REAUTH_REQUIRED、5xx→沿用既有邏輯不變（改成寫 identity）。
+(a) 改 `TokenManager`：建構子收 `{ identities, credentials }`；`freshFromRecord` 改成 `freshFromIdentity(identity, identityId)`；refresh rotate `identities.upsert`；single-flight key = identityId。`getFreshBySecret(secret)`：`credentials.getBySecret(secret)` → `identities.get(cred.identityId)` → freshFromIdentity。`getFreshByCredHash(credHash)` 同理。保留 `getFreshAccessToken`/`getFreshByHash` 為薄包裝。doRefresh 的 4xx→REAUTH_REQUIRED、5xx 沿用既有邏輯（改成寫 identity）。
+(b) 把 `TokenStore` 改成 adapter（見 Interfaces）——**這是讓既有呼叫端零改動仍綠的關鍵**。adapter 建構子改收 `{ identities, credentials }`（或直接 new 兩個 store 於同一 db）。`app.ts` 建 TokenStore 時注入 identities/credentials。
 
 - [ ] **Step 4: 跑測試確認通過 + 全量回歸**
 
@@ -322,12 +329,16 @@ git commit -m "refactor(auth): enroll 改建 identity + static_bearer credential
 ### Task 4: 確認頁 session 走 identity/credential（kind=web_session）
 
 **Files:**
-- Modify: `src/server/ssoRoutes.ts`, `src/server/confirmRoutes.ts`, `src/server/webSessionStore.ts`
+- Modify: `src/store/db.ts`（web_sessions 加 identity_id 欄）、`src/server/ssoRoutes.ts`, `src/server/confirmRoutes.ts`, `src/server/webSessionStore.ts`, `src/server/app.ts`（onDelete 接線同 task）
 - Test: `tests/confirmRoutes.test.ts`（既有，零回歸）+ `tests/ssoIdentity.test.ts`
 
 **Interfaces:**
 - Consumes: `IdentityStore`, `CredentialStore`, `TokenManager.getFreshByCredHash`。
-- Produces: `/confirm/session` 建 identity + `credentials`(kind='web_session', credHash=hash(be2mcp_sid)) + `web_sessions` TTL 列（引用 identity_id）；`confirmRoutes.requireSession` 讀 be2mcp_sid → `credentials.getBySecret` → **驗 kind==='web_session'** → identity → `getFreshByCredHash`。WebSessionStore.onDelete 改為刪該 session 的 credential（+ 若該 identity 無其他 credential 則刪 identity）。
+- Produces:
+  - `web_sessions` 表**新增 `identity_id TEXT` 欄**（不覆用 `user_label` 塞 identity——agy round-1 語義污染）。`WebSession` 介面加 `identityId: string`；`create(sessionId, identityId)`。
+  - `/confirm/session` 建 identity + `credentials`(kind='web_session', credHash=hash(be2mcp_sid)) + `web_sessions` TTL 列（存 identity_id）。
+  - `confirmRoutes.requireSession` 讀 be2mcp_sid → `credentials.getBySecret` → **驗 kind==='web_session'**（非則 undefined，防 agent 拿 oauth token 當 cookie）→ identity → `getFreshByCredHash`。
+  - `WebSessionStore.onDelete(sessionId)` 改為刪該 session 的 web_session credential（`credentials.delete(hash(sessionId))`）+ 若 `credentials.countByIdentity(identityId)===0` 則 `identities.delete`。**onDelete 的接線在 `app.ts` — 故本 task 同時改 app.ts 傳入新的 onDelete**（否則 Task 4 破綠，agy round-1）。
 
 - [ ] **Step 1: 寫失敗測試（kind gate + SSO 放行）**
 
@@ -363,15 +374,19 @@ git commit -m "refactor(auth): 確認頁 session 走 web_session credential + ki
 
 ---
 
-### Task 5: /mcp gate 查 credential + sessionOwner 綁 identity
+### Task 5: /mcp gate 查 credential + sessionOwner 綁 identity + 收尾（刪 adapter/user_tokens）
 
 **Files:**
-- Modify: `src/server/app.ts`
-- Test: `tests/serverIntegration.test.ts`（既有 + 追加）
+- Modify: `src/server/app.ts`, `src/server/toolPipeline.ts`, `src/server/appPipeline.ts`, `src/store/db.ts`（drop user_tokens）
+- Delete: `src/store/tokenStore.ts`（adapter 收尾移除）
+- Test: `tests/serverIntegration.test.ts`（既有 fixture 遷移 + 追加）
 
 **Interfaces:**
 - Consumes: `CredentialStore`, `IdentityStore`。
-- Produces: `/mcp` bearer gate：`credentials.getBySecret(bearer)` 存在才放行（OAuth token 與 static bearer 通吃）；`sessionOwner.set(mcpSessionId, cred.identityId)`、比對用 `credentials.getBySecret(bearer)?.identityId`。app.ts 建 IdentityStore/CredentialStore 實例並注入 TokenManager/ssoRoutes/confirmRoutes。
+- Produces:
+  - `/mcp` bearer gate：`credentials.getBySecret(bearer)` 存在才放行（OAuth token 與 static bearer 通吃）；`sessionOwner.set(mcpSessionId, cred.identityId)`、比對用 `credentials.getBySecret(bearer)?.identityId`。app.ts 建 IdentityStore/CredentialStore 實例並注入 TokenManager/ssoRoutes/confirmRoutes/toolPipeline/appPipeline。
+  - **`toolPipeline.ts` / `appPipeline.ts`**：`TokenStore.hashBearer(reqCtx.bearer)` → `CredentialStore.hash(reqCtx.bearer)`（值相同，只換來源，`creator_bearer_hash`/session-owner 相容）。
+  - **收尾**：確認全 repo 無其他 `TokenStore` import（grep `TokenStore`）→ 刪 `src/store/tokenStore.ts`、db.ts drop `user_tokens`（`DROP TABLE IF EXISTS user_tokens`）。遷移 `tests/serverIntegration.test.ts` 等直接塞 `user_tokens`/`TokenStore` 的 fixture 改用 `IdentityStore`+`CredentialStore`。
 
 - [ ] **Step 1: 寫失敗測試（未知 bearer 401；同 identity 不同 credential 共用 session 不 MISMATCH）**
 
@@ -383,18 +398,21 @@ it('sessionOwner 綁 identity：同 identity 的另一 credential 帶同 mcp-ses
 
 - [ ] **Step 2: 跑測試確認失敗** — FAIL。
 
-- [ ] **Step 3: 實作** — `app.ts`：建 `const identities = new IdentityStore(db); const credentials = new CredentialStore(db)`；`TokenManager` 注入 `{identities, credentials}`；`/mcp` gate 改 `const cred = credentials.getBySecret(bearer); if (!cred) { 401 + WWW-Authenticate(見 Task 10) }`；`onsessioninitialized` 設 `sessionOwner.set(id, cred.identityId)`；owner 比對改 `credentials.getBySecret(bearer)?.identityId`。ssoRoutes/confirmRoutes 注入 identities/credentials。
+- [ ] **Step 3: 實作** — `app.ts`：`/mcp` gate 改 `const cred = credentials.getBySecret(bearer); if (!cred) { 401 + WWW-Authenticate(見 Task 10) }`；`onsessioninitialized` 設 `sessionOwner.set(id, cred.identityId)`；owner 比對改 `credentials.getBySecret(bearer)?.identityId`。`toolPipeline.ts`/`appPipeline.ts` 的 `TokenStore.hashBearer` → `CredentialStore.hash`。
 
-- [ ] **Step 4: 跑 CI 全綠（Phase A 完成，零回歸）**
+- [ ] **Step 4: 收尾 — 刪 adapter + drop 表 + 遷移 fixture** — grep 全 repo 確認無 `TokenStore` 殘留 import（除待刪檔）→ 刪 `src/store/tokenStore.ts`、db.ts 加 `DROP TABLE IF EXISTS user_tokens`（或直接不再 CREATE）→ 把 `tests/serverIntegration.test.ts` 等直接操作 `user_tokens`/`TokenStore` 的 fixture 改用 `IdentityStore`+`CredentialStore`。
+
+- [ ] **Step 5: 跑 CI 全綠（Phase A 完成，零回歸）**
 
 Run: `npm run ci`
-Expected: PASS（既有 243 + Phase A 新測試全綠）。
+Expected: PASS（既有 243 遷移後 + Phase A 新測試全綠；無 TokenStore/user_tokens 殘留）。
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/server/app.ts tests/serverIntegration.test.ts
-git commit -m "refactor(auth): /mcp gate 查 credential、sessionOwner 綁 identity（rotation 不斷線地基）"
+git add src/server/app.ts src/server/toolPipeline.ts src/server/appPipeline.ts src/store/db.ts tests/serverIntegration.test.ts
+git rm src/store/tokenStore.ts
+git commit -m "refactor(auth): /mcp gate 查 credential、sessionOwner 綁 identity、刪 TokenStore adapter + drop user_tokens（Phase A 收尾）"
 ```
 
 > **Phase A 完成 gate**：`npm run ci` 全綠、static bearer 仍可 enroll+連線+批准（既有測試證明）。之後才進 Phase B。
@@ -413,7 +431,7 @@ git commit -m "refactor(auth): /mcp gate 查 credential、sessionOwner 綁 ident
 
 **Interfaces:**
 - Produces:
-  - schema：`oauth_clients(client_id PK, redirect_uris_json, created_at)`、`oauth_auth_codes(code_hash PK, client_id, redirect_uri, code_challenge, identity_id, exp, consumed)`、`oauth_refresh(refresh_hash PK, identity_id, client_id, exp)`。
+  - schema：`oauth_clients(client_id PK, redirect_uris_json, created_at)`、`oauth_auth_codes(code_hash PK, client_id, redirect_uri, code_challenge, identity_id, exp, consumed)`、`oauth_refresh(refresh_hash PK, identity_id, client_id, exp, consumed)`（`consumed` 供 refresh-reuse 偵測；rotate 時標記 consumed 而非刪，consumed 再用 → family revoke，見 Task 10）。
   - `class OAuthStore` — clients/codes/refresh 的 insert/get/consume/delete（codes、refresh 只存 hash）。
   - `buildDiscoveryRouter(opts: { baseUrl: string }): express.Router` — `GET /.well-known/oauth-protected-resource`、`GET /.well-known/oauth-authorization-server`。
 
@@ -590,6 +608,7 @@ git commit -m "feat(oauth): authorize endpoint（be2 登入 + SSO-seamless cooki
 - Produces: `POST /oauth/token`：
   - `grant_type=authorization_code`：查 code（未 consumed、未過期、client/redirect 相符）→ **PKCE S256 驗**（`base64url(sha256(code_verifier)) === stored code_challenge`）→ consume code → 發不透明 access（`credentials.insert(kind='oauth_access', credHash=hash(access), identityId=code.identityId)`）+ 不透明 refresh（`oauth_refresh` hash → identityId）→ 回 `{ access_token, refresh_token, token_type:'Bearer', expires_in }`。
   - `grant_type=refresh_token`：驗 refresh（在 oauth_refresh、未過期）→ rotate：**發新 access + 新 refresh、刪舊 refresh、刪舊 access 的 credentials 列**（即時撤銷、不漏列）→ 回新 token。
+  - **refresh reuse 偵測（OAuth 2.1 / RFC 9700 強制，agy round-1）**：refresh token rotate 後即刪除；若收到一個**已被 rotate 掉（不存在於 oauth_refresh）但格式像 refresh** 的 token，視為 token 洩漏——**撤銷該 identity 的整個 token family**（刪該 identity 全部 `oauth_refresh` + 全部 kind=oauth_access 的 credentials），回 `invalid_grant`。為此 `oauth_refresh` 需可由 identity 反查（已有 identity_id 欄）。實作：refresh 查無 → 若能從別的線索（見下 Step 3 註）判定是「曾經有效的 refresh」則 family revoke。最小可行版：**維持一個 `revoked_families` 或在 identity 上標記**；本波採「rotate 時把舊 refresh 標記為 consumed 而非直接刪，consumed 的 refresh 再被使用 → family revoke」。
   - 失敗一律 `400 { error:'invalid_grant' }`。
 - `/mcp` 401 回應加 header `WWW-Authenticate: Bearer resource_metadata="<baseUrl>/.well-known/oauth-protected-resource"`。
 
@@ -597,15 +616,63 @@ git commit -m "feat(oauth): authorize endpoint（be2 登入 + SSO-seamless cooki
 
 ```typescript
 // tests/oauthToken.test.ts
-it('正確 verifier → 發 token 且該 access 能過 /mcp；錯 verifier → invalid_grant', async () => { /* ... */ })
-it('code 一次性：第二次用同 code → invalid_grant', async () => { /* ... */ })
-it('refresh rotation：發新 access+refresh、舊 refresh 失效、舊 access 立即無法過 /mcp（credential 已刪）', async () => { /* ... */ })
-it('/mcp 401 帶 WWW-Authenticate 指向 protected-resource', async () => { /* ... */ })
+import { describe, it, expect } from 'vitest'
+import { createHash, randomBytes } from 'node:crypto'
+import { buildApp } from '../src/server/app.js'
+import { openDb } from '../src/store/db.js'
+import { IdentityStore } from '../src/store/identityStore.js'
+import { OAuthStore } from '../src/oauth/oauthStore.js'
+import { CredentialStore } from '../src/store/credentialStore.js'
+// 用 supertest 或既有整合測試的 HTTP 驅動法（跟 tests/serverIntegration.test.ts 同樣的 buildApp+request 樣式）
+
+const s256 = (v: string) => createHash('sha256').update(v).digest('base64url')
+
+// 每個測試前：db + 一個已登入 identity I1 + 一個 client C + 一個 authz code 綁 (C, redirect, challenge, I1)
+function seedCode(db, { verifier }: { verifier: string }) {
+  const identities = new IdentityStore(db); const oauth = new OAuthStore(db)
+  identities.upsert({ identityId: 'I1', userLabel: 'u', accessToken: jwt(9e12), refreshToken: 'R', businessList: [], accessExpiresAt: 9e12, updatedAt: 1 })
+  oauth.insertClient({ clientId: 'C', redirectUris: ['http://127.0.0.1:5/callback'], createdAt: 1 })
+  const rawCode = randomBytes(16).toString('hex')
+  oauth.insertAuthCode({ codeHash: CredentialStore.hash(rawCode), clientId: 'C', redirectUri: 'http://127.0.0.1:5/callback', codeChallenge: s256(verifier), identityId: 'I1', exp: 9e12, consumed: 0 })
+  return { rawCode }
+}
+function jwt(expMs: number) { const b = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url'); return `${b({})}.${b({ exp: Math.floor(expMs/1000), authKey: 'u' })}.s` }
+
+it('正確 verifier → 發 token 且該 access 能過 /mcp；錯 verifier → invalid_grant', async () => {
+  const db = openDb(':memory:'); const { rawCode } = seedCode(db, { verifier: 'VER' })
+  const app = buildApp({ config, db })                 // config 依既有測試樣式
+  const ok = await post(app, '/oauth/token', { grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER', client_id: 'C', redirect_uri: 'http://127.0.0.1:5/callback' })
+  expect(ok.status).toBe(200); expect(ok.body.access_token).toBeTruthy()
+  const gate = await mcpInitialize(app, ok.body.access_token)   // 帶 access 打 /mcp initialize
+  expect(gate.status).not.toBe(401)
+  const bad = await post(app, '/oauth/token', { grant_type: 'authorization_code', code: rawCode, code_verifier: 'WRONG', client_id: 'C', redirect_uri: 'http://127.0.0.1:5/callback' })
+  expect(bad.status).toBe(400); expect(bad.body.error).toBe('invalid_grant')
+})
+it('code 一次性：同 code 換兩次 → 第二次 invalid_grant', async () => {
+  const db = openDb(':memory:'); const { rawCode } = seedCode(db, { verifier: 'VER' }); const app = buildApp({ config, db })
+  const first = await post(app, '/oauth/token', { grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER', client_id: 'C', redirect_uri: 'http://127.0.0.1:5/callback' })
+  expect(first.status).toBe(200)
+  const second = await post(app, '/oauth/token', { grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER', client_id: 'C', redirect_uri: 'http://127.0.0.1:5/callback' })
+  expect(second.status).toBe(400); expect(second.body.error).toBe('invalid_grant')
+})
+it('refresh rotation：舊 access 立即失效、舊 refresh 再用觸發 family revoke', async () => {
+  // 換到 {access1, refresh1} → 用 refresh1 rotate 到 {access2, refresh2}
+  // 斷言：access1 打 /mcp → 401（credential 已刪）；refresh2 有效
+  // 再用「已 consumed 的 refresh1」→ invalid_grant 且 family revoke：refresh2 也失效、access2 credential 被刪
+  // （具體：rotate 後查 access2 過 /mcp OK；送 refresh1 → 400；之後 access2 打 /mcp → 401）
+})
+it('/mcp 401 帶 WWW-Authenticate 指向 protected-resource', async () => {
+  const db = openDb(':memory:'); const app = buildApp({ config, db })
+  const r = await mcpInitialize(app, 'unknown-bearer')
+  expect(r.status).toBe(401)
+  expect(r.headers['www-authenticate']).toContain('/.well-known/oauth-protected-resource')
+})
 ```
+（`post`/`mcpInitialize`/`config` 沿用 `tests/serverIntegration.test.ts` 既有 HTTP 驅動 helper 樣式；`OAuthStore.insertClient/insertAuthCode` 見 Task 6。refresh family-revoke 那條的具體斷言鏈已在測試內以註解逐步寫明——實作者照該序列補完 request 呼叫即可，非模糊「加測試」。）
 
 - [ ] **Step 2: 跑測試確認失敗** — FAIL。
 
-- [ ] **Step 3: 實作** PKCE 驗證用 `createHash('sha256').update(verifier).digest('base64url')`；rotation 在單一 transaction 內刪舊 access credential + 舊 refresh + 寫新兩者。
+- [ ] **Step 3: 實作** PKCE 驗證用 `createHash('sha256').update(verifier).digest('base64url')`。rotation 在單一 transaction 內：把舊 refresh 標 `consumed=1`（不刪）、刪舊 access credential、寫新 access credential + 新 refresh。refresh grant 進來時：查 `oauth_refresh`——不存在→`invalid_grant`；存在但 `consumed=1`→**reuse 偵測**：`identity_id` family revoke（刪該 identity 全部 `oauth_refresh` + 全部 kind=oauth_access credentials）+ `invalid_grant`；存在且未 consumed→正常 rotate。
 
 - [ ] **Step 4: 跑測試 + CI** — PASS（含既有 /mcp 測試對 401 body 不變、只多 header）。
 
@@ -668,7 +735,11 @@ git commit -m "feat(oauth): purge script + OAuth runbook + CLAUDE/phase0 文件�
 - §8 文件連動 → Task 11。✓
 - §9 風險（REDIRECT spike、loopback 實測、redirect 嚴格解析、拆分先做）→ Task 8 spike、Task 7 redirectUri、Phase A 先於 B。✓
 
-**Placeholder 掃描：** 協定端點 task（6/9/10/11）的測試以「/* ... */」示意處，實作者須依 Interfaces 與既有測試樣式補齊具體斷言——**已在每個此類 step 標明資料形狀與要斷言的具體性質**（非模糊「加測試」）。store/驗證/PKCE 等安全關鍵 task（1/2/7/10）附完整碼。redirectUri 完整碼（安全關鍵）。✓
+**Placeholder 掃描（agy round-1 修正）：** 安全關鍵測試已補**完整可執行碼**：Task 1/2（store/identity refresh 共用）、Task 7（redirectUri open-redirect 全變形）、**Task 10（PKCE 正確/錯誤 verifier、code 一次性、WWW-Authenticate 全為完整 request 斷言；refresh family-revoke 以逐步註解寫明斷言序列供補完 request 呼叫）**。Task 6/9/11 的協定編排測試（非安全核心的 happy-path/參數驗證）以資料形狀 + 要斷言的具體性質標明，實作者照既有 HTTP 驅動 helper 補完。✓
+
+**refresh reuse 撤銷（agy round-1）：** OAuth 2.1 / RFC 9700 的 refresh-token-reuse family revocation 已納入 Task 10（`oauth_refresh.consumed` 欄 + reuse→family revoke + 對應測試）。✓
+
+**Phase A 遞增綠燈（agy round-1）：** 用 TokenStore 相容 adapter（Task 2）讓所有既有呼叫端零改動仍綠，Task 3–5 逐一切換、Task 5 收尾刪 adapter/user_tokens；完整呼叫端清單（含 toolPipeline/appPipeline）已列於 Phase A 開頭。✓
 
 **型別一致性：** `Identity`/`Credential`/`CredentialKind`（Task 1 定義，2/3/4/5/9/10 沿用）、`getFreshBySecret`/`getFreshByCredHash`（Task 2）、`isAllowedRedirectUri`（Task 7 → Task 9）、`CredentialStore.hash`（全程一致）。✓
 
@@ -677,3 +748,5 @@ git commit -m "feat(oauth): purge script + OAuth runbook + CLAUDE/phase0 文件�
 ## Execution Handoff
 
 見對話。
+
+<!-- agy-peer-reviewed: 2026-08-13T03:13:35Z rounds=2 verdict=approved -->
