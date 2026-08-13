@@ -29,7 +29,9 @@
 | 確認頁 session gate | `confirmRoutes.ts::requireSession`（讀 `be2mcp_sid` → `getFreshByHash`）；無 session → `loginRedirect` | **不改**；OAuth 登入設好 cookie 後它自動放行 |
 | `/mcp` bearer gate | `app.ts`：`store.getByBearer(bearer)`；未知 → 401 | 加 `WWW-Authenticate` 指向 discovery；OAuth token 與 static bearer 同走此 gate |
 
-**關鍵洞察**：OAuth 外殼 90% 是「把已存在的 `enrollUser` + `ssoRoutes` 登入 + `TokenStore`，包進 OAuth 2.1 協定端點」。真正新寫的只有協定層（discovery / DCR / authorize 編排 / token PKCE 驗證）與其狀態表。
+**關鍵洞察**：OAuth 外殼的協定層（discovery / DCR / authorize 編排 / token PKCE）是新寫；但認證內核（be2-auth 登入、be2 token refresh）全復用。
+
+**⚠️ 但現行 `TokenStore` 的扁平模型撐不起「一次 be2 登入同時支撐 cookie 與 OAuth token」——必須先拆分 identity 與 credential（agy round-1，見 §4.0）。** 現行 `TokenStore` 以 `bearerHash` 為主鍵、be2 token 內嵌其上：一個 credential = 一次獨立 be2 登入。SSO-seamless 要「authorize 一次登入 → 同時發 OAuth token 給 agent + 設 be2mcp_sid cookie 給瀏覽器」，若沿用扁平模型會二選一皆錯：(A) 兩者共用同一筆記錄 → OAuth token 字串 == cookie 字串（同一 `bearerHash`）→ **agent 拿到 OAuth token 即等於拿到 cookie 值，可 `curl -H "Cookie: be2mcp_sid=<token>"` 自我批准**；(B) 兩筆記錄各存一份相同 be2 `refreshToken` → 其一 lazy refresh rotate 後，另一筆的 refresh 變 stale → 下次 refresh `REAUTH_REQUIRED`、隨機炸掉瀏覽器或 agent session。故本波**先做 identity/credential 拆分（§4.0）**，才動 OAuth 協定層。
 
 ## 3. 架構總覽
 
@@ -54,6 +56,33 @@ Claude (Code/Desktop)                     be2-mcp                          be2-a
 
 ## 4. 元件設計
 
+### 4.0 資料模型：拆分 identity 與 credential（agy round-1，本波第一步）
+
+把「be2 token 狀態」與「存取憑證」拆成兩層，一個 identity 可被多個 credential 引用；refresh 只在 identity 層做一次。
+
+```
+be2_identities                     一次 be2 登入 = 一筆
+  identity_id (pk)                 隨機
+  user_label                       JWT authKey（同 enroll 現行推導）
+  be2_access_token, be2_refresh_token, business_list, access_expires_at, updated_at
+
+credentials（access 憑證，多對一 → identity）
+  cred_hash (pk)                   sha256(credential 明文)；明文永不落地
+  identity_id (fk)
+  kind                             'oauth_access' | 'static_bearer' | 'web_session'
+  expires_at, updated_at
+
+oauth_clients   : client_id, redirect_uris[], created_at
+oauth_auth_codes: code_hash(pk), client_id, redirect_uri, code_challenge, identity_id, exp, consumed
+oauth_refresh   : refresh_hash(pk), identity_id, client_id, exp
+```
+
+- **credential 值 ≠ identity；三種 credential（OAuth access token、static bearer、be2mcp_sid cookie）各自是獨立隨機字串、各一筆 `credentials`，都指向同一 identity**。→ agent 持有的 OAuth access token 與瀏覽器的 be2mcp_sid cookie **是不同字串**，agent 拿不到 cookie 值（解 Scenario A 自我批准）。
+- **be2 refresh 只存在 identity 一處、rotate 只發生一次**（解 Scenario B clobber）。`TokenManager` 改為對 identity 操作：credential 查詢 → 取 identity → 近到期 lazy refresh identity 的 be2 token（single-flight 鎖沿用）→ 更新 identity 一筆，所有引用它的 credential 立即拿到新鮮 be2 token。
+- **`/mcp` bearer gate**：`credentials.get(hashBearer(bearer))` → identity；OAuth access token 與 static bearer 都是 `credentials` 列，通吃、無混淆（解 static/OAuth 並存）。
+- **確認頁 session gate**：`be2mcp_sid` cookie 值 → `credentials`（kind=web_session）→ identity。requireSession 邏輯等價，只是多一層 identity 解引用。
+- **遷移**：現行 `TokenStore`（扁平 `user_tokens`）→ 拆成 `be2_identities` + `credentials`。`enrollUser`、`ssoRoutes /confirm/session`、`WebSessionStore`、`confirmRoutes requireSession`、`app.ts` bearer gate、`TokenManager` 都改走新模型。這是本波**最大的一塊改動**，OAuth 協定層蓋在其上。
+
 ### 4.1 新增 `src/oauth/`
 
 | 檔案 | 端點 / 職責 |
@@ -61,8 +90,8 @@ Claude (Code/Desktop)                     be2-mcp                          be2-a
 | `discoveryRoutes.ts` | `GET /.well-known/oauth-protected-resource`（RFC 9728：宣告 resource + 指向本 AS）、`GET /.well-known/oauth-authorization-server`（RFC 8414：authorize/token/register endpoint、`code_challenge_methods_supported:['S256']`、`grant_types_supported:['authorization_code','refresh_token']`、`token_endpoint_auth_methods_supported:['none']`、scope）。純 JSON。 |
 | `registerRoutes.ts` | `POST /oauth/register`（RFC 7591 DCR）：建 public client（無 secret）。`redirect_uri` **allowlist**：`https://claude.ai/api/mcp/auth_callback`（完全比對）+ RFC 8252 loopback（`http://localhost:<port>/callback`、`http://127.0.0.1:<port>/callback`，任意 port）。**回應刻意不含 `client_secret` key**（連 null 都不行，避開 Claude Code zod 型別衝突——dev-tools 已驗）。client 存 `oauthStore` clients 表。 |
 | `authorizeRoutes.ts` | `GET /oauth/authorize`：驗 `client_id` 存在、`redirect_uri` 在該 client allowlist、`code_challenge`+`code_challenge_method=S256`、`response_type=code`、`state`。暫存 pending authz request（含 PKCE challenge）→ 驅動 be2-auth 瀏覽器登入（見 §4.2）。登入回來後：`exchangeCode` → 存 be2 token 記錄 + 設 `be2mcp_sid` cookie + 鑄一次性 authz code（綁 `client_id`/`redirect_uri`/`code_challenge`/token 記錄）→ `302` 回 `redirect_uri?code=&state=`。 |
-| `tokenRoutes.ts` | `POST /oauth/token`（`grant_type=authorization_code`）：查 authz code（一次性、未過期、client/redirect 相符）→ **PKCE S256 驗**（`sha256(code_verifier)` base64url == 存的 `code_challenge`）→ 發不透明 access token（存 TokenStore，作為 `/mcp` bearer）+ 不透明 refresh token（存 oauthStore）。`grant_type=refresh_token`：驗+rotate（發新 access+refresh、刪舊 refresh、可回新鮮 businessList，L2 已處理）。 |
-| `oauthStore.ts` | SQLite 三張表：`oauth_clients`（client_id、redirect_uris、created_at）、`oauth_auth_codes`（code hash、client_id、redirect_uri、code_challenge、bearerHash 指向 TokenStore 記錄、exp、一次性 consumed 標記）、`oauth_refresh`（refresh hash → bearerHash、exp）。**只存 hash**（code / refresh token 明文不落地）。 |
+| `tokenRoutes.ts` | `POST /oauth/token`（`grant_type=authorization_code`）：查 authz code（一次性、未過期、client/redirect 相符）→ **PKCE S256 驗**（`sha256(code_verifier)` base64url == 存的 `code_challenge`）→ 發不透明 access token（存 `credentials` kind=oauth_access → 指向 code 綁的 identity）+ 不透明 refresh token（`oauth_refresh` → identity）。`grant_type=refresh_token`：驗舊 refresh → rotate：**發新 access + 新 refresh、刪舊 refresh、且刪掉舊 access token 的 `credentials` 列**（rotation 即時撤銷舊 access，不留可用殘證、不漏 DB 列——agy round-1）。identity 的 be2 token 由 `TokenManager` L2 lazy refresh，與此 L1 rotation 獨立。 |
+| `oauthStore.ts` | 管理 §4.0 的 `oauth_clients` / `oauth_auth_codes` / `oauth_refresh` 三表（`credentials` / `be2_identities` 由拆分後的 store 管）。**只存 hash**（code / refresh / access token 明文不落地）。 |
 
 ### 4.2 Authorize 的 be2-auth 登入腿（含風險備案）
 
@@ -73,16 +102,16 @@ Claude (Code/Desktop)                     be2-mcp                          be2-a
 ### 4.3 確認頁 SSO-seamless（本波對確認頁的唯一改動＝零改動 + 一個 cookie）
 
 - **確認頁 `confirmRoutes.ts` 不改**。它的 `requireSession` 已經是「有 `be2mcp_sid` → 放行顯示確認按鈕；無 → `loginRedirect` 彈登入」。
-- 本波唯一新增：**authorize 腿登入成功時設 `be2mcp_sid` cookie**（§4.1 step ②，與 `/confirm/session` 設 cookie 完全相同的做法、同一個 `WebSessionStore`）。
+- 本波唯一新增：**authorize 腿登入成功時,對同一 identity 額外發一個 web_session credential 並設為 `be2mcp_sid` cookie**（§4.0：cookie 值是獨立隨機字串、與 OAuth access token 不同、各一筆 credential 指向同 identity；與 `/confirm/session` 走同一 helper、同 hash 規則、同 store）。**cookie 值 ≠ OAuth token 值**是防自我批准的關鍵（§4.0 Scenario A）。
 - 結果：使用者用「做 OAuth 登入的那個瀏覽器」開確認頁 → 已有 cookie → 直接確認，**無二次彈窗**（＝使用者要的「只需確認」）。用**別的**瀏覽器開 → 無 cookie → 退回彈 be2-auth 登入（**安全 fallback，不移除**）。
-- **安全不變式維持**：批准仍 gated on `be2mcp_sid`（HttpOnly cookie）。Claude Code 上 agent 有 curl 但**拿不到使用者瀏覽器的 cookie**，`POST /confirm/:id/approve` 無 cookie → `requireSession` 回 undefined → redirect 登入 → agent 走不下去。**防自我批准（鐵則 #4）結構上不變**。（面板批准路徑〔Desktop、nonce〕本波不動，仍照 MCP Apps spec。）
+- **安全不變式維持**：批准仍 gated on `be2mcp_sid`（HttpOnly cookie）。agent 持有的是 OAuth access token（另一筆 credential、另一個字串，§4.0），**不等於也推不出 cookie 值**；Claude Code 上 agent 用 curl `POST /confirm/:id/approve` 無正確 be2mcp_sid → `requireSession` 回 undefined → redirect → 走不下去。即使 agent 拿自己的 OAuth token 當 `Cookie: be2mcp_sid=<oauth_token>` 送，該值 hash 出的 credential 是 kind=oauth_access、非 web_session，requireSession 應**同時檢查 kind==web_session**（否則 §4.0 Scenario A 從另一角度復活）→ 拒。**防自我批准（鐵則 #4）結構上不變**。（面板批准路徑〔Desktop、nonce〕本波不動。）
 
 ### 4.4 修改既有
 
 | 檔案 | 修改 |
 |---|---|
-| `src/server/app.ts` | 掛 oauth router（discovery/register/authorize/token）；`/mcp` 的 401 回應加 `WWW-Authenticate: Bearer resource_metadata="<discovery url>"`（RFC 9728，讓 Claude 自動發起 OAuth）；bearer gate 不變（OAuth token 與 static bearer 同為 TokenStore 記錄，`getByBearer` 通吃）。authorize 腿與 ssoRoutes 共用 `authServiceClient`/`tokenStore`/`webSessions` 實例。 |
-| `src/server/ssoRoutes.ts` | 抽出「exchangeCode → 建 be2 token 記錄 + 設 be2mcp_sid」為共用 helper（`/confirm/session` 與 oauth authorize 共用單一實作，避免兩套 session 建立邏輯漂移）。 |
+| `src/server/app.ts` | 掛 oauth router；`/mcp` 401 加 `WWW-Authenticate: Bearer resource_metadata="<discovery url>"`（RFC 9728）；bearer gate 改查 `credentials`（OAuth access token 與 static bearer 同為 credential 列，通吃）。**`sessionOwner` 改綁 `identity_id`（非 rotating 的 bearerHash）**：現行 `sessionOwner.set(mcpSessionId, hashBearer(bearer))` 在 OAuth token rotate 後會因新 bearerHash 觸發 `SESSION_OWNER_MISMATCH` 403、切斷 agent MCP session（agy round-1）。改綁 credential 解出的 `identity_id` → rotation 換 token 不換 identity，MCP session 存活。authorize 腿與 ssoRoutes 共用同一套 identity/credential store + `authServiceClient`。 |
+| `src/server/ssoRoutes.ts` | 抽出「exchangeCode → 建/取 identity + 發一個 credential（web_session / oauth 各自呼叫）」為共用 helper（`/confirm/session` 與 oauth authorize 共用單一 identity 建立實作，避免漂移）。 |
 | `bootstrap-user` / `enroll.ts` | **保留**（headless / 過渡 fallback）。`enrollUser` 的 token 記錄建立邏輯抽共用給 oauth token endpoint（單一實作）。 |
 | token 生命週期治理 | 新增 purge：過期 authz code / oauth refresh / ghost client 定期硬刪（仿 dev-tools `oauth:purge`）。本波先做一個可手動跑的 script，cron 化後續。 |
 
@@ -102,7 +131,10 @@ Claude (Code/Desktop)                     be2-mcp                          be2-a
 | REDIRECT flow redirectPath 被 be2-auth 擋 | 退 POPUP 備案（§4.2） |
 | 確認頁不同瀏覽器（無 cookie） | 退回彈 be2-auth 登入（安全 fallback，非錯誤） |
 | OAuth token 撤銷 / be2 refresh 失效 | `/mcp` 401 + WWW-Authenticate → Claude 重走 OAuth；確認頁 dead session → 刪 + redirect（既有 Phase 2b 行為） |
-| static bearer 與 OAuth token 並存 | 皆為 TokenStore 記錄，getByBearer 通吃，無衝突 |
+| OAuth access token rotation | 新 access 的 credential 綁**同 identity** → `sessionOwner` 綁 identity 不變 → MCP session 存活；舊 access credential 列**即時刪除** → 立刻失效、不漏 DB 列（§4.1 token endpoint） |
+| identity be2 token rotate（L2） | 只在 identity 一處 rotate → 所有引用它的 credential（OAuth token / cookie / static bearer）同步拿到新鮮 be2 token，**無 Scenario B clobber** |
+| static bearer 與 OAuth token 並存 | 皆為 `credentials` 列指向各自 identity，bearer gate 通吃，無衝突 |
+| agent 拿 OAuth token 當 cookie 送確認頁 | credential kind=oauth_access ≠ web_session → requireSession 拒（§4.3） |
 
 ## 7. 測試
 
@@ -113,7 +145,8 @@ Claude (Code/Desktop)                     be2-mcp                          be2-a
   - token：PKCE S256 正確/錯誤 verifier、code 一次性（第二次 invalid_grant）、code 過期、client/redirect 不符 → 拒；正常 → 發不透明 token 且該 token 能過 `/mcp` gate。
   - refresh rotate：舊 refresh 失效、新 access 可用。
   - **SSO-seamless**：authorize 登入後 be2mcp_sid 已設 → 確認頁 requireSession 放行（不 redirect）；**無 cookie → 仍 redirect 登入**（fallback 未被移除）。
-  - **防自我批准回歸**：帶 OAuth token（非 cookie）打 `/confirm/:id/approve` → 無 be2mcp_sid → redirect，不執行（鐵則 #4 不變）；Phase 2b 既有 confirm 測試全綠。
+  - **防自我批准回歸**：(a) 帶 OAuth token（非 cookie）打 `/confirm/:id/approve` → 無 be2mcp_sid → redirect，不執行；(b) 把自己的 OAuth token 塞進 `Cookie: be2mcp_sid=<token>` → credential kind≠web_session → requireSession 拒（鐵則 #4 不變）；Phase 2b 既有 confirm 測試全綠。
+  - **identity/credential 拆分回歸**：(a) OAuth token rotate 後同一 mcp-session 續用不觸發 SESSION_OWNER_MISMATCH（綁 identity）；(b) rotate 後舊 access token 打 `/mcp` 立即失效（列已刪）；(c) 一個 identity 被 cookie + OAuth token 同時引用時，L2 refresh rotate 後兩者都拿到新鮮 be2 token、皆不 REAUTH_REQUIRED（無 Scenario B）；(d) cookie 值與 OAuth token 值為不同字串。
   - static bearer 與 OAuth token 並存互不干擾。
 - **Live 驗收（人工）**：Claude Code + Desktop 各跑一次真實 OAuth 接入（含 loopback callback）→ 免手貼 bearer 連上 → 同瀏覽器開確認頁免二次登入 → 批准一個 draft change-set（寫入 403 為已知，不阻擋 OAuth/SSO 驗收）。
 - **威脅測試**：open-redirect（惡意 redirect_uri）、code replay、PKCE downgrade、跨 client code 竊用 → 全拒。
@@ -130,4 +163,8 @@ Claude (Code/Desktop)                     be2-mcp                          be2-a
 2. **Claude Code / Desktop 對 loopback callback 的 OAuth 行為差異**：dev-tools 已對 claude.ai 驗過，但 Code/Desktop（本波主力 client）需各實測一次（callback 是 loopback 還是 claude.ai）。
 3. **SSO-seamless 的瀏覽器同一性假設**：「只需確認」的無彈窗體驗依賴「使用者用做 OAuth 的同一瀏覽器開確認頁」。不同瀏覽器 → 有彈窗（安全，但非無縫）。可接受。
 4. **prod service key / 公網 ingress**：本波 SIT + 本機 loopback；prod 上線另需 B1 prod key、若要 claude.ai 網頁另需 B3 公網 + 資安。
-5. **cookie path/scope**：`be2mcp_sid` 現為 `path=/confirm`；authorize 腿設它時需確認 path/SameSite 與確認頁一致（同一 `WebSessionStore`、同一 hash 規則），避免兩套 session。
+5. **cookie path/scope**：`be2mcp_sid` 現為 `path=/confirm`；authorize 腿設它時需確認 path/SameSite 與確認頁一致（同一 store、同一 hash 規則），避免兩套 session。
+6. **redirect_uri 驗證嚴格解析**（agy round-1）：loopback allowlist 必須 `new URL(uri)` 解析後斷言 `hostname === 'localhost' || hostname === '127.0.0.1'`（+ path === '/callback'），**不可用字串前綴/naive regex**，否則 `http://localhost.evil.com/callback` 之類會繞過（open redirect）。claude.ai callback 走完全字串比對。
+7. **identity/credential 拆分是 auth 核心重構**：影響 `enrollUser`/`TokenManager`/`ssoRoutes`/`confirmRoutes`/`app.ts`；實作應先做這層 + 跑既有全部 auth/confirm 測試綠（零回歸），再疊 OAuth 協定層。是本波風險與工作量最大的一塊。
+
+<!-- agy-peer-reviewed: 2026-08-13T00:22:05Z rounds=2 verdict=approved -->
