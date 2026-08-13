@@ -22,6 +22,7 @@ import { wrapTool, wrapL2Tool, type PipelineDeps, type L2PipelineDeps } from './
 import { wrapAppTool, type AppPipelineDeps } from './appPipeline.js'
 import { buildConfirmRouter } from './confirmRoutes.js'
 import { buildSsoRouter } from './ssoRoutes.js'
+import { buildDiscoveryRouter } from '../oauth/discoveryRoutes.js'
 import { registerAppResources } from './appResources.js'
 import { findProductsTool } from '../tools/findProducts.js'
 import { productPlansTool } from '../tools/productPlans.js'
@@ -210,6 +211,9 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   const app = express()
   app.use(express.json())
   app.get('/healthz', (_req, res) => { res.status(200).send('ok') })
+  // Task 6：OAuth discovery（RFC 9728 + RFC 8414）——公開端點，Claude 的 OAuth client
+  // 用它找到 authorize/token/register 端點與 PKCE/public-client 能力，無需 bearer。
+  app.use(buildDiscoveryRouter({ baseUrl: `http://127.0.0.1:${config.port}` }))
   // CRITICAL route order (agy T4 finding): buildSsoRouter registers GET /confirm/login (+ POST
   // /confirm/session, /confirm/logout); buildConfirmRouter registers GET /confirm/:id. Express
   // matches routes in registration order, not by specificity — if the confirm router mounted

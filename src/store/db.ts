@@ -83,6 +83,32 @@ CREATE TABLE IF NOT EXISTS credentials (
   updated_at   INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_credentials_identity ON credentials(identity_id);
+-- Task 6（Phase B：OAuth 外殼）：DCR 註冊的 client、authorization_code flow 的授權碼、
+-- refresh token rotation 用的 refresh 記錄。code/refresh 一律只存 sha256 hash（見
+-- OAuthStore），明文永不落地。consumed 標記而非硬刪，供 Task 10 refresh-reuse 偵測
+-- （重用已消費過的 refresh → family revoke）。
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  client_id          TEXT PRIMARY KEY,
+  redirect_uris_json TEXT NOT NULL,
+  created_at         INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS oauth_auth_codes (
+  code_hash      TEXT PRIMARY KEY,
+  client_id      TEXT NOT NULL,
+  redirect_uri   TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  identity_id    TEXT NOT NULL,
+  exp            INTEGER NOT NULL,
+  consumed       INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS oauth_refresh (
+  refresh_hash TEXT PRIMARY KEY,
+  identity_id  TEXT NOT NULL,
+  client_id    TEXT NOT NULL,
+  exp          INTEGER NOT NULL,
+  consumed     INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_refresh_identity ON oauth_refresh(identity_id);
 `
 
 export function openDb(path: string): Database.Database {
