@@ -86,7 +86,10 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // exchange/refresh be2 tokens against the same auth-service client, and reusing one instance
   // avoids duplicate config parsing / connection setup.
   const authServiceClient = new AuthServiceClient({ baseUrl: config.authsvcUrl, serviceKey: config.serviceKey })
-  const tokenManager = new TokenManager(store, authServiceClient)
+  // Task 2: TokenManager 直接操作 identity 層（be2 refresh 只在 identity 這格 rotate 一次，
+  // 多個 credential 共用同一 identity 時不會互撞）。identities/credentials 只是 db 的薄包裝
+  // （無內部狀態），沿用 store 內部已 new 好的那兩份即可，不必再對同一個 db 另建一組。
+  const tokenManager = new TokenManager({ identities: store.identities, credentials: store.credentials }, authServiceClient)
   const rateBudget = new RateBudget(db)
   const audit = new AuditLog(db)
   const gateway = new GatewayClient({ baseUrl: config.gatewayUrl })

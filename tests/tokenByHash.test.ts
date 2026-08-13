@@ -24,7 +24,7 @@ describe('token-by-hash', () => {
   it('TokenManager.getFreshByHash returns ctx without refresh when far from expiry', async () => {
     const { store, hash, now } = seed()
     const auth = { refresh: vi.fn() }
-    const mgr = new TokenManager(store, auth as never, { now: () => now })
+    const mgr = new TokenManager({ identities: store.identities, credentials: store.credentials }, auth as never, { now: () => now })
     const ctx = await mgr.getFreshByHash(hash)
     expect(ctx.userLabel).toBe('p@kkday.com')
     expect(ctx.businessList).toEqual([{ a: 1 }])
@@ -32,7 +32,7 @@ describe('token-by-hash', () => {
   })
   it('unknown hash -> AuthError UNKNOWN_BEARER 401', async () => {
     const { store, now } = seed()
-    const mgr = new TokenManager(store, { refresh: vi.fn() } as never, { now: () => now })
+    const mgr = new TokenManager({ identities: store.identities, credentials: store.credentials }, { refresh: vi.fn() } as never, { now: () => now })
     await expect(mgr.getFreshByHash('nope')).rejects.toSatisfy((e: unknown) => e instanceof AuthError && e.code === 'UNKNOWN_BEARER')
   })
 })

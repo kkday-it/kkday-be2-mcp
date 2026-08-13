@@ -26,7 +26,7 @@ function setup(expiresInMs: number) {
       return { accessToken: freshJwt, refreshToken: `r-${calls}`, businessList: [{ fresh: true }] }
     }),
   }
-  const mgr = new TokenManager(store, auth as never, { now: () => now })
+  const mgr = new TokenManager({ identities: store.identities, credentials: store.credentials }, auth as never, { now: () => now })
   return { mgr, store, auth, freshJwt }
 }
 
