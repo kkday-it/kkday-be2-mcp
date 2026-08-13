@@ -5,6 +5,7 @@ import { ChangeSetStore } from '../src/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 import { TokenStore } from '../src/store/tokenStore.js'
+import { CredentialStore } from '../src/store/credentialStore.js'
 import { buildConfirmRouter } from '../src/server/confirmRoutes.js'
 import type { Server } from 'node:http'
 import type { InventoryItem } from '../src/changeset/types.js'
@@ -63,14 +64,17 @@ beforeEach(async () => {
   db = openDb(':memory:')
   store = new ChangeSetStore(db, { now: () => 1000 })
   webSessions = new WebSessionStore(db, { now: () => 1000 })
-  webSessions.create(SID, USER_LABEL)
+  const credentials = new CredentialStore(db)
+  // Task 4: requireSession gates on credentials.getBySecret(sid).kind === 'web_session'.
+  credentials.insert({ credHash: CredentialStore.hash(SID), identityId: 'ident-inv', kind: 'web_session', expiresAt: null, updatedAt: 1000 })
+  webSessions.create(SID, 'ident-inv')
   gw = fakeGw({ qty: { '2026-08-15': 10 } })
 
   const sessionTokens: Record<string, { accessToken: string; userLabel: string }> = {
     [TokenStore.hashBearer(SID)]: { accessToken: 'sess-tok', userLabel: USER_LABEL },
   }
   const tokenManager = {
-    getFreshByHash: async (hash: string) => {
+    getFreshByCredHash: async (hash: string) => {
       const rec = sessionTokens[hash]
       if (!rec) throw new Error('unknown session hash')
       return { ...rec, businessList: [] }
@@ -80,7 +84,7 @@ beforeEach(async () => {
   const modifyUserFrom = (at: string) => 'U:' + at
 
   const router = buildConfirmRouter({
-    changeSets: store, gateway: gw as never, tokenManager, webSessions, audit: new AuditLog(db, () => 1000),
+    changeSets: store, gateway: gw as never, tokenManager, webSessions, credentials, audit: new AuditLog(db, () => 1000),
     modifyUserFrom, now: () => 1000,
   })
   const app = express(); app.use(express.json()); app.use(router)

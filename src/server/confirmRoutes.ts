@@ -4,7 +4,7 @@ import type { ExecutorDeps } from '../changeset/executor.js'
 import { approveAndExecute } from '../changeset/confirmService.js'
 import type { TokenManager } from '../auth/tokenManager.js'
 import type { WebSessionStore } from './webSessionStore.js'
-import { TokenStore } from '../store/tokenStore.js'
+import type { CredentialStore } from '../store/credentialStore.js'
 import { parseCookies } from './cookies.js'
 import type { AnyDiffItem, InventoryDiffItem, DiffItem } from '../changeset/types.js'
 
@@ -16,6 +16,11 @@ import type { AnyDiffItem, InventoryDiffItem, DiffItem } from '../changeset/type
 export interface ConfirmDeps extends ExecutorDeps {
   tokenManager: TokenManager
   webSessions: WebSessionStore
+  // Task 4: requireSession resolves the cookie through this store to enforce the credential
+  // KIND gate (kind === 'web_session') — the structural half of "an agent cannot self-approve":
+  // an agent's own oauth_access / static_bearer secret, sent as this cookie, must resolve to a
+  // credential of the wrong kind and be rejected, never merely rely on the secret being unknown.
+  credentials: CredentialStore
   modifyUserFrom: (accessToken: string) => string
 }
 
@@ -87,9 +92,17 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     if (!sid) return undefined
     const sess = deps.webSessions.get(sid)   // undefined if idle-expired (row deleted)
     if (!sess) return undefined
+    // Task 4 kind gate: the be2mcp_sid cookie must resolve to a credential MINTED BY the
+    // confirm-page SSO login (kind === 'web_session'). An agent holding its own oauth_access or
+    // static_bearer credential and sending that secret AS this cookie must be rejected here —
+    // structurally, not just because the secret happens to be "unknown" (it is a perfectly known,
+    // valid credential — just of the wrong kind for this surface). This is what makes
+    // self-approval impossible even if the agent knows the change-set id (鐵則 #4).
+    const cred = deps.credentials.getBySecret(sid)
+    if (!cred || cred.kind !== 'web_session') return undefined
     let user
     try {
-      user = await deps.tokenManager.getFreshByHash(TokenStore.hashBearer(sid))
+      user = await deps.tokenManager.getFreshByCredHash(cred.credHash)
     } catch {
       // be2 refresh token expired/revoked (AuthError REAUTH_REQUIRED) or upstream unavailable:
       // the web session is dead. Delete it and treat as no-session so the caller redirects to
@@ -98,7 +111,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
       return undefined
     }
     deps.webSessions.touch(sid)
-    return { sessionId: sid, userLabel: sess.userLabel, accessToken: user.accessToken }
+    return { sessionId: sid, userLabel: user.userLabel, accessToken: user.accessToken }
   }
   function loginRedirect(res: express.Response, next: string) { res.redirect(302, `/confirm/login?next=${encodeURIComponent(next)}`) }
 

@@ -1,7 +1,13 @@
 import type Database from 'better-sqlite3'
 import { randomBytes } from 'node:crypto'
 
-export interface WebSession { sessionId: string; userLabel: string; createdAt: number; lastSeenAt: number }
+// Task 4: this row no longer carries the display userLabel directly — it carries the
+// identity_id the session's be2mcp_sid cookie was minted for (agy round-1: overloading the old
+// `user_label` column to hold an identity reference would have been semantic pollution). The
+// authoritative userLabel now always comes from the credential/identity chain
+// (credentials.getBySecret -> identities.get, or TokenManager.getFreshByCredHash which already
+// resolves it) — see confirmRoutes.ts's requireSession.
+export interface WebSession { sessionId: string; identityId: string; createdAt: number; lastSeenAt: number }
 
 export class WebSessionStore {
   private now: () => number
@@ -19,16 +25,16 @@ export class WebSessionStore {
   }
   static newSessionId(): string { return randomBytes(32).toString('hex') }
 
-  create(sessionId: string, userLabel: string): void {
+  create(sessionId: string, identityId: string): void {
     const t = this.now()
-    this.db.prepare('INSERT OR REPLACE INTO web_sessions (session_id, user_label, created_at, last_seen_at) VALUES (?,?,?,?)')
-      .run(sessionId, userLabel, t, t)
+    this.db.prepare('INSERT OR REPLACE INTO web_sessions (session_id, identity_id, created_at, last_seen_at) VALUES (?,?,?,?)')
+      .run(sessionId, identityId, t, t)
   }
   get(sessionId: string): WebSession | undefined {
     const r = this.db.prepare('SELECT * FROM web_sessions WHERE session_id = ?').get(sessionId) as Record<string, unknown> | undefined
     if (!r) return undefined
     if ((r.last_seen_at as number) + this.idleTtlMs < this.now()) { this.delete(sessionId); return undefined }
-    return { sessionId: r.session_id as string, userLabel: r.user_label as string, createdAt: r.created_at as number, lastSeenAt: r.last_seen_at as number }
+    return { sessionId: r.session_id as string, identityId: r.identity_id as string, createdAt: r.created_at as number, lastSeenAt: r.last_seen_at as number }
   }
   touch(sessionId: string): void {
     this.db.prepare('UPDATE web_sessions SET last_seen_at = ? WHERE session_id = ?').run(this.now(), sessionId)

@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS change_set_results (
 );
 CREATE TABLE IF NOT EXISTS web_sessions (
   session_id   TEXT PRIMARY KEY,
-  user_label   TEXT NOT NULL,
+  identity_id  TEXT NOT NULL,
   created_at   INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL
 );

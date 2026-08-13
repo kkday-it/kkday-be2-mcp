@@ -102,6 +102,11 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // all three funnel through WebSessionStore#delete) must also purge the be2 access+refresh
   // token that session owns (stored under hash(sessionId) in user_tokens by ssoRoutes.ts), or the
   // token is orphaned at rest forever with no session left able to reach it.
+  // Task 4 note: since Task 2/3, deleteByBearerHash already operates purely on the credentials/
+  // identities tables and is kind-agnostic (it deletes whatever credential matches the hash, then
+  // drops the identity only if no credential of ANY kind still references it) — so this callback
+  // needs no change now that ssoRoutes.ts mints a 'web_session'-kind credential here instead of
+  // 'static_bearer': hash(sessionId) still resolves to exactly the credential this session owns.
   const webSessions = new WebSessionStore(db, { onDelete: sid => store.deleteByBearerHash(TokenStore.hashBearer(sid)) })
   const authOrigin = new URL(config.authsvcUrl).origin
 
@@ -197,7 +202,10 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // the login page would be unreachable. The SSO router MUST be mounted first.
   app.use(buildSsoRouter({ authServiceClient, tokenStore: store, webSessions, authOrigin, now: Date.now }))
   app.use(buildConfirmRouter({
-    changeSets, gateway, tokenManager, audit, webSessions,
+    // Task 4: requireSession's credential-kind gate needs the same credentials store the SSO
+    // router mints web_session credentials into — store.credentials (already the shared
+    // TokenStore-backed CredentialStore instance; no separate store to wire up).
+    changeSets, gateway, tokenManager, audit, webSessions, credentials: store.credentials,
     modifyUserFrom: modifyUserFromPlaceholder,
     now: Date.now,
   }))

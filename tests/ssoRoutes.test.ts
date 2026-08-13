@@ -41,7 +41,13 @@ describe('SSO routes', () => {
     expect(setCookie).toContain('HttpOnly')
     // the session exists and is labelled by the token's authKey email
     const sid = /be2mcp_sid=([^;]+)/.exec(setCookie)![1]
-    expect(webSessions.get(sid)!.userLabel).toBe('approver@kkday.com')
+    // Task 4: web_sessions now stores identity_id (not userLabel directly) — the identity it
+    // points at is what carries the userLabel.
+    const sess = webSessions.get(sid)!
+    expect(tokenStore.identities.get(sess.identityId)!.userLabel).toBe('approver@kkday.com')
+    // the credential minted for this cookie must be kind='web_session' (Task 4 kind gate) —
+    // never 'static_bearer', which is what the old TokenStore.upsert path would have produced.
+    expect(tokenStore.credentials.getBySecret(sid)!.kind).toBe('web_session')
     // the be2 token was stored under hashBearer(sessionId) so getFreshByHash works later
     expect(tokenStore.getByBearerHash(TokenStore.hashBearer(sid))!.userLabel).toBe('approver@kkday.com')
   })

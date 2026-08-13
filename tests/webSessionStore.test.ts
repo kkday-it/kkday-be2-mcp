@@ -5,8 +5,8 @@ import { WebSessionStore } from '../src/server/webSessionStore.js'
 describe('WebSessionStore', () => {
   it('creates and reads a session', () => {
     const s = new WebSessionStore(openDb(':memory:'), { now: () => 1000 })
-    s.create('sid1', 'user@kkday.com')
-    expect(s.get('sid1')).toMatchObject({ sessionId: 'sid1', userLabel: 'user@kkday.com', createdAt: 1000, lastSeenAt: 1000 })
+    s.create('sid1', 'ident-user')
+    expect(s.get('sid1')).toMatchObject({ sessionId: 'sid1', identityId: 'ident-user', createdAt: 1000, lastSeenAt: 1000 })
     expect(s.get('nope')).toBeUndefined()
   })
   it('newSessionId is 64 hex chars and unique', () => {
@@ -30,7 +30,7 @@ describe('WebSessionStore', () => {
     s.create('sid1', 'u')
     t = 1050; s.touch('sid1')
     t = 1120                                   // 120 since create, but only 70 since touch
-    expect(s.get('sid1')).toMatchObject({ userLabel: 'u', lastSeenAt: 1050 })
+    expect(s.get('sid1')).toMatchObject({ identityId: 'u', lastSeenAt: 1050 })
   })
   it('delete removes the session', () => {
     const s = new WebSessionStore(openDb(':memory:'), { now: () => 1000 })

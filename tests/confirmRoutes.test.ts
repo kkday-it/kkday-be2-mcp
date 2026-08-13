@@ -5,6 +5,7 @@ import { ChangeSetStore } from '../src/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 import { TokenStore } from '../src/store/tokenStore.js'
+import { CredentialStore } from '../src/store/credentialStore.js'
 import { AuthError } from '../src/errors.js'
 import { buildConfirmRouter } from '../src/server/confirmRoutes.js'
 import type { Server } from 'node:http'
@@ -41,8 +42,15 @@ beforeEach(async () => {
   db = openDb(':memory:')
   store = new ChangeSetStore(db, { now: () => 1000 })
   webSessions = new WebSessionStore(db, { now: () => 1000 })
-  webSessions.create(SID_A, 'owner@kkday.com')
-  webSessions.create(SID_B, 'other@kkday.com')
+  const credentials = new CredentialStore(db)
+  // Task 4: requireSession now gates on credentials.getBySecret(sid).kind === 'web_session' —
+  // these fixtures must mint that credential (in addition to the web_sessions TTL row) for the
+  // session cookies used throughout this file, mirroring what ssoRoutes.ts's /confirm/session
+  // does on a real be2-auth login.
+  credentials.insert({ credHash: CredentialStore.hash(SID_A), identityId: 'ident-owner', kind: 'web_session', expiresAt: null, updatedAt: 1000 })
+  credentials.insert({ credHash: CredentialStore.hash(SID_B), identityId: 'ident-other', kind: 'web_session', expiresAt: null, updatedAt: 1000 })
+  webSessions.create(SID_A, 'ident-owner')
+  webSessions.create(SID_B, 'ident-other')
   live = { is_active: true }
   putCalls = 0
   putBearer = undefined
@@ -59,7 +67,7 @@ beforeEach(async () => {
     [TokenStore.hashBearer(SID_B)]: { accessToken: 'sess-tok-B', userLabel: 'other@kkday.com' },
   }
   const tokenManager = {
-    getFreshByHash: async (hash: string) => {
+    getFreshByCredHash: async (hash: string) => {
       if (tmMode === 'throw') throw new AuthError('REAUTH_REQUIRED', 'be2 session dead', 401)
       const rec = sessionTokens[hash]
       if (!rec) throw new Error('unknown session hash')
@@ -70,7 +78,7 @@ beforeEach(async () => {
   const modifyUserFrom = (at: string) => { if (modifyUserThrows) throw new Error('modify_user resolver failed'); return 'U:' + at }
 
   const router = buildConfirmRouter({
-    changeSets: store, gateway, tokenManager, webSessions, audit: new AuditLog(db, () => 1000),
+    changeSets: store, gateway, tokenManager, webSessions, credentials, audit: new AuditLog(db, () => 1000),
     modifyUserFrom, now: () => 1000,
   })
   const app = express(); app.use(express.json()); app.use(router)

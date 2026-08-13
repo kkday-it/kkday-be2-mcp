@@ -48,13 +48,23 @@ function seed(id: string, creatorLabel = 'owner@kkday.com') {
   })
 }
 
+// Task 4: a real confirm-page session is a 'web_session'-kind credential (minted by ssoRoutes.ts's
+// /confirm/session), not the generic 'static_bearer' TokenStore.upsert() produces. Mint it the
+// same way here — via the same TokenStore instance's public identities/credentials stores —
+// so requireSession's credential-kind gate accepts these fixture sessions exactly like a real
+// be2-auth SSO login would.
 function seedSession(sid: string, userLabel: string) {
-  webSessions.create(sid, userLabel)
-  new TokenStore(db).upsert({
-    bearerHash: TokenStore.hashBearer(sid), userLabel,
+  const tokenStore = new TokenStore(db)
+  const identityId = `ident-${sid}`
+  tokenStore.identities.upsert({
+    identityId, userLabel,
     accessToken: fakeJwt({ authKey: userLabel }), refreshToken: 'r', businessList: [],
     accessExpiresAt: Date.now() + 3600_000, updatedAt: Date.now(),
   })
+  tokenStore.credentials.insert({
+    credHash: TokenStore.hashBearer(sid), identityId, kind: 'web_session', expiresAt: null, updatedAt: Date.now(),
+  })
+  webSessions.create(sid, identityId)
 }
 
 async function startApp(gatewayUrl = 'https://gw.invalid'): Promise<void> {

@@ -1,6 +1,8 @@
 import express from 'express'
+import { randomUUID } from 'node:crypto'
 import type { AuthServiceClient } from '../auth/authServiceClient.js'
 import { TokenStore } from '../store/tokenStore.js'
+import { CredentialStore } from '../store/credentialStore.js'
 import { WebSessionStore } from './webSessionStore.js'
 import { decodeJwtClaims, decodeJwtExpMs } from '../auth/jwt.js'
 import { parseCookies, serializeSetCookie } from './cookies.js'
@@ -8,6 +10,25 @@ import { parseCookies, serializeSetCookie } from './cookies.js'
 export interface SsoDeps {
   authServiceClient: AuthServiceClient; tokenStore: TokenStore; webSessions: WebSessionStore
   authOrigin: string; now: () => number
+}
+
+// Task 4: shared "exchangeCode -> minted identity" step, factored out of the POPUP /confirm/session
+// handler below so a future Phase B OAuth `authorize` redirect flow (which will also need to turn
+// a be2-auth authorizationCode into a be2 identity, just for a different credential kind) can
+// reuse it instead of re-deriving the authKey-from-JWT logic a second time.
+export async function exchangeCodeToIdentity(
+  authServiceClient: AuthServiceClient, tokenStore: TokenStore, code: string, now: number,
+): Promise<{ identityId: string; userLabel: string; accessToken: string } | undefined> {
+  const tokens = await authServiceClient.exchangeCode(code)
+  const userLabel = String(decodeJwtClaims(tokens.accessToken).authKey ?? '')
+  if (!userLabel) return undefined
+  const identityId = randomUUID()
+  tokenStore.identities.upsert({
+    identityId, userLabel,
+    accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, businessList: tokens.businessList,
+    accessExpiresAt: decodeJwtExpMs(tokens.accessToken), updatedAt: now,
+  })
+  return { identityId, userLabel, accessToken: tokens.accessToken }
 }
 
 export function buildSsoRouter(deps: SsoDeps): express.Router {
@@ -57,16 +78,19 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
   r.post('/confirm/session', express.json(), h(async (req, res) => {
     const code = String((req.body as { code?: unknown })?.code ?? '')
     if (!code) { res.status(400).json({ error: { code: 'NO_CODE', message: 'missing authorization code' } }); return }
-    const tokens = await deps.authServiceClient.exchangeCode(code)
-    const userLabel = String(decodeJwtClaims(tokens.accessToken).authKey ?? '')
-    if (!userLabel) { res.status(502).json({ error: { code: 'NO_USER', message: 'token has no authKey' } }); return }
+    const identity = await exchangeCodeToIdentity(deps.authServiceClient, deps.tokenStore, code, deps.now())
+    if (!identity) { res.status(502).json({ error: { code: 'NO_USER', message: 'token has no authKey' } }); return }
     const sessionId = WebSessionStore.newSessionId()
-    deps.tokenStore.upsert({
-      bearerHash: TokenStore.hashBearer(sessionId), userLabel,
-      accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, businessList: tokens.businessList,
-      accessExpiresAt: decodeJwtExpMs(tokens.accessToken), updatedAt: deps.now(),
+    // Task 4: the confirm-page cookie's credential MUST be tagged kind='web_session' — never
+    // 'static_bearer' (that's what TokenStore.upsert would have minted here). confirmRoutes.ts's
+    // requireSession gates on this kind, which is the structural reason an agent cannot
+    // self-approve its own change-set by replaying its own MCP bearer as this cookie: even a
+    // stolen/relayed secret only ever resolves to a credential of the WRONG kind.
+    deps.tokenStore.credentials.insert({
+      credHash: CredentialStore.hash(sessionId), identityId: identity.identityId, kind: 'web_session',
+      expiresAt: null, updatedAt: deps.now(),
     })
-    deps.webSessions.create(sessionId, userLabel)
+    deps.webSessions.create(sessionId, identity.identityId)
     res.setHeader('Set-Cookie', serializeSetCookie('be2mcp_sid', sessionId, { httpOnly: true, sameSite: 'Lax', path: '/confirm' }))
     res.status(200).json({ ok: true })
   }))
