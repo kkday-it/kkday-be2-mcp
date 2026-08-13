@@ -1,6 +1,6 @@
 # be2 MCP — OAuth 2.1 外殼 + 確認頁 SSO-seamless design spec
 
-日期：2026-08-13　狀態：draft（待使用者審 + agy-peer-review）
+日期：2026-08-13　狀態：已過 agy-peer-review（rounds=2）、**待使用者審**
 > 前置文件：`docs/be2-mcp/reference-dev-tools-architecture.md`（dev-tools OAuth 外殼逆向，直接借鏡）、`docs/be2-mcp/be2-mcp-auth-design.md`（認證內核換 auth-service、Part 3 SSO-seamless 構想）、`docs/be2-mcp/next-iteration-eval.md` §2（本設計的來源）、`docs/be2-mcp/phase0-inventory.md`（A7/A8 be2-auth 登入實證、B1/B2/B3 外部依賴）。
 > **使用者離線期間以建議選項定案的假設（審查時可推翻）**：(1) 確認頁「只需確認」= **SSO-seamless（OAuth 登入建立的 be2-auth 瀏覽器 session 被確認頁靜默復用，仍 cookie-gated）**，非「無憑證純按鈕」；(2) OAuth client 只做 Claude Code + Desktop（本機 loopback，不碰 claude.ai 公網 ingress）；(3) token 存放沿用 Option 1（server 端 store）；(4) static bearer（bootstrap-user）保留為過渡/headless fallback。
 
