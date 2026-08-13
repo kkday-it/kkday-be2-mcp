@@ -111,7 +111,16 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
       return undefined
     }
     deps.webSessions.touch(sid)
-    return { sessionId: sid, userLabel: user.userLabel, accessToken: user.accessToken }
+    // Security fix (final whole-branch review finding, credential-at-rest leak): never hand back
+    // the raw cookie secret `sid` as the audited sessionId. `sid` IS the web_session credential's
+    // secret — audit_log is append-only (no-delete trigger), so a raw sid landing in a row would
+    // be an unredactable, still-valid approval credential for anyone who can read the SQLite
+    // file/export. `cred.credHash` (already computed above as sha256(sid), and already the value
+    // persisted in the `credentials` table) is a stable non-secret per-session correlator: same
+    // discriminating power for audit purposes, but its preimage (the cookie itself) cannot be
+    // recovered from it. `who.sessionId` has no consumer besides audit labeling (grep-verified:
+    // confirmService.ts, executor.ts, confirmRoutes.ts's own reject handler) so this swap is safe.
+    return { sessionId: cred.credHash, userLabel: user.userLabel, accessToken: user.accessToken }
   }
   function loginRedirect(res: express.Response, next: string) { res.redirect(302, `/confirm/login?next=${encodeURIComponent(next)}`) }
 

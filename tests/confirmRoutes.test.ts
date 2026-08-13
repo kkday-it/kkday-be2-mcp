@@ -181,7 +181,8 @@ describe('confirm routes — session-cookie auth', () => {
     await http(base, 'POST', '/confirm/cs1/approve', { diff_version: dv }, COOKIE_A)
     const rows = new AuditLog(db).recent()
     const decision = rows.find(r => r.tool === 'changeset.approve')
-    expect(decision).toMatchObject({ userLabel: 'owner@kkday.com', sessionId: SID_A, status: 'ok' })
+    // Not the raw cookie secret — see the dedicated SECURITY test below for why.
+    expect(decision).toMatchObject({ userLabel: 'owner@kkday.com', sessionId: CredentialStore.hash(SID_A), status: 'ok' })
   })
 
   it('reject writes an audit row with session_id/userLabel from the WEB session', async () => {
@@ -191,7 +192,25 @@ describe('confirm routes — session-cookie auth', () => {
     expect(store.get('cs2')!.status).toBe('rejected')
     const rows = new AuditLog(db).recent()
     const decision = rows.find(row => row.tool === 'changeset.reject')
-    expect(decision).toMatchObject({ userLabel: 'owner@kkday.com', sessionId: SID_A, status: 'ok' })
+    expect(decision).toMatchObject({ userLabel: 'owner@kkday.com', sessionId: CredentialStore.hash(SID_A), status: 'ok' })
+  })
+
+  // SECURITY REGRESSION (credential-at-rest leak, final whole-branch review finding): the
+  // be2mcp_sid cookie value IS the web_session credential's secret (credHash = sha256(sid)).
+  // audit_log is append-only (no-delete trigger) — if the raw sid ever lands in a row, anyone who
+  // can read the SQLite file/export gets a live, still-valid approval credential until idle-TTL/
+  // logout, with no way to redact it after the fact. requireSession() must therefore hand back
+  // cred.credHash (the already-stored, non-secret hash) as the audited sessionId, never the raw
+  // cookie. This test fails if requireSession ever regresses to returning the raw sid.
+  it('SECURITY: audit_log never stores the raw be2mcp_sid cookie secret, only its non-secret credHash', async () => {
+    seed(store, 'cs1', true, false)
+    const dv = await getDiffVersion(COOKIE_A)
+    await http(base, 'POST', '/confirm/cs1/approve', { diff_version: dv }, COOKIE_A)
+    const rows = new AuditLog(db).recent()
+    const decision = rows.find(r => r.tool === 'changeset.approve')
+    expect(decision).toBeDefined()
+    expect(decision!.sessionId).not.toBe(SID_A)
+    expect(decision!.sessionId).toBe(CredentialStore.hash(SID_A))
   })
 
   it('modifyUser resolution failure leaves the change-set pending_approval, not stranded', async () => {
