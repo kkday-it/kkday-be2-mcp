@@ -73,8 +73,12 @@ export function buildAuthorizeRouter(deps: AuthorizeDeps): express.Router {
     const v = validateParams(req.query as Record<string, unknown>)
     if (!v.ok) { res.status(400).send('invalid_request'); return }
     const { clientId, redirectUri, codeChallenge, state } = v.params
-    res.setHeader('Referrer-Policy', 'no-referrer')
-    const loginUrl = `${deps.authOrigin}/auth/be2/login?loginFlow=POPUP&redirectPath=${encodeURIComponent(deps.authOrigin + '/auth/be2/login')}`
+    // NOTE: be2-web 的登入頁 NOT set no-referrer；be2-auth 登入 SPA 疑似檢查 document.referrer，
+    // no-referrer 會讓 popup 收不到 referrer → 跳 /404。此頁的 referrer 只含 authorize query
+    // （client_id/code_challenge/state，去給受信任的 be2-auth），洩漏面低，故不設 no-referrer。
+    // Live-verified 2026-08-13 (playwright capture of real be2-web login): be2-web opens the
+    // login popup with NO redirectPath; adding one makes the be2-auth SPA client-route to /404.
+    const loginUrl = `${deps.authOrigin}/auth/be2/login?loginFlow=POPUP`
     res.status(200).send(`<!doctype html><meta charset=utf-8><title>be2 登入</title>
 <body><p>需登入 be2 才能授權此 client。</p><button id="loginBtn">登入 be2</button><p id="msg"></p><script>
   var AUTH_ORIGIN = ${js(deps.authOrigin)};
@@ -91,7 +95,9 @@ export function buildAuthorizeRouter(deps: AuthorizeDeps): express.Router {
   });
   window.addEventListener('message', function (e) {
     if (e.origin !== AUTH_ORIGIN) return;            // MANDATORY origin check
-    var code = (e.data && (e.data.authorizationCode || e.data.code)) || null;
+    // Live-verified real contract: { event:'UPDATE_AUTH_TOKEN', data:{ authorizationCode, device } }.
+    var p = (e.data && e.data.data) ? e.data.data : e.data;
+    var code = (p && (p.authorizationCode || p.code)) || null;
     if (!code) return;
     fetch('/oauth/authorize/complete', {
       method: 'POST', headers: {'content-type':'application/json'},

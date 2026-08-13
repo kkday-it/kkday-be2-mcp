@@ -52,7 +52,9 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
   r.get('/confirm/login', (req, res) => {
     res.setHeader('Referrer-Policy', 'no-referrer')
     const next = safeNext(req.query.next)
-    const loginUrl = `${deps.authOrigin}/auth/be2/login?loginFlow=POPUP&redirectPath=${encodeURIComponent(deps.authOrigin + '/auth/be2/login')}`
+    // Live-verified 2026-08-13 (playwright capture of real be2-web login): be2-web opens the
+    // login popup with NO redirectPath; adding one makes the be2-auth SPA client-route to /404.
+    const loginUrl = `${deps.authOrigin}/auth/be2/login?loginFlow=POPUP`
     res.status(200).send(`<!doctype html><meta charset=utf-8><title>be2 登入</title>
 <body><p>需登入 be2 才能審批變更。</p><button id="loginBtn">登入 be2</button><p id="msg"></p><script>
   var AUTH_ORIGIN = ${js(deps.authOrigin)};
@@ -66,7 +68,10 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
   });
   window.addEventListener('message', function (e) {
     if (e.origin !== AUTH_ORIGIN) return;            // MANDATORY origin check (spec §3)
-    var code = (e.data && (e.data.authorizationCode || e.data.code)) || null;
+    // Live-verified real contract: { event:'UPDATE_AUTH_TOKEN', data:{ authorizationCode, device } }.
+    // The code is nested at e.data.data.authorizationCode (not top-level). Keep a flat fallback.
+    var p = (e.data && e.data.data) ? e.data.data : e.data;
+    var code = (p && (p.authorizationCode || p.code)) || null;
     if (!code) return;
     fetch('/confirm/session', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ code: code }) })
       .then(function(r){ if(!r.ok) throw new Error('session'); if(pop) pop.close(); location.replace(NEXT); })
