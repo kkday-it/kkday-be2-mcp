@@ -23,6 +23,8 @@ import { wrapAppTool, type AppPipelineDeps } from './appPipeline.js'
 import { buildConfirmRouter } from './confirmRoutes.js'
 import { buildSsoRouter } from './ssoRoutes.js'
 import { buildDiscoveryRouter } from '../oauth/discoveryRoutes.js'
+import { buildRegisterRouter } from '../oauth/registerRoutes.js'
+import { OAuthStore } from '../oauth/oauthStore.js'
 import { registerAppResources } from './appResources.js'
 import { findProductsTool } from '../tools/findProducts.js'
 import { productPlansTool } from '../tools/productPlans.js'
@@ -121,6 +123,10 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // survives a confirm-page logout.
   const webSessions = new WebSessionStore(db, { onDelete: sid => purgeCredential(CredentialStore.hash(sid)) })
   const authOrigin = new URL(config.authsvcUrl).origin
+  // Task 7：DCR client store（RFC 7591）。與 Task 6 的 OAuthStore 是同一張表，僅此處負責
+  // client 註冊；authorization_code/refresh 由 Task 8/9 接續使用同一個 OAuthStore 實例的
+  // 其他方法。
+  const oauthStore = new OAuthStore(db)
 
   const deps: PipelineDeps = { tokenManager, rateBudget, audit, gateway, readOids }
   const l2Deps: L2PipelineDeps = {
@@ -214,6 +220,10 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // Task 6：OAuth discovery（RFC 9728 + RFC 8414）——公開端點，Claude 的 OAuth client
   // 用它找到 authorize/token/register 端點與 PKCE/public-client 能力，無需 bearer。
   app.use(buildDiscoveryRouter({ baseUrl: `http://127.0.0.1:${config.port}` }))
+  // Task 7：DCR 動態註冊——公開端點（無 bearer），Claude 的 OAuth client 用 discovery 拿到的
+  // registration_endpoint 打這裡自助建立 public client。redirect_uri allowlist 是唯一防線，
+  // 見 src/oauth/redirectUri.ts。
+  app.use(buildRegisterRouter({ oauthStore, genId: randomUUID }))
   // CRITICAL route order (agy T4 finding): buildSsoRouter registers GET /confirm/login (+ POST
   // /confirm/session, /confirm/logout); buildConfirmRouter registers GET /confirm/:id. Express
   // matches routes in registration order, not by specificity — if the confirm router mounted
