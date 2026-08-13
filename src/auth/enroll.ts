@@ -1,5 +1,6 @@
-import { randomBytes } from 'node:crypto'
-import { TokenStore } from '../store/tokenStore.js'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { IdentityStore } from '../store/identityStore.js'
+import { CredentialStore } from '../store/credentialStore.js'
 import type { AuthServiceClient } from './authServiceClient.js'
 import { decodeJwtClaims, decodeJwtExpMs } from './jwt.js'
 
@@ -9,8 +10,11 @@ export function generateBearer(): string {
 
 type EnrollInput = { userLabel: string } & ({ account: string; password: string; otp?: string } | { code: string })
 
+// Task 3：enroll 直接建 identity + credential（不再經 TokenStore 扁平相容層）。
+// 一次 enroll = 一個新 identity（帶 be2 token）+ 一個 static_bearer credential 指向它，
+// 對齊 identity/credential 拆分後的地基（IdentityStore/CredentialStore，Task 1）。
 export async function enrollUser(
-  deps: { store: TokenStore; auth: AuthServiceClient },
+  deps: { identities: IdentityStore; credentials: CredentialStore; auth: AuthServiceClient },
   input: EnrollInput,
   now: () => number = Date.now,
 ): Promise<{ bearer: string }> {
@@ -27,14 +31,22 @@ export async function enrollUser(
   const claims = decodeJwtClaims(tokens.accessToken)
   const authKey = typeof claims.authKey === 'string' && claims.authKey ? claims.authKey : undefined
   const userLabel = authKey ?? input.userLabel
-  const bearer = generateBearer()
-  deps.store.upsert({
-    bearerHash: TokenStore.hashBearer(bearer),
+  const identityId = randomUUID()
+  deps.identities.upsert({
+    identityId,
     userLabel,
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,
     businessList: tokens.businessList,
     accessExpiresAt: decodeJwtExpMs(tokens.accessToken),
+    updatedAt: now(),
+  })
+  const bearer = generateBearer()
+  deps.credentials.insert({
+    credHash: CredentialStore.hash(bearer),
+    identityId,
+    kind: 'static_bearer',
+    expiresAt: null,
     updatedAt: now(),
   })
   return { bearer }

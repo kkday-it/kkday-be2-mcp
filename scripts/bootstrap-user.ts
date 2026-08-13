@@ -1,6 +1,7 @@
 import { loadConfig } from '../src/config.js'
 import { openDb } from '../src/store/db.js'
-import { TokenStore } from '../src/store/tokenStore.js'
+import { IdentityStore } from '../src/store/identityStore.js'
+import { CredentialStore } from '../src/store/credentialStore.js'
 import { AuthServiceClient } from '../src/auth/authServiceClient.js'
 import { enrollUser } from '../src/auth/enroll.js'
 import { parseArgs } from 'node:util'
@@ -14,7 +15,9 @@ import { parseArgs } from 'node:util'
 
 const { values } = parseArgs({ options: { otp: { type: 'string' }, code: { type: 'string' }, label: { type: 'string' } } })
 const cfg = loadConfig()
-const store = new TokenStore(openDb(cfg.dbPath))
+const db = openDb(cfg.dbPath)
+const identities = new IdentityStore(db)
+const credentials = new CredentialStore(db)
 const auth = new AuthServiceClient({ baseUrl: cfg.authsvcUrl, serviceKey: cfg.serviceKey })
 const userLabel = values.label ?? process.env.AUTH_email ?? 'unknown-pilot'
 
@@ -22,7 +25,7 @@ const input = values.code
   ? { userLabel, code: values.code }
   : { userLabel, account: process.env.AUTH_email!, password: process.env.AUTH_pwd!, otp: values.otp }
 
-enrollUser({ store, auth }, input).then(({ bearer }) => {
+enrollUser({ identities, credentials, auth }, input).then(({ bearer }) => {
   console.log(`Enrolled ${userLabel}.`)
   console.log('Static bearer (shown once, store it in your Claude Code MCP config):')
   console.log(bearer)

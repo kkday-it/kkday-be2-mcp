@@ -44,6 +44,18 @@ describe('TokenStore', () => {
     const s = makeStore()
     expect(() => s.deleteByBearerHash(TokenStore.hashBearer('nope'))).not.toThrow()
   })
+  it('deleteByBearerHash keeps the identity alive when another credential still references it', () => {
+    const s = makeStore()
+    const hash = TokenStore.hashBearer('be2mcp_shared')
+    s.upsert({ bearerHash: hash, userLabel: 'u', accessToken: 'a', refreshToken: 'r', businessList: [], accessExpiresAt: 1, updatedAt: 1 })
+    const identityId = s.credentials.get(hash)!.identityId
+    // 同一 identity 再掛一個 web_session credential（模擬確認頁 SSO 與 static bearer 並存）
+    s.credentials.insert({ credHash: TokenStore.hashBearer('sid-other'), identityId, kind: 'web_session', expiresAt: null, updatedAt: 1 })
+    s.deleteByBearerHash(hash)
+    expect(s.getByBearerHash(hash)).toBeUndefined()
+    // identity 本身不該被砍掉：還有另一個 credential 指著它
+    expect(s.identities.get(identityId)).toBeDefined()
+  })
   it('audit_log rejects UPDATE and DELETE (append-only triggers)', () => {
     const db = openDb(':memory:')
     db.prepare(`INSERT INTO audit_log (ts, user_label, session_id, client_info, tool, params_json, status, trace_id, duration_ms)
