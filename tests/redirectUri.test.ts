@@ -5,12 +5,17 @@ import { isAllowedRedirectUri } from '../src/oauth/redirectUri.js'
 // 「new URL() 解析 + 精確欄位比對」，不可用字串 prefix/naive regex（否則 `localhost.evil.com`
 // 這種變形會被字串前綴誤判為合法）。以下測資涵蓋合法值與常見繞過手法。
 describe('isAllowedRedirectUri', () => {
-  it('放行 claude.ai callback + loopback（localhost/127.0.0.1，任意 port，路徑須為 /callback）', () => {
+  it('放行 claude.ai callback + loopback（localhost/127.0.0.1，任意 port，任意路徑）', () => {
     expect(isAllowedRedirectUri('https://claude.ai/api/mcp/auth_callback')).toBe(true)
     expect(isAllowedRedirectUri('http://127.0.0.1:54321/callback')).toBe(true)
     expect(isAllowedRedirectUri('http://localhost:8999/callback')).toBe(true)
     expect(isAllowedRedirectUri('http://localhost/callback')).toBe(true)
     expect(isAllowedRedirectUri('http://127.0.0.1/callback')).toBe(true)
+    // RFC 8252 loopback 的安全性來自「host 是本機」，port 與 path 都由 client 自訂——
+    // mcp-remote（Claude Desktop 的 stdio→HTTP 代理）就用隨機 port + /oauth/callback
+    // （live 2026-08-14 被舊規則的固定 path 擋下）。
+    expect(isAllowedRedirectUri('http://127.0.0.1:47779/oauth/callback')).toBe(true)
+    expect(isAllowedRedirectUri('http://localhost:33418/oauth/callback')).toBe(true)
   })
 
   it('擋 open-redirect 變形：偽裝 host、路徑不符、非法 scheme', () => {
@@ -18,8 +23,7 @@ describe('isAllowedRedirectUri', () => {
     expect(isAllowedRedirectUri('http://localhost.evil.com/callback')).toBe(false)
     expect(isAllowedRedirectUri('http://127.0.0.1.evil.com/callback')).toBe(false)
     expect(isAllowedRedirectUri('https://claude.ai.evil.com/api/mcp/auth_callback')).toBe(false)
-    // 路徑不對
-    expect(isAllowedRedirectUri('http://localhost:1/other')).toBe(false)
+    // loopback 任意路徑已放行（RFC 8252），路徑不再是擋點——host 偽裝才是（見上）
     // 非法/危險 scheme
     expect(isAllowedRedirectUri('javascript:alert(1)//callback')).toBe(false)
     // claude.ai 但帶 port（host 比對含 port，非 hostname）或路徑不符
