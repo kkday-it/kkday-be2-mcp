@@ -94,8 +94,10 @@
 - [ ] **Step 1: 失敗測試**（mock gateway；照 `tests/inventoryDiff.test.ts` 的 mock 樣式）：
   - diff：現況 BE2、目標 BE2_SCM → 一筆非 noop；現況=目標 → `noop:true`；**讀取用 item 端點、絕不呼叫 packages**（mock 斷言呼叫路徑）；兩布林缺 → 丟 `DiffError`；未定義組合（11）→ `DiffError`。
   - executor：兩 item 一成一敗（mock put 第二個 reject）→ `allSettled` 結果一 ok 一 error；PUT body 精確等於 `{is_external_inventory, is_inventory_mgmt, modify_user}`；noop 項 `skipped_noop` 不發 PUT。
+  - **`diffVersionHash` 分支測試**：對 `InventoryPlatformDiffItem[]` 計算不丟錯、相同內容 hash 穩定、布林變動 hash 改變——現行實作（diff.ts:13）用 duck-typing（有 `item_oid` 就當 `InventoryDiffItem` 讀 `.dates`）會直接 crash，必須加明確分支。
+  - **`itemKey` 分支測試**：`InventoryPlatformItem` 的 key = `${item_oid}:${supplier_oid}`（現行 executor.ts:119 的 `itemKey` 讀 prod_oid/pkg_oid 會回 undefined → confirmService 的 `itemKeysOf` 驗 confirmed_keys 時全數 `CONFIRMED_KEYS_MISMATCH`、面板批准被鎖死）。
 - [ ] **Step 2: 跑測試 FAIL。**
-- [ ] **Step 3: 實作**（diff 以 `(item_oid,supplier_oid)` 為鍵；`diff_version` 由 dispatcher 既有 `diffVersionHash` 對 diff 陣列計算——確保 `InventoryPlatformDiffItem` 欄位序穩定；executor PUT `/product/api/v1/items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting`）。dispatcher/confirmService 接線照 `inventory_setting` 的既有分支複製改名。
+- [ ] **Step 3: 實作**（diff 以 `(item_oid,supplier_oid)` 為鍵；**修 `diffVersionHash`（diff.ts:13）加 `InventoryPlatformDiffItem` 明確分支**、**修 `itemKey`（executor.ts:119）/`itemKeysOf`（confirmService）支援新 item 形狀——用明確型別判斷，不用 duck-typing cast**；executor PUT `/product/api/v1/items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting`）。dispatcher/confirmService 接線照 `inventory_setting` 的既有分支複製改名。
 - [ ] **Step 4: 測試綠 + `npm run ci`。**
 - [ ] **Step 5: Commit** `feat(4a): inventory_platform diff + executor（item×supplier 粒度、item 層級讀取）`
 
@@ -117,7 +119,8 @@
 
 - [ ] **Step 1: 失敗測試**：
   - diff：現況 queue 亂序含 created_* 欄位、目標相同內容 → `noop:true`（淨化+排序後深等）；`is_bundle` 方案 → `DiffError`；pkg 不存在 → `DiffError`。
-  - `diff_version`：同內容不同順序的現況 → 相同 hash。
+  - `diff_version`：同內容不同順序的現況 → 相同 hash；**`diffVersionHash` 對 `ShelfScheduleDiffItem[]` 要有明確分支**（現行 fallback 讀 `.current_is_active` 缺欄位會產生常數 hash → stale 保護整個失效——測「queue 內容變動 hash 必變」）。
+  - `itemKey`：`ShelfScheduleItem` 沿用 `${prod_oid}:${pkg_oid}`（欄位齊全，但加明確分支測試鎖住）。
   - executor：3 items 跨 2 個 prod → 恰好 2 次 PUT（依 prod 分組、config_data 多 pkg）；一 prod PUT 失敗不影響另一 prod；空 queue 送出 `reserve_queue: []`；結果 per-pkg 記錄。
 - [ ] **Step 2: FAIL。**
 - [ ] **Step 3: 實作**（讀 package-configs → map by pkg_oid → sanitizeQueue 比對；executor 分組批次）。
@@ -139,6 +142,7 @@
   // output { products: [{ prod_oid, name, plans: [{ pkg_oid, name, item_oid, supplier_oid, supplier_name, is_active, is_bundle, current_platform?, reserve_queue? }] }] }
   ```
 - Consumes: `packages?show_supplier=1`（欄位名以 Task 1 記錄為準）＋ `package-configs`（shelf_schedule 的 reserve_queue/is_bundle）；既有 readOidStore（grep `session_read_oids` / `readOidStore` 找 record API）與 rate budget（照既有 L0 tool 的接法）。
+- **前置整備（本 task 內做）**：`AppToolContext`（src/server/appPipeline.ts）目前**沒有** readOidStore、每日 RateBudget、gateway/tokenManager 等 L2 依賴——先擴充 `AppPipelineDeps`/`AppToolContext` 把需要的依賴注入（在 src/server/app.ts 組裝處補傳；**全域每日 RateBudget 與既有 AppRateBudget 滑動窗是兩個東西，都要接**），寫一個「app tool 能讀到 readOidStore 與 budget」的接線測試，再開始 batch_view 本體。禁止把 context 硬 cast 成 L2ToolContext。
 
 - [ ] **Step 1: 失敗測試**：mock gateway 回 fixtures → 斷言 (a) 輸出形狀；(b) **read-oids 記了 prod+pkg+item 三層**（直查 readOidStore）；(c) >10 prod_oids 拒絕；(d) budget 計數 +1。
 - [ ] **Step 2: FAIL。**
@@ -203,3 +207,5 @@
 - Spec 覆蓋：§2 契約→Task 1/3/4；§4.1→Task 2/3（粒度、DiffError、item 層級讀）；§4.2→Task 2/4（淨化排序、分組批次、bundle 拒）；§4.3→Task 2；§5.1→Task 5（三層 oids）；§5.2→Task 6；§5.3 復用不動；§5.4→Task 7；§5.5→Task 6；§7→各 task Step 1＋Task 8；§8 demo→Task 8 runbook。
 - 型別一致性：`InventoryPlatformItem/ShelfScheduleItem/ScheduleEntry/sanitizeQueue` 於 Task 2 定義、3/4/5/6/7 引用同名。
 - 無 TBD/placeholder；欄位名依 Task 1 probe 定案處已明示以何為準。
+
+<!-- agy-peer-reviewed: 2026-08-14T14:08:14Z rounds=2 verdict=approved -->
