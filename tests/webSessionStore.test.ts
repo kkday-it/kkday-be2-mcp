@@ -1,8 +1,32 @@
 import { describe, it, expect, vi } from 'vitest'
+import Database from 'better-sqlite3'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { openDb } from '../src/store/db.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 
 describe('WebSessionStore', () => {
+  // Phase 2b 之前的 on-disk db：web_sessions 是 user_label 版 schema（無 identity_id）。
+  // CREATE TABLE IF NOT EXISTS 不會補欄位 → /oauth/authorize/complete 500（live 2026-08-14）。
+  // web session 是短命 idle-TTL 資料，正確 migration = 偵測舊 schema 直接重建（等同全員登出）。
+  it('openDb 對 legacy web_sessions（無 identity_id 欄）重建表，create 不再炸', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'be2mcp-db-')), 'legacy.sqlite')
+    const legacy = new Database(path)
+    legacy.exec(`CREATE TABLE web_sessions (
+      session_id   TEXT PRIMARY KEY,
+      user_label   TEXT NOT NULL,
+      created_at   INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL
+    );`)
+    legacy.prepare('INSERT INTO web_sessions VALUES (?,?,?,?)').run('old-sid', 'someone@kkday.com', 1, 1)
+    legacy.close()
+
+    const s = new WebSessionStore(openDb(path), { now: () => 1000 })
+    s.create('sid1', 'ident-user')
+    expect(s.get('sid1')).toMatchObject({ sessionId: 'sid1', identityId: 'ident-user' })
+    expect(s.get('old-sid')).toBeUndefined() // 舊 session 隨重建消失（重新登入即可）
+  })
   it('creates and reads a session', () => {
     const s = new WebSessionStore(openDb(':memory:'), { now: () => 1000 })
     s.create('sid1', 'ident-user')

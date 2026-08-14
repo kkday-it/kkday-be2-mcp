@@ -115,6 +115,14 @@ export function openDb(path: string): Database.Database {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
   const db = new Database(path)
   db.pragma('journal_mode = WAL')
+  // Phase 2b 把 web_sessions 從 user_label 改成 identity_id，但 CREATE TABLE IF NOT EXISTS
+  // 不會改既有表 → 舊 on-disk db 在 /confirm/session 與 /oauth/authorize/complete 直接 500
+  // （live 2026-08-14）。web session 是短命 idle-TTL 資料，偵測到舊 schema 就整表重建
+  // （效果 = 該 db 的網頁登入全部登出一次），比逐欄搬遷簡單且無資料保存需求。
+  const wsCols = db.prepare("PRAGMA table_info(web_sessions)").all() as Array<{ name: string }>
+  if (wsCols.length > 0 && !wsCols.some(c => c.name === 'identity_id')) {
+    db.exec('DROP TABLE web_sessions')
+  }
   db.exec(MIGRATIONS)
   // Task 10：oauth_refresh 補一欄 access_cred_hash——記錄「這顆 refresh 核發當下同批鑄出的
   // access credential 是哪一列」，供 rotation 精準刪除舊 access（只刪這一列，不誤刪同 identity
