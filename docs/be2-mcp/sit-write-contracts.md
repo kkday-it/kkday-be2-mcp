@@ -168,26 +168,35 @@ The `.env` SIT account is **not mapped to any supplier** on be2-220 for the test
 - 供應商資訊的鍵名是 **`supplier_mapping`**(陣列),不是 `supplier`/`suppliers`(先前設計文件的猜測欄位名有誤,已用本次 live 回應修正)。取 `is_default:true` 的元素為預設 supplier_oid(此例 `38028`)。
 - **注意**:此回應**沒有** `is_bundle` 欄位(與 Phase 1a `packages.json` fixture 的舊回應形狀不同,那份含 `is_bundle`)——挑非 bundle 方案時若欄位缺席,視為非 bundle(`p.is_bundle !== true` 恆真)。若 34133 全部方案皆非 bundle,無法從本次資料確認 `is_bundle` 是否仍存在於別的商品回應,**沿用既有 fixture 的欄位名、加防禦性判斷即可,非本次阻擋項**。
 
-### Step 1–3:三個候選端點 — 全部讀不到兩布林,**BLOCKED**
+### 候選端點 live 結果(全部,含 brief 外的源碼出土候選)
 
 | # | 候選端點 | 結果 |
 |---|---|---|
-| 1 | `GET items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting` | **404**(`{"data":null,"meta":{"status":"199997","desc":"查無對應的 uri"}}`) |
-| 2 | `GET items/{itemOid}/supplier-configs/{supplierOid}` | **404**(同上,`199997` 查無對應的 uri) |
+| 1 | `GET items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting` | **404**(`199997「查無對應的 uri」`— 路由不存在) |
+| 2 | `GET items/{itemOid}/supplier-configs/{supplierOid}` | **404**(同上;另試無 supplierOid、query param、`items/{oid}/inventory-setting`、`item-configs/{oid}/inventory-setting` 四變體皆同)|
 | 3 | `GET items/{itemOid}/supplier-mappings` | **200**,但元素只有 `{supplier_oid, cost_curr_code, is_default}` — **無兩布林** |
+| 4 | `GET items/{itemOid}/configs`(product-service)| **403**(空 body;路由存在、verify per-URI 拒絕)— **這就是兩布林的 source of truth,見下** |
+| 5 | `GET /be2/api/v1/product/item/{itemOid}/inventory`(±`supplier_oid`)與 `.../inventory/basic-info`(be2-web UI 實際打的路)| **500**(`9999「Trying to access array offset on value of type null」`)— be2-api 前綴 inventory 路由在 be2-220 **系統性 500**(Phase 1a 已記錄的同一現象,對 item 1682339/1713281 皆同,非 per-item/per-帳號)|
+| 6 | `POST items/{itemOid}/inventories/search`(user-token 可用,200)| 200 但只回逐日數量 map — **無兩布林**(排除此線)|
 
-`items/1682339/supplier-mappings` 完整回應(sanitized,已知非機密欄位):
-```json
-[{ "supplier_oid": 38028, "cost_curr_code": "TWD", "is_default": true }]
-```
+初版 probe(commit `36a939a`)只跑了 #1–#3,當時結論 BLOCKED;本節為源碼追蹤 + 補測後的**定案**。
 
-**額外驗證(非 brief 三候選,唯讀、加強判斷)**:又試了 `GET items/{itemOid}/supplier-configs`(無 supplierOid)、`GET items/{itemOid}/supplier-configs?supplier_oid=38028`、`GET items/{itemOid}/inventory-setting`、`GET item-configs/{itemOid}/inventory-setting` —— **全部 404、同一 `199997「查無對應的 uri」`**。這代表 `supplier-configs` 系列**在 gateway/product-service 上根本沒有註冊 GET route**(不是授權拒絕、不是資料不存在,是路由層級不存在),與已知的 `PUT .../inventory-setting` 寫入端點呈現「**只有 PUT、沒有對應 GET**」的不對稱設計 —— 與 Phase 3a 的庫存數量寫入(`PUT .../quantity`)那類「UI 走專用 read 路徑、不是 GET 鏡像 PUT」的既有模式一致(當時真正的讀取路徑是 `POST .../inventories/search`,不是猜測中的 GET)。
+### 定案:兩布林的 wire 來源 = product-service `GET items/{itemOid}/configs` → `supplier_configs[]`
 
-### 結論:BLOCKED —— 三個候選讀不到兩布林,`readSupplierInventorySetting()` 尚無定案端點
+be2-web UI 完整鏈路已從原始碼證實(`kkday-be2-web` + `kkday-be2-api`,本機 repo):
 
-Task 1 exit gate 未達成(spec 要求至少一條 200 且含兩布林)。**依 spec §4.1:任一候選都讀不到兩布林 → Task 3 的 diff 讀取必須丟 `DiffError` 擋下建立,嚴禁假設預設值。** 下一步建議(任一即可解卡,依 Phase 3a 同款教訓「GET 常缺席、UI 真正讀取路徑常是別的 verb/route」):
-1. **讀 be2-web 前端原始碼**,找方案編輯頁「庫存管理平台」欄位實際打的 API(仿 Phase 3a 用 `kkday-be2-web`/`kkday-be2-api` 源碼出土 `POST .../inventories/search` 的手法),而非只猜 GET 鏡像。
-2. **用 Playwright 攔 be2-web 真實請求**(仿 Phase 2a/3a 對 shelf-toggle、庫存數量的驗法),在 be2-web 方案設定頁面手動切換庫存管理平台,擷取真實呼叫的 method/path。
-3. 若上述皆不可行,回報使用者由 product-service 團隊確認等效讀取端點(或確認「無獨立讀取端點,只能靠別的聚合端點推算」)。
+1. 庫存頁「供應商庫存管理平台」表格(`SupplierInventoryConfigEditTable.vue`)的每列 `{isExternalInventory, isInventoryMgmt}` 來自 `EditDetail.vue` 的 `activeItemSupplierConfigMappingList` = **`itemSupplierConfig`(兩布林所在)** merge `itemSupplierMapping`(只出 `supplier_name`/`is_default`,即候選 #3 那 3 欄——所以 #3 讀不到布林是設計如此)。
+2. `itemSupplierConfig` 由 store `requestGetInventoryBasicInfo` 從 be2-api `GET v1/product/item/{itemOid}/inventory/basic-info` 回應的 **`item_config.supplier_configs[]`** 取出(camelCase 轉換前的 wire 欄位即 `is_external_inventory`/`is_inventory_mgmt`,與 PUT 契約同名)。
+3. be2-api 的 `item_config` 是 S2S passthrough:`ProductApiService::getItemConfig()` → **product-service `GET items/{itemOid}/configs`**(`kkday-be2-api/app/Services/v1/ProductApiService.php:2431-2434`)。`item_inventory.is_inventory_mgmt`(getInventory 聚合)同樣源自 product-service 的 `items/{oid}/inventories/{supplierOid}`(S2S-only,user token 403,Phase 3a 已證)。
 
-**Task 3 影響**:`readSupplierInventorySetting()` 暫無法實作;若 Phase 4a 要如期推進,建議 Task 3 先完成 diff/executor 的骨架與型別(讀取函式介面照定案簽名 `Promise<{is_external_inventory, is_inventory_mgmt}>` 先行,內部暫時 throw `DiffError('NO_READ_ENDPOINT', …)` 並附上述教訓),待端點定案後補實作,而非讓整個 Task 3 卡住。
+**⇒ Task 3 `readSupplierInventorySetting()` 定案:`GET /product/api/v1/items/{itemOid}/configs`,回應取 `supplier_configs[]` 中 `supplier_oid` 相符的列,讀 `is_external_inventory`/`is_inventory_mgmt`(item 級另有 `inventory_setting`)。**
+
+### Live 未竟:兩條路在 be2-220 對此帳號都不通(契約已源碼三角定位,200-with-booleans 樣本仍缺)
+
+- **首選 `items/{itemOid}/configs`:403** — 空 body、路由存在,與 Phase 3a quantity-PUT 的 AU9403 verify per-URI 拒絕同構(帳號群組缺該 URI 規則綁的 action)。**解卡路徑相同**:be2-220 授權補該 action、或補 `.env` stage keys 改打 stage(同帳號 stage 已證可寫)。
+- **退路 be2-api 聚合端點:500** — be2-220 的 be2-api 前綴 inventory 路由系統性壞掉(Phase 1a 舊識),與授權無關,不值得追;修好也只是 configs 的 wrapper。
+- **依 spec §4.1:read 失敗(403/500)時 diff 一律丟 `DiffError` 擋下建立,嚴禁假設預設值。** Task 3 可實作完成(endpoint、欄位名皆定案),live 驗證掛在與 quantity PUT 同一個授權 blocker 上,非新增阻擋項。
+
+### 教訓(第三次同型)
+
+`supplier-configs` PUT 沒有鏡像 GET;真正讀取是「聚合 config 端點」(`items/{oid}/configs`)——與 Phase 3a「數量讀取是 `POST .../search` 非 GET 鏡像」同型。**任何 be2 寫入端點的現況讀取,先讀 be2-web store/api 層源碼找 UI 真實呼叫,不猜 GET 鏡像。**

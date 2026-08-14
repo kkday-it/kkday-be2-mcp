@@ -1,0 +1,409 @@
+[
+  {
+    "pkg_oid": 1936562,
+    "pkg_name": "【香港旅展限定69折】Paul Frank 30 雙人暢遊券｜雙人票＋Paul Frank 限定鑰匙圈 1 個",
+    "item_oid": 1682339,
+    "is_active": false,
+    "sales_deadline": "2026-04-15",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 38028,
+        "supplier_name": "超藝聯國際行銷有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1937463,
+    "pkg_name": "【限定69折】Paul Frank 30 雙人暢遊券｜雙人票＋Paul Frank 限定鑰匙圈 1 個",
+    "item_oid": 1683240,
+    "is_active": false,
+    "sales_deadline": "2026-04-15",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 38028,
+        "supplier_name": "超藝聯國際行銷有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1901463,
+    "pkg_name": "Paul Frank 30 暢遊券｜一日票＋限定貼紙",
+    "item_oid": 1647240,
+    "is_active": true,
+    "sales_deadline": "2026-04-15",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 38028,
+        "supplier_name": "超藝聯國際行銷有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1947340,
+    "pkg_name": "Paul Frank 30 爆爆暢遊券｜一日票＋雙色棉花糖／大嘴猴造型雞蛋糕小份（二選一）",
+    "item_oid": 1693117,
+    "is_active": true,
+    "sales_deadline": "2026-04-15",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 38028,
+        "supplier_name": "超藝聯國際行銷有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1901470,
+    "pkg_name": "Paul Frank 30 爆爆暢遊券｜一日票＋爆米花／造型雞蛋糕（小份）／限定徽章（三選一）",
+    "item_oid": 1647247,
+    "is_active": false,
+    "sales_deadline": "2026-04-15",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 38028,
+        "supplier_name": "超藝聯國際行銷有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1901471,
+    "pkg_name": "Paul Frank 30 DIY 主題暢遊券｜一日票＋DIY 活動",
+    "item_oid": 1647248,
+    "is_active": true,
+    "sales_deadline": "2026-04-12",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 38028,
+        "supplier_name": "超藝聯國際行銷有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1947341,
+    "pkg_name": "Paul Frank 30 雙人暢遊券｜雙人票＋黃金肉絲酥條／杏仁豬肉乾脆片卷（二選一）",
+    "item_oid": 1693118,
+    "is_active": true,
+    "sales_deadline": "2026-04-15",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 38028,
+        "supplier_name": "超藝聯國際行銷有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1948810,
+    "pkg_name": "Paul Frank 30 雙人暢遊券｜雙人票＋雙色棉花糖／限定鑰匙圈／大嘴猴造型雞蛋糕小份（三選二）",
+    "item_oid": 1694587,
+    "is_active": true,
+    "sales_deadline": "2026-04-15",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 38028,
+        "supplier_name": "超藝聯國際行銷有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1944031,
+    "pkg_name": "Paul Frank 30 氣墊體驗（限 2 - 12 歲兒童）｜不包含門票",
+    "item_oid": 1689808,
+    "is_active": true,
+    "sales_deadline": "2026-04-14",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 38028,
+        "supplier_name": "超藝聯國際行銷有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1901472,
+    "pkg_name": "Paul Frank 30 雙人暢遊券｜雙人票＋爆米花／造型雞蛋糕（小份）／限定徽章（三選二）",
+    "item_oid": 1647249,
+    "is_active": false,
+    "sales_deadline": "2026-04-15",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 38028,
+        "supplier_name": "超藝聯國際行銷有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1336476,
+    "pkg_name": "一日樂FUN券（無限暢玩 13 項指定設施）",
+    "item_oid": 1082253,
+    "is_active": false,
+    "sales_deadline": "2026-06-30",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 4240,
+        "supplier_name": "豐趣科技股份有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1849955,
+    "pkg_name": "【雙人套票】一日樂FUN券＋彩虹泡泡樂園",
+    "item_oid": 1595732,
+    "is_active": false,
+    "sales_deadline": "2025-11-28",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 18473,
+        "supplier_name": "OCBT (TW)",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 579825,
+    "pkg_name": "【獨家促銷】一日樂FUN券 2 張＋遊園小火車券 3 張",
+    "item_oid": 325602,
+    "is_active": false,
+    "sales_deadline": "2025-12-31",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 18473,
+        "supplier_name": "OCBT (TW)",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1691203,
+    "pkg_name": "【限時優惠】航海王樂園一日樂FUN券｜暢玩13項人氣設施＋獨家冰棒好禮",
+    "item_oid": 1436980,
+    "is_active": false,
+    "sales_deadline": "2025-10-12",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 33865,
+        "supplier_name": "亞春國際股份有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1691991,
+    "pkg_name": "【限定套票】航海王貝卡帕庫涼感巾＋一日樂FUN券｜暢玩13項設施×清涼出航！",
+    "item_oid": 1437768,
+    "is_active": false,
+    "sales_deadline": "2025-10-12",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 33865,
+        "supplier_name": "亞春國際股份有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1465356,
+    "pkg_name": "【全台限量】航海王未來島蛋頭篇－喬巴造型存錢筒＋一日樂FUN券套票",
+    "item_oid": 1211133,
+    "is_active": false,
+    "sales_deadline": "2025-10-12",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 33865,
+        "supplier_name": "亞春國際股份有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1821201,
+    "pkg_name": "★★【全台限量】航海王未來島蛋頭篇－喬巴造型存錢筒＋一日樂FUN券套票",
+    "item_oid": 1566978,
+    "is_active": false,
+    "sales_deadline": null,
+    "supplier_mapping": [
+      {
+        "supplier_oid": 33865,
+        "supplier_name": "亞春國際股份有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1471496,
+    "pkg_name": "【展期優惠】航海王夏日必備經典老帽套票",
+    "item_oid": 1217273,
+    "is_active": false,
+    "sales_deadline": "2025-10-12",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 33865,
+        "supplier_name": "亞春國際股份有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1471566,
+    "pkg_name": "滿天星小火車搭乘券",
+    "item_oid": 1217343,
+    "is_active": false,
+    "sales_deadline": "2025-12-31",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 11895,
+        "supplier_name": "票倉國際科技",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1471495,
+    "pkg_name": "【早鳥優惠~6/27截止】航海王草帽一行人徽章全套紀念組套票",
+    "item_oid": 1217272,
+    "is_active": false,
+    "sales_deadline": "2025-10-12",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 33865,
+        "supplier_name": "亞春國際股份有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1465355,
+    "pkg_name": "【早鳥優惠~6/27截止】航海王未來島收藏大禮包",
+    "item_oid": 1211132,
+    "is_active": false,
+    "sales_deadline": "2025-10-12",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 33865,
+        "supplier_name": "亞春國際股份有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 572373,
+    "pkg_name": "【KKday獨家】一日樂 Fun 券 1 張＆遊園小火車搭乘券 1 張",
+    "item_oid": 318150,
+    "is_active": false,
+    "sales_deadline": null,
+    "supplier_mapping": [
+      {
+        "supplier_oid": 18473,
+        "supplier_name": "OCBT (TW)",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 436403,
+    "pkg_name": "【獨家單人美食套票：94折】兒童新樂園一日樂 Fun 券 1張＆漢堡王兒童樂園店套餐兌換券1張",
+    "item_oid": 182180,
+    "is_active": false,
+    "sales_deadline": null,
+    "supplier_mapping": [
+      {
+        "supplier_oid": 8642,
+        "supplier_name": "兒童新樂園",
+        "is_default": false
+      },
+      {
+        "supplier_oid": 18473,
+        "supplier_name": "OCBT (TW)",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 459003,
+    "pkg_name": "【獨家單人美食套票：88折】一日樂 Fun 券 1 張＆四海遊龍指定套餐兌換券 1 張",
+    "item_oid": 204780,
+    "is_active": false,
+    "sales_deadline": null,
+    "supplier_mapping": [
+      {
+        "supplier_oid": 8642,
+        "supplier_name": "兒童新樂園",
+        "is_default": false
+      },
+      {
+        "supplier_oid": 18473,
+        "supplier_name": "OCBT (TW)",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 390562,
+    "pkg_name": "一日樂FUN券（無限暢玩 13 項指定設施）",
+    "item_oid": 136339,
+    "is_active": false,
+    "sales_deadline": null,
+    "supplier_mapping": [
+      {
+        "supplier_oid": 4240,
+        "supplier_name": "豐趣科技股份有限公司",
+        "is_default": false
+      },
+      {
+        "supplier_oid": 8642,
+        "supplier_name": "兒童新樂園",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1465357,
+    "pkg_name": "【早鳥優惠~6/27截止】航海王高CP入門套票",
+    "item_oid": 1211134,
+    "is_active": false,
+    "sales_deadline": "2025-10-12",
+    "supplier_mapping": [
+      {
+        "supplier_oid": 33865,
+        "supplier_name": "亞春國際股份有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1468884,
+    "pkg_name": "星動樂園夜間園遊會｜星光場遊園單人票",
+    "item_oid": 1214661,
+    "is_active": false,
+    "sales_deadline": null,
+    "supplier_mapping": [
+      {
+        "supplier_oid": 33177,
+        "supplier_name": "綠雷德創新股份有限公司",
+        "is_default": true
+      }
+    ]
+  },
+  {
+    "pkg_oid": 1468885,
+    "pkg_name": "星動樂園夜間園遊會｜星光場遊園雙人套票",
+    "item_oid": 1214662,
+    "is_active": false,
+    "sales_deadline": null,
+    "supplier_mapping": [
+      {
+        "supplier_oid": 33177,
+        "supplier_name": "綠雷德創新股份有限公司",
+        "is_default": true
+      }
+    ]
+  }
+]

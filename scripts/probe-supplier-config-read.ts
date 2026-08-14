@@ -12,10 +12,21 @@ import { writeFileSync, mkdirSync } from 'node:fs'
 //
 // Resolves a non-bundle plan's item_oid/supplier_oid via
 // GET /product/api/v1/products/{prodOid}/packages?locale=zh-tw&show_supplier=1, then tries
-// three read candidates in priority order for the two booleans:
-//   1. GET items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting
-//   2. GET items/{itemOid}/supplier-configs/{supplierOid}
-//   3. GET items/{itemOid}/supplier-mappings (known 200 from Phase 4a design; check element shape)
+// read candidates for the two booleans (live results on be2-220, 2026-08-14):
+//   1. GET items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting   → 404 (route not registered)
+//   2. GET items/{itemOid}/supplier-configs/{supplierOid}                      → 404 (route not registered)
+//   3. GET items/{itemOid}/supplier-mappings                                   → 200 but no booleans
+//   4. GET items/{itemOid}/configs  ← the SOURCE OF TRUTH (product-service; supplier_configs[]
+//      carries the two booleans per supplier — verified through the be2-web UI chain:
+//      EditDetail.vue activeItemSupplierConfigMappingList ← item_config.supplier_configs ←
+//      be2-api ProductApiService::getItemConfig → product-service items/{itemOid}/configs).
+//      Live: 403 on be2-220 for this account (gateway/verify per-URI deny, empty body — same
+//      class as the Phase 3a quantity-PUT AU9403 blocker; works via stage / 220 grant).
+//   5. GET /be2/api/v1/product/item/{itemOid}/inventory[?supplier_oid=] and
+//      GET /be2/api/v1/product/item/{itemOid}/inventory/basic-info  ← be2-web's actual routes
+//      (aggregate #4 + supplier-mappings + spec). Live: systematic 500 on be2-220
+//      («Trying to access array offset on value of type null», status 9999) — the same
+//      be2-api-prefix inventory 500s documented since Phase 1a. NOT account-specific.
 
 const prodOid = process.argv[2] ?? '34133'
 const cfg = loadConfig()
@@ -131,11 +142,77 @@ async function main() {
   const mappingEl = Array.isArray(b3) ? b3.find(el => hasBothBooleans(el)) ?? b3[0] : b3
   results.push({ name: 'supplier-mappings', path: p3, status: r3.status, hasBooleans: hasBothBooleans(mappingEl) })
 
+  // 4) product-service items/{itemOid}/configs — the SOURCE OF TRUTH for the two booleans
+  //    (supplier_configs[] per-supplier rows; inventory_setting at item level). be2-api reads
+  //    this S2S and be2-web renders supplier_configs[].{is_external_inventory,is_inventory_mgmt}.
+  //    Expect 403 on be2-220 for this account (verify per-URI deny); 200 where authorized.
+  const pCfg = `/product/api/v1/items/${itemOid}/configs`
+  const rCfg = await gatewayGet(at, pCfg)
+  const bCfg = unwrap(rCfg.body) as Record<string, unknown> | null
+  if (rCfg.status === 200) {
+    saveFixture('item-configs', bCfg)
+    console.log(JSON.stringify(shape(bCfg), null, 2))
+    const scs = bCfg?.supplier_configs as Array<Record<string, unknown>> | undefined
+    if (scs?.length) {
+      const sanitized = Object.fromEntries(Object.entries(scs[0]).map(([k, v]) =>
+        [k, typeof v === 'boolean' || /oid/i.test(k) || v === null ? v : shape(v)]))
+      console.log('supplier_configs[0] sanitized:', JSON.stringify(sanitized, null, 2))
+    }
+    const scRow = scs?.find(el => hasBothBooleans(el)) ?? scs?.[0]
+    results.push({ name: 'items/{itemOid}/configs → supplier_configs[]', path: pCfg, status: rCfg.status, hasBooleans: hasBothBooleans(scRow) })
+  } else {
+    console.log('  body shape:', JSON.stringify(shape(rCfg.body)))
+    results.push({ name: 'items/{itemOid}/configs', path: pCfg, status: rCfg.status, hasBooleans: false })
+  }
+
+  // 5) be2-api-prefixed inventory reads — the endpoints be2-web's inventory page ACTUALLY calls
+  //    (kkday-be2-web: store/modules/product/inventory/editDetail.js requestGetInventory /
+  //     requestGetInventoryBasicInfo → apis/product/*.js). Expected data:
+  //    inventory:   { item_inventory: {..is_inventory_mgmt, inventory_setting..}, item_supplier_mapping, ... }
+  //    basic-info:  { item_config: { inventory_setting, supplier_configs[] }, item_supplier_mapping, ... }
+  const be2Paths: Array<[string, string]> = [
+    ['be2 item/{itemOid}/inventory', `/be2/api/v1/product/item/${itemOid}/inventory`],
+    ['be2 item/{itemOid}/inventory/basic-info', `/be2/api/v1/product/item/${itemOid}/inventory/basic-info`],
+  ]
+  if (supplierOid !== undefined) {
+    be2Paths.push(['be2 item/{itemOid}/inventory?supplier_oid', `/be2/api/v1/product/item/${itemOid}/inventory?supplier_oid=${supplierOid}`])
+  }
+  for (const [name, p4] of be2Paths) {
+    const r4 = await gatewayGet(at, p4)
+    const b4 = unwrap(r4.body) as Record<string, unknown> | null
+    if (r4.status !== 200) {
+      console.log('  body shape:', JSON.stringify(shape(r4.body)))
+      results.push({ name, path: p4, status: r4.status, hasBooleans: false })
+      continue
+    }
+    if (name.endsWith('/inventory')) saveFixture('be2-item-inventory', b4)
+    console.log(JSON.stringify(shape(b4), null, 2))
+    const itemInv = b4?.item_inventory as Record<string, unknown> | undefined
+    const itemCfg = b4?.item_config as Record<string, unknown> | undefined
+    const supplierCfgs = itemCfg?.supplier_configs as Array<Record<string, unknown>> | undefined
+    const mappings = b4?.item_supplier_mapping as Array<Record<string, unknown>> | undefined
+    console.log('item_inventory keys:', itemInv ? JSON.stringify(Object.keys(itemInv)) : '(absent)')
+    for (const [label, rows] of [['item_supplier_mapping', mappings], ['item_config.supplier_configs', supplierCfgs]] as const) {
+      if (!rows?.length) continue
+      console.log(`${label}[0] keys:`, JSON.stringify(Object.keys(rows[0])))
+      // Sanitized values: booleans and oids are printable; everything else masked by type.
+      const sanitized = Object.fromEntries(Object.entries(rows[0]).map(([k, v]) =>
+        [k, typeof v === 'boolean' || /oid/i.test(k) || v === null ? v : shape(v)]))
+      console.log(`${label}[0] sanitized:`, JSON.stringify(sanitized, null, 2))
+    }
+    const perSupplier = [...(supplierCfgs ?? []), ...(mappings ?? [])].find(el => hasBothBooleans(el))
+    results.push({ name: `${name} → per-supplier rows`, path: p4, status: r4.status, hasBooleans: hasBothBooleans(perSupplier) })
+    if (itemInv) results.push({ name: `${name} → item_inventory`, path: p4, status: r4.status, hasBooleans: hasBothBooleans(itemInv) })
+  }
+
   console.log('\n=== SUMMARY ===')
   for (const r of results) console.log(`${r.status}${r.hasBooleans ? ' [HAS is_external_inventory + is_inventory_mgmt]' : ''}  ${r.name}`)
   if (!results.some(r => r.hasBooleans)) {
-    console.log('\nBLOCKED: no candidate returned both is_external_inventory and is_inventory_mgmt.')
-    console.log('Record all statuses/shapes in docs/be2-mcp/sit-write-contracts.md — do NOT assume defaults (spec §4.1 DiffError path).')
+    console.log('\nNo candidate returned a live 200 with both booleans on this env/account.')
+    console.log('Contract-level verdict (source-verified, see sit-write-contracts.md §inventory-platform read):')
+    console.log('  readSupplierInventorySetting() = GET items/{itemOid}/configs → supplier_configs[]')
+    console.log('  (403 here = per-env verify authz, same unblock path as the Phase 3a quantity-PUT blocker.)')
+    console.log('Do NOT assume defaults when the read fails — spec §4.1 DiffError path.')
   } else {
     console.log('\nDECIDED: use the first [HAS ...] candidate above as readSupplierInventorySetting() source (Task 3).')
   }
