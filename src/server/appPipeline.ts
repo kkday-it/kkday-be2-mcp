@@ -3,6 +3,8 @@ import { requestContext } from './requestContext.js'
 import type { TokenManager } from '../auth/tokenManager.js'
 import type { AuditLog } from '../audit/auditLog.js'
 import type { GatewayClient } from '../gateway/client.js'
+import type { ReadOidStore } from '../store/readOidStore.js'
+import type { RateBudget } from '../limits/rateBudget.js'
 import type { ChangeSetStore } from '../changeset/store.js'
 import type { ApprovalNonceStore } from '../changeset/approvalNonce.js'
 import type { AppRateBudget } from '../limits/appRateBudget.js'
@@ -20,6 +22,17 @@ export interface AppToolContext {
   sessionId: string
   bearerHash: string
   businessList: unknown[]
+  // Task 5: same §6.2 scope-binding substrate the L0/L2 tools share (readOids) plus the LLM-facing
+  // read RateBudget (session/day window). Added for app_get_batch_view, which does real gateway
+  // reads on behalf of the wizard panel and must register into the SAME scope-gate substrate
+  // be2_create_changeset's SCOPE_NOT_READ check reads from, and must count against the same daily
+  // read budget an equivalent L0 tool call would. This is DISTINCT from appRateBudget below (the
+  // panel-polling sliding window) — deliberately not auto-consumed by every app tool call (that
+  // would re-couple panel polling to the LLM's 100/session budget, exactly what appRateBudget was
+  // introduced to avoid); tools that do real reads must call ctx.rateBudget.consume() themselves,
+  // mirroring L2 tools' explicit ctx.rateBudget.consumeChangeset() call.
+  readOids: ReadOidStore
+  rateBudget: RateBudget
   changeSets: ChangeSetStore
   nonces: ApprovalNonceStore
   now: () => number
@@ -42,6 +55,10 @@ export interface AppToolDef {
 export interface AppPipelineDeps {
   tokenManager: TokenManager
   appRateBudget: AppRateBudget
+  // Task 5: see AppToolContext.readOids/rateBudget above for why these are separate from
+  // appRateBudget — wired here so app.ts can pass the SAME instances the L0/L2 pipeline uses.
+  readOids: ReadOidStore
+  rateBudget: RateBudget
   audit: AuditLog
   gateway: GatewayClient
   changeSets: ChangeSetStore
@@ -80,7 +97,8 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
         const envelope = await tool.handler(args, {
           gateway: deps.gateway, accessToken: user.accessToken, userLabel,
           sessionId: reqCtx.sessionId, bearerHash: CredentialStore.hash(reqCtx.bearer),
-          businessList: user.businessList, changeSets: deps.changeSets, nonces: deps.nonces,
+          businessList: user.businessList, readOids: deps.readOids, rateBudget: deps.rateBudget,
+          changeSets: deps.changeSets, nonces: deps.nonces,
           now: deps.now, genId: deps.genId,
           baseUrl: deps.baseUrl,
           // Closure binds THIS request's resolved identity (accessToken/userLabel/sessionId) —
@@ -92,6 +110,11 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
             { ...p, who: { accessToken: user.accessToken, userLabel, sessionId: reqCtx.sessionId } },
           ),
         })
+        // Task 5: mirrors toolPipeline.ts's runWrapped — same substrate, same generic recording —
+        // so app_get_batch_view's oids land in the identical session-scoped store
+        // be2_create_changeset's SCOPE_NOT_READ gate reads from. Harmless no-op for the other app
+        // tools (view/confirm-link/confirm), which never populate envelope.read_oids.
+        if (envelope.read_oids.length) deps.readOids.record(reqCtx.sessionId, envelope.read_oids)
         if (envelope.items.length === 0 && envelope.errors.length > 0) {
           status = 'error'; const f = envelope.errors[0]; message = f.code ? `${f.code}: ${f.message}` : f.message
         }

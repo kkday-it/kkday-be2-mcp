@@ -1,9 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { AppRateBudget } from '../src/limits/appRateBudget.js'
+import { RateBudget } from '../src/limits/rateBudget.js'
 import { RateError } from '../src/errors.js'
-import { wrapAppTool, type AppPipelineDeps } from '../src/server/appPipeline.js'
+import { wrapAppTool, type AppPipelineDeps, type AppToolDef } from '../src/server/appPipeline.js'
 import { ApprovalNonceStore } from '../src/changeset/approvalNonce.js'
+import { ReadOidStore } from '../src/store/readOidStore.js'
+import { openDb } from '../src/store/db.js'
 import { requestContext } from '../src/server/requestContext.js'
+import { makeEnvelope } from '../src/tools/envelope.js'
 import { appGetChangesetViewTool } from '../src/tools/appTools.js'
 
 describe('AppRateBudget', () => {
@@ -44,6 +48,11 @@ function fakeAppDeps(over: Partial<AppPipelineDeps> = {}): AppPipelineDeps {
   return {
     tokenManager: { getFreshAccessToken: async () => ({ accessToken: 'AT', userLabel: 'alice', businessList: [] }) } as never,
     appRateBudget: new AppRateBudget(),
+    // Task 5: stub readOids/rateBudget for the three pre-existing app tools (none of them
+    // populate envelope.read_oids or call ctx.rateBudget themselves) — real instances are
+    // exercised separately below in the "app tool 依賴接線" suite.
+    readOids: { record() {}, has: () => false, list: () => [] } as never,
+    rateBudget: { consume() {}, consumeChangeset() {} } as never,
     audit: { record() {} } as never,
     gateway: {} as never,
     changeSets: {
@@ -122,5 +131,58 @@ describe('wrapAppTool（runtime，透過真實 app tool 驅動三條分支）', 
     const params = records[0].params as Record<string, unknown>
     expect(params.nonce).toBe('[redacted]')                    // 稽核副本被 redact
     expect(params.changeset_id).toBe('cs1')                    // 其餘欄位不受影響
+  })
+})
+
+// Task 5 前置整備：AppToolContext 過去沒有 readOidStore/RateBudget（L2 依賴），app_get_batch_view
+// 需要兩者都能透過 wrapAppTool 真正打到底層 store/counter，而非只是型別上存在。這裡用真實
+// ReadOidStore/RateBudget（真 :memory: db，同 tests/toolPipeline.test.ts 的驗法）驅動一個
+// dummy app tool，證明（a）ctx.readOids/ctx.rateBudget 是可用的真實實例、（b）wrapAppTool 比照
+// wrapTool/wrapL2Tool 泛用地把 envelope.read_oids 寫回同一個 store。
+describe('app tool 依賴接線（Task 5 前置整備：readOidStore + 全域 RateBudget）', () => {
+  function realDeps(over: Partial<AppPipelineDeps> = {}) {
+    const db = openDb(':memory:')
+    const readOids = new ReadOidStore(db)
+    const rateBudget = new RateBudget(db, { perSession: 2, perUserDay: 100 })
+    const deps = fakeAppDeps({ readOids, rateBudget, ...over })
+    return { db, readOids, rateBudget, deps }
+  }
+
+  it('ctx.readOids / ctx.rateBudget 是真實可用的實例（非硬 cast 出的 L2ToolContext）', async () => {
+    const { readOids, rateBudget, deps } = realDeps()
+    let sawHasBeforeRecord: boolean | undefined
+    let consumeThrew = false
+    const dummyTool: AppToolDef = {
+      name: 'dummy_probe', description: 'probe', inputShape: {},
+      async handler(_args, ctx) {
+        sawHasBeforeRecord = ctx.readOids.has(ctx.sessionId, 'probe-oid')
+        try { ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId) } catch { consumeThrew = true }
+        return makeEnvelope([{ ok: true }], [], ['probe-oid'])
+      },
+    }
+    const wrapped = wrapAppTool(dummyTool, deps)
+    const out = await requestContext.run({ bearer: 'b', sessionId: 's-wire', clientInfo: 'test' }, () => wrapped({}))
+    expect(out.isError).toBeUndefined()
+    expect(sawHasBeforeRecord).toBe(false)   // 呼叫當下 store 尚是空的（handler 自己還沒 record）
+    expect(consumeThrew).toBe(false)         // 真實 RateBudget，額度內不丟錯
+    expect(readOids.has('s-wire', 'probe-oid')).toBe(true) // wrapAppTool 事後泛用 record 生效
+  })
+
+  it('全域 RateBudget 與 AppRateBudget 是兩個獨立額度：前者可被 tool 顯式消耗到超額', async () => {
+    const { deps } = realDeps({ rateBudget: new RateBudget(openDb(':memory:'), { perSession: 1, perUserDay: 100 }) })
+    const dummyTool: AppToolDef = {
+      name: 'dummy_probe2', description: 'probe2', inputShape: {},
+      async handler(_args, ctx) {
+        ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId) // 每次呼叫顯式消耗一次讀取額度
+        return makeEnvelope([{ ok: true }])
+      },
+    }
+    const wrapped = wrapAppTool(dummyTool, deps)
+    const call = () => requestContext.run({ bearer: 'b', sessionId: 's-budget', clientInfo: 'test' }, () => wrapped({}))
+    const first = await call()
+    expect(first.isError).toBeUndefined()
+    const second = await call() // 第 2 次撞 perSession:1 上限
+    expect(second.isError).toBe(true)
+    expect(second.content[0].text).toContain('RATE_SESSION')
   })
 })

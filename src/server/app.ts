@@ -155,7 +155,10 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // onsessionclosed，否則長跑 server 的 hits Map 會無限累積已關閉的 session。
   const appRateBudget = new AppRateBudget()
   const appDeps: AppPipelineDeps = {
-    tokenManager, appRateBudget, audit, gateway, changeSets,
+    // Task 5: same readOids/rateBudget instances the L0/L2 pipeline (deps/l2Deps above) uses —
+    // app_get_batch_view must register into the identical §6.2 scope-gate substrate and count
+    // against the identical daily read budget an equivalent L0 tool call would.
+    tokenManager, appRateBudget, readOids, rateBudget, audit, gateway, changeSets,
     nonces: new ApprovalNonceStore(),
     now: Date.now, genId: randomUUID,
     baseUrl,
