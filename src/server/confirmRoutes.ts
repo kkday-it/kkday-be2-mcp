@@ -6,7 +6,7 @@ import type { TokenManager } from '../auth/tokenManager.js'
 import type { WebSessionStore } from './webSessionStore.js'
 import type { CredentialStore } from '../store/credentialStore.js'
 import { parseCookies } from './cookies.js'
-import type { AnyDiffItem, InventoryDiffItem, DiffItem, ShelfScheduleDiffItem, ScheduleEntry } from '../changeset/types.js'
+import type { AnyDiffItem, InventoryDiffItem, DiffItem, ShelfScheduleDiffItem, ScheduleEntry, InventoryPlatformDiffItem } from '../changeset/types.js'
 
 // Task 5: the confirm-page's auth model switches from a per-change-set capability token
 // (`?token=`) to the be2-auth SSO web session (Task 4's `be2mcp_sid` cookie + WebSessionStore).
@@ -67,6 +67,30 @@ function renderInventoryPage(id: string, diff: InventoryDiffItem[], diffVersion:
 <form method=post action="/confirm/${esc(id)}/reject"><button type=submit>拒絕</button></form>`
 }
 
+// Final whole-branch review Important 1: inventory_platform change-sets used to fall through to
+// the shelf renderPage above, which reads fields (`.name`/`.current_is_active`/
+// `.target_is_active`) that do not exist on InventoryPlatformDiffItem — every row rendered with a
+// blank name and a hardcoded "→ 下架", regardless of the real target platform. The write unit here
+// is (item_oid, supplier_oid), not a package, so the page shows that pair plus the affected
+// package names as a display annotation (server-recomputed, see platformDiff.ts) rather than
+// treating a package as the row identity.
+function renderPlatformPage(id: string, diff: InventoryPlatformDiffItem[], diffVersion: string, banner = ''): string {
+  const rows = diff.map(d => {
+    const pkgNames = d.affected_pkgs.map(p => esc(p.pkg_name)).join(', ') || '(無)'
+    const unverified = d.affected_pkgs_unverified ? ' <em>(未經伺服器驗證)</em>' : ''
+    return `<tr><td>${esc(d.item_oid)}/${esc(d.supplier_oid)}</td><td>${esc(d.current)}</td><td>→ ${esc(d.target)}</td><td>${esc(pkgNames)}${unverified}</td><td>${d.noop ? '(無變更)' : ''}</td></tr>`
+  }).join('')
+  return `<!doctype html><meta charset=utf-8><title>確認變更 ${esc(id)}</title>
+<style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}button{padding:8px 16px;font-size:1rem}</style>
+<h1>確認 change-set ${esc(id)}</h1>${banner}
+<p>方案名稱為 be2 內容(untrusted),請以 oid 為準核對。寫入單位是 item_oid×supplier_oid,方案清單僅為受影響範圍展示。</p>
+<table data-diff-version="${esc(diffVersion)}"><tr><th>item/supplier</th><th>現況</th><th>目標</th><th>受影響方案</th><th></th></tr>${rows}</table>
+<form method=post action="/confirm/${esc(id)}/approve" style="margin-top:1rem">
+  <input type=hidden name=diff_version value="${esc(diffVersion)}">
+  <button type=submit>批准並執行</button></form>
+<form method=post action="/confirm/${esc(id)}/reject"><button type=submit>拒絕</button></form>`
+}
+
 // Task 4: shelf_schedule is a full-replace write on the package's reserve queue — the confirm
 // page must make that explicit (red-text "原排程將被整組取代", never a merge) and disclose UTC
 // explicitly, same risk-disclosure discipline as renderInventoryPage above (Phase 3a Task 7).
@@ -92,9 +116,11 @@ function renderSchedulePage(id: string, diff: ShelfScheduleDiffItem[], diffVersi
 const render = (actionType: string, id: string, diff: AnyDiffItem[], version: string, banner = '') =>
   actionType === 'inventory_setting'
     ? renderInventoryPage(id, diff as InventoryDiffItem[], version, banner)
-    : actionType === 'shelf_schedule'
-      ? renderSchedulePage(id, diff as ShelfScheduleDiffItem[], version, banner)
-      : renderPage(id, diff as DiffItem[], version, banner)
+    : actionType === 'inventory_platform'
+      ? renderPlatformPage(id, diff as InventoryPlatformDiffItem[], version, banner)
+      : actionType === 'shelf_schedule'
+        ? renderSchedulePage(id, diff as ShelfScheduleDiffItem[], version, banner)
+        : renderPage(id, diff as DiffItem[], version, banner)
 
 export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
   const r = express.Router()
