@@ -6,7 +6,7 @@ import type { TokenManager } from '../auth/tokenManager.js'
 import type { WebSessionStore } from './webSessionStore.js'
 import type { CredentialStore } from '../store/credentialStore.js'
 import { parseCookies } from './cookies.js'
-import type { AnyDiffItem, InventoryDiffItem, DiffItem } from '../changeset/types.js'
+import type { AnyDiffItem, InventoryDiffItem, DiffItem, ShelfScheduleDiffItem, ScheduleEntry } from '../changeset/types.js'
 
 // Task 5: the confirm-page's auth model switches from a per-change-set capability token
 // (`?token=`) to the be2-auth SSO web session (Task 4's `be2mcp_sid` cookie + WebSessionStore).
@@ -67,10 +67,34 @@ function renderInventoryPage(id: string, diff: InventoryDiffItem[], diffVersion:
 <form method=post action="/confirm/${esc(id)}/reject"><button type=submit>拒絕</button></form>`
 }
 
+// Task 4: shelf_schedule is a full-replace write on the package's reserve queue — the confirm
+// page must make that explicit (red-text "原排程將被整組取代", never a merge) and disclose UTC
+// explicitly, same risk-disclosure discipline as renderInventoryPage above (Phase 3a Task 7).
+function renderSchedulePage(id: string, diff: ShelfScheduleDiffItem[], diffVersion: string, banner = ''): string {
+  const fmtQueue = (q: ScheduleEntry[]) => q.length
+    ? q.map(e => `${esc(e.reserve_date_utc)} UTC → ${e.reserve_status ? '上架' : '下架'}`).join('<br>')
+    : '(空,將清除排程)'
+  const rows = diff.map(item =>
+    `<tr><td>${esc(item.pkg_name)}</td><td>${esc(item.prod_oid)}/${esc(item.pkg_oid)}</td>` +
+    `<td>${fmtQueue(item.current_queue)}</td><td>${fmtQueue(item.new_queue)}</td>` +
+    `<td>${item.noop ? '(無變更)' : ''}</td></tr>`).join('')
+  return `<!doctype html><meta charset=utf-8><title>確認變更 ${esc(id)}</title>
+<style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}button{padding:8px 16px;font-size:1rem}</style>
+<h1>確認 change-set ${esc(id)}</h1>
+<p><strong style="color:#b00">原排程將被整組取代(reserve_queue 為整組替換、非合併);以下時間皆為 UTC</strong>,由 be2 原生排程到點自動執行(我方不建 scheduler)。</p>${banner}
+<table data-diff-version="${esc(diffVersion)}"><tr><th>方案</th><th>oid</th><th>現有排程</th><th>新排程</th><th></th></tr>${rows}</table>
+<form method=post action="/confirm/${esc(id)}/approve" style="margin-top:1rem">
+  <input type=hidden name=diff_version value="${esc(diffVersion)}">
+  <button type=submit>批准並執行</button></form>
+<form method=post action="/confirm/${esc(id)}/reject"><button type=submit>拒絕</button></form>`
+}
+
 const render = (actionType: string, id: string, diff: AnyDiffItem[], version: string, banner = '') =>
   actionType === 'inventory_setting'
     ? renderInventoryPage(id, diff as InventoryDiffItem[], version, banner)
-    : renderPage(id, diff as DiffItem[], version, banner)
+    : actionType === 'shelf_schedule'
+      ? renderSchedulePage(id, diff as ShelfScheduleDiffItem[], version, banner)
+      : renderPage(id, diff as DiffItem[], version, banner)
 
 export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
   const r = express.Router()

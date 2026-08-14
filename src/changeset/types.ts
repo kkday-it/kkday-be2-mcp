@@ -40,6 +40,18 @@ export interface ShelfScheduleItem {
 
 export type AnyChangeSetItem = ChangeSetItem | InventoryItem | InventoryPlatformItem | ShelfScheduleItem
 
+// Task 4 (design doc §4.2): reserve_queue is a full-replace write, so the diff carries the
+// current (sanitized/sorted) live queue alongside the target queue verbatim — "noop" means the
+// two are deep-equal after sanitizing, not a per-field boolean flip like DiffItem.
+export interface ShelfScheduleDiffItem {
+  prod_oid: string
+  pkg_oid: string
+  pkg_name: string
+  current_queue: ScheduleEntry[]
+  new_queue: ScheduleEntry[]
+  noop: boolean
+}
+
 export interface DiffItem {
   prod_oid: string
   pkg_oid?: string
@@ -74,7 +86,7 @@ export interface InventoryPlatformDiffItem {
   affected_pkgs: Array<{ prod_oid: string; pkg_oid: string; pkg_name: string }>
 }
 
-export type AnyDiffItem = DiffItem | InventoryDiffItem | InventoryPlatformDiffItem
+export type AnyDiffItem = DiffItem | InventoryDiffItem | InventoryPlatformDiffItem | ShelfScheduleDiffItem
 
 export interface ItemResult {
   item_key: string

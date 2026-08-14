@@ -76,9 +76,13 @@ describe('computeChangesetDiff dispatcher routes inventory_platform', () => {
     const diff = await computeChangesetDiff('inventory_platform', [item()], ctxOf(gw))
     expect((diff[0] as { item_oid: string }).item_oid).toBe('i1')
   })
-  it('shelf_schedule is not yet wired (Task 4) -> throws DiffError, never falls through to shelf diff', async () => {
+  // Task 4 wired shelf_schedule to computeScheduleDiff (was a stub DiffError placeholder in
+  // Task 3) — this only pins that the dispatcher does NOT fall through to computeShelfDiff (which
+  // reads target_is_active — absent on ShelfScheduleItem — and would misread/crash on real data).
+  // Full shelf_schedule diff behavior is covered in tests/scheduleDiff.test.ts.
+  it('shelf_schedule does not fall through to computeShelfDiff (empty items -> empty diff, not a crash)', async () => {
     const gw = gatewayWith({})
-    await expect(computeChangesetDiff('shelf_schedule', [], ctxOf(gw))).rejects.toBeInstanceOf(DiffError)
+    await expect(computeChangesetDiff('shelf_schedule', [], ctxOf(gw))).resolves.toEqual([])
   })
 })
 

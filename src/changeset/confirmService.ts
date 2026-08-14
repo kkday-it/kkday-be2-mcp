@@ -1,7 +1,7 @@
 import { computeChangesetDiff, diffVersionHash } from './diff.js'
 import { executeChangeSet, itemKey, type ExecutorDeps } from './executor.js'
 import { AppError } from '../errors.js'
-import type { ChangeSetRecord, ChangeSetItem, InventoryItem, InventoryPlatformItem, ItemResult } from './types.js'
+import type { ChangeSetRecord, ChangeSetItem, InventoryItem, InventoryPlatformItem, ShelfScheduleItem, ItemResult } from './types.js'
 
 // Task 11: the change-set approval+execution sequence used to live ONLY inside
 // src/server/confirmRoutes.ts's POST /confirm/:id/approve handler. The MCP Apps panel
@@ -55,6 +55,15 @@ export interface ConfirmServiceDeps extends ExecutorDeps {
 function itemKeysOf(rec: ChangeSetRecord): string[] {
   if (rec.actionType === 'inventory_setting' || rec.actionType === 'inventory_platform') {
     return (rec.items as Array<InventoryItem | InventoryPlatformItem>).map(it => `${it.item_oid}:${it.supplier_oid}`)
+  }
+  // Task 4 explicit branch: ShelfScheduleItem's key happens to coincide with the generic shelf
+  // itemKey() cast (same {prod_oid, pkg_oid} field names, pkg_oid always present) — but that is a
+  // coincidence, not a guarantee, and the inventory_platform branch above exists precisely
+  // because relying on such a coincidence silently broke panel approval once already (Task 3
+  // review). Locking this in its own branch (with its own test pin) prevents a future refactor
+  // of ChangeSetItem/itemKey() from silently changing this shape out from under shelf_schedule.
+  if (rec.actionType === 'shelf_schedule') {
+    return (rec.items as ShelfScheduleItem[]).map(it => `${it.prod_oid}:${it.pkg_oid}`)
   }
   return (rec.items as ChangeSetItem[]).map(itemKey)
 }

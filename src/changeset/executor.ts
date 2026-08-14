@@ -2,10 +2,11 @@ import { trace } from '@opentelemetry/api'
 import type { ChangeSetStore } from './store.js'
 import type { GatewayClient } from '../gateway/client.js'
 import type { AuditLog } from '../audit/auditLog.js'
-import type { ItemResult, ChangeSetItem, InventoryItem, InventoryPlatformItem } from './types.js'
+import type { ItemResult, ChangeSetItem, InventoryItem, InventoryPlatformItem, ShelfScheduleItem } from './types.js'
 import { AppError } from '../errors.js'
 import { execInventory } from './executorInventory.js'
 import { execInventoryPlatform } from './executorPlatform.js'
+import { execShelfSchedule } from './executorSchedule.js'
 
 export interface ExecutorDeps {
   changeSets: ChangeSetStore; gateway: GatewayClient; audit: AuditLog; now: () => number
@@ -68,6 +69,32 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
       finally { span.end() }
     }).catch(e => (rec.items as InventoryPlatformItem[]).map(it => ({
       item_key: `${it.item_oid}:${it.supplier_oid}`, status: 'failed' as const,
+      error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: 'n/a',
+    })))
+    deps.changeSets.recordResults(changesetId, results)
+    for (const r of results) {
+      deps.audit.record({
+        userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-page', tool: 'changeset.execute',
+        params: { changeset_id: changesetId, item: r.item_key },
+        status: (r.status === 'done' || r.status === 'skipped_noop') ? 'ok' : 'error',
+        errorMessage: r.error_message, traceId: r.trace_id, durationMs: 0,
+      })
+    }
+    const status = results.every(r => r.status === 'done' || r.status === 'skipped_noop') ? 'done'
+      : results.every(r => r.status === 'failed') ? 'failed' : 'partial'
+    deps.changeSets.setStatus(changesetId, status, deps.now())
+    return { status, results }
+  }
+
+  if (rec.actionType === 'shelf_schedule') {
+    // Batch-shaped executor (Task 4, same shape as execInventoryPlatform above): prod_oid groups
+    // are independent (no busy-guard/serialization needed for a reserve-queue full-replace write)
+    // — one span, one call, one Promise.allSettled internally over the prod_oid groups.
+    const results = await tracer.startActiveSpan('changeset.execute/shelf_schedule', async span => {
+      try { return await execShelfSchedule(rec, { gateway: deps.gateway, accessToken: at, modifyUser, traceId: span.spanContext().traceId }) }
+      finally { span.end() }
+    }).catch(e => (rec.items as ShelfScheduleItem[]).map(it => ({
+      item_key: `${it.prod_oid}:${it.pkg_oid}`, status: 'failed' as const,
       error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: 'n/a',
     })))
     deps.changeSets.recordResults(changesetId, results)
