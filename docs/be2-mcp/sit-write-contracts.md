@@ -141,3 +141,53 @@ The `.env` SIT account is **not mapped to any supplier** on be2-220 for the test
 > 帳號 lance.chien@kkday.com(be2-220)打 `PUT /product/api/v1/items/{itemOid}/inventories/{supplierOid}/quantity` 被 verify v2 拒(AU9403,`CheckTargetRuleCache` user-with-business-oid)。請查 target=product、uri_pattern `api/v1/items/{*}/inventories/{*}/quantity`(以及 `api/v1/items/{*}/inventories`)規則綁定的 business action code,並把該 action 加進我帳號所屬群組(或告知 code 由我申請)。帳號已有 `product.product-inventory.update`,顯然規則要求的是別顆。
 
 (這也解釋 stage 可寫:同帳號在 stage 的群組含該 action、be2-220 沒有 —— 與 Phase 2a shelf-toggle 的 per-環境差異同構。)
+
+## inventory-platform read (Phase 4a Task 1, 2026-08-14)
+
+目的:為 `inventory_platform` change-set(切換方案的庫存管理平台:BE2／BE2_SCM／EXTERNAL)定案「以 `(item_oid, supplier_oid)` 為鍵讀兩布林 `is_external_inventory`/`is_inventory_mgmt`」的讀取端點,供 Task 3 `readSupplierInventorySetting()` 實作依據。已知寫入契約(design doc §4.1,未在本次驗證):`PUT items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting` body `{is_external_inventory, is_inventory_mgmt, modify_user}`。
+
+**Probe**:`scripts/probe-supplier-config-read.ts`(read-only,唔碰任何 PUT),對 `api-gateway-220.sit.kkday.com`,`.env` 帳號(`lance.chien@kkday.com`),目標商品 **34133**(demo 商品,PUBLISHED)。跑法:`npx tsx --env-file=.env scripts/probe-supplier-config-read.ts`。
+
+### Step 0:解出 item_oid / supplier_oid
+
+`GET /product/api/v1/products/34133/packages?locale=zh-tw&show_supplier=1` → **200**,回傳陣列(28 個方案)。取第一個非 bundle 方案:`pkg_oid=1936562`、`item_oid=1682339`。
+
+**`packages?show_supplier=1` 完整欄位形狀(sanitized,供 `app_get_batch_view` 用)**:
+```json
+{
+  "pkg_oid": "number",
+  "pkg_name": "string",
+  "item_oid": "number",
+  "is_active": "boolean",
+  "sales_deadline": "string",
+  "supplier_mapping": [
+    { "supplier_oid": "number", "supplier_name": "string", "is_default": "boolean" }
+  ]
+}
+```
+- 供應商資訊的鍵名是 **`supplier_mapping`**(陣列),不是 `supplier`/`suppliers`(先前設計文件的猜測欄位名有誤,已用本次 live 回應修正)。取 `is_default:true` 的元素為預設 supplier_oid(此例 `38028`)。
+- **注意**:此回應**沒有** `is_bundle` 欄位(與 Phase 1a `packages.json` fixture 的舊回應形狀不同,那份含 `is_bundle`)——挑非 bundle 方案時若欄位缺席,視為非 bundle(`p.is_bundle !== true` 恆真)。若 34133 全部方案皆非 bundle,無法從本次資料確認 `is_bundle` 是否仍存在於別的商品回應,**沿用既有 fixture 的欄位名、加防禦性判斷即可,非本次阻擋項**。
+
+### Step 1–3:三個候選端點 — 全部讀不到兩布林,**BLOCKED**
+
+| # | 候選端點 | 結果 |
+|---|---|---|
+| 1 | `GET items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting` | **404**(`{"data":null,"meta":{"status":"199997","desc":"查無對應的 uri"}}`) |
+| 2 | `GET items/{itemOid}/supplier-configs/{supplierOid}` | **404**(同上,`199997` 查無對應的 uri) |
+| 3 | `GET items/{itemOid}/supplier-mappings` | **200**,但元素只有 `{supplier_oid, cost_curr_code, is_default}` — **無兩布林** |
+
+`items/1682339/supplier-mappings` 完整回應(sanitized,已知非機密欄位):
+```json
+[{ "supplier_oid": 38028, "cost_curr_code": "TWD", "is_default": true }]
+```
+
+**額外驗證(非 brief 三候選,唯讀、加強判斷)**:又試了 `GET items/{itemOid}/supplier-configs`(無 supplierOid)、`GET items/{itemOid}/supplier-configs?supplier_oid=38028`、`GET items/{itemOid}/inventory-setting`、`GET item-configs/{itemOid}/inventory-setting` —— **全部 404、同一 `199997「查無對應的 uri」`**。這代表 `supplier-configs` 系列**在 gateway/product-service 上根本沒有註冊 GET route**(不是授權拒絕、不是資料不存在,是路由層級不存在),與已知的 `PUT .../inventory-setting` 寫入端點呈現「**只有 PUT、沒有對應 GET**」的不對稱設計 —— 與 Phase 3a 的庫存數量寫入(`PUT .../quantity`)那類「UI 走專用 read 路徑、不是 GET 鏡像 PUT」的既有模式一致(當時真正的讀取路徑是 `POST .../inventories/search`,不是猜測中的 GET)。
+
+### 結論:BLOCKED —— 三個候選讀不到兩布林,`readSupplierInventorySetting()` 尚無定案端點
+
+Task 1 exit gate 未達成(spec 要求至少一條 200 且含兩布林)。**依 spec §4.1:任一候選都讀不到兩布林 → Task 3 的 diff 讀取必須丟 `DiffError` 擋下建立,嚴禁假設預設值。** 下一步建議(任一即可解卡,依 Phase 3a 同款教訓「GET 常缺席、UI 真正讀取路徑常是別的 verb/route」):
+1. **讀 be2-web 前端原始碼**,找方案編輯頁「庫存管理平台」欄位實際打的 API(仿 Phase 3a 用 `kkday-be2-web`/`kkday-be2-api` 源碼出土 `POST .../inventories/search` 的手法),而非只猜 GET 鏡像。
+2. **用 Playwright 攔 be2-web 真實請求**(仿 Phase 2a/3a 對 shelf-toggle、庫存數量的驗法),在 be2-web 方案設定頁面手動切換庫存管理平台,擷取真實呼叫的 method/path。
+3. 若上述皆不可行,回報使用者由 product-service 團隊確認等效讀取端點(或確認「無獨立讀取端點,只能靠別的聚合端點推算」)。
+
+**Task 3 影響**:`readSupplierInventorySetting()` 暫無法實作;若 Phase 4a 要如期推進,建議 Task 3 先完成 diff/executor 的骨架與型別(讀取函式介面照定案簽名 `Promise<{is_external_inventory, is_inventory_mgmt}>` 先行,內部暫時 throw `DiffError('NO_READ_ENDPOINT', …)` 並附上述教訓),待端點定案後補實作,而非讓整個 Task 3 卡住。
