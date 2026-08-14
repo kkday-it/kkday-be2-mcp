@@ -46,11 +46,16 @@ BAA（BE2 Action Assistant）是既有內部工具，AM 用它做批次操作：
 
 ### 4.1 `inventory_platform` change-set item
 
+**變更單位 = `item_oid × supplier_oid`（API 的真實寫入粒度），不是方案**——多個方案可共用同一 item，若以方案為單位會靜默改到未勾選的兄弟方案。
+
 ```
-{ prod_oid, pkg_oid, item_oid, supplier_oid, target: 'BE2'|'BE2_SCM'|'EXTERNAL' }
+{ item_oid, supplier_oid, target: 'BE2'|'BE2_SCM'|'EXTERNAL',
+  affected_pkgs: [{ prod_oid, pkg_oid, pkg_name }] }   // 展示用註記：這次寫入會影響的全部方案
 ```
-- diff：讀現況布林 → 映射 enum → `current ≠ target` 才列變更；相同者 `skipped_noop`。
-- `diff_version`：hash 綁（item_oid, supplier_oid, 現況兩布林）集合——批准時 live 重算，變了回 409 stale（沿用 Phase 2a 機制）。
+- 建立時驗證：同一 `(item_oid, supplier_oid)` 在一個 change-set 只能出現一次（面板勾選兩個共用 item 的方案且目標不同 → 建立即拒絕，錯誤訊息點名衝突方案）。
+- 面板行為：勾選任一方案時，**自動帶出共用同一 item 的所有兄弟方案並標示「將一併變更」**；diff 頁列出全部受影響方案，批准者看到的是真實爆炸半徑。
+- diff 與批准時 live 重算：**一律以 `(item_oid, supplier_oid)` 為鍵直接打 item 層級讀取端點，嚴禁經 prod→packages 解析**——方案可能在草稿建立與批准之間改綁到別的 item，經 packages 會讀到新 item 的設定、而 change-set 鎖定的是舊 item，兩者不一致會讓 stale 檢查驗錯對象。`packages?show_supplier=1` 只准用在 `app_get_batch_view` 建初始清單。item 層級讀取端點在實作 Task 1 以可逆 probe 從候選（`GET items/{itemOid}/supplier-configs/{supplierOid}`〔對應已證 200 的 PUT〕、`GET items/{itemOid}/supplier-mappings`〔已證 200，欄位是否含兩布林待確認〕）中定案；**任一候選都讀不到兩布林 → 丟 DiffError 擋下建立，嚴禁假設預設值**（假 diff 會授權出錯誤變更）。
+- `diff_version`：hash 綁（item_oid, supplier_oid, 現況兩布林）集合——批准時 live 重算用**同一 item 層級端點、同一鍵**，變了回 409 stale（沿用 Phase 2a 機制）。
 - executor：逐 item×supplier PUT（無原生批次）；`Promise.allSettled` per-item 結果；`modify_user` 沿用既有 platformId 解析。
 
 ### 4.2 `shelf_schedule` change-set item
@@ -60,7 +65,7 @@ BAA（BE2 Action Assistant）是既有內部工具，AM 用它做批次操作：
 ```
 - 驗證：`queue` 可為空（=清除排程）；`reserve_date_utc` 必須是未來時間（建立當下）；同 pkg 在一個 change-set 只能出現一次；`is_bundle` 方案建立時拒絕。
 - diff：現況 `reserve_queue` → 新 queue，**明示「原排程將被整組取代」**；現況與目標深相等者 `skipped_noop`。
-- `diff_version`：hash 綁（pkg_oid, 現況 reserve_queue 淨化後內容）。
+- `diff_version`：hash 綁（pkg_oid, 現況 reserve_queue **淨化後內容：只取 `{reserve_date, reserve_status}`、剔除 server 欄位（created_at/created_by）、依 reserve_date 排序**——避免上游回傳順序不定造成假 stale 409）。noop 深比較同用此淨化形。
 - executor：**依 prod_oid 分組，單 PUT 帶多 pkg**（原生批次）；一個 prod 失敗不影響其他 prod（allSettled）；結果 per-pkg 記錄（同 PUT 內的 pkg 共用結果狀態，稽核註明）。
 
 ### 4.3 businessList fail-fast action codes
@@ -75,7 +80,7 @@ BAA（BE2 Action Assistant）是既有內部工具，AM 用它做批次操作：
 ### 5.1 `app_get_batch_view`（app-only）
 
 input `{ action_type, prod_oids: string[] (≤10) }` → 每商品：`{prod_oid, name, plans: [{pkg_oid, name, item_oid, supplier_oid, supplier_name, is_active, is_bundle, current_platform?, reserve_queue?}]}`。
-- server 端同時把讀到的 oids 寫入 session read-oids（§6.2 scope-gate 的合法滿足：**讀取確實發生在 server 端本 session**，非面板自報）。
+- server 端把**回應中實際出現的所有層級 oids——`prod_oid`、`pkg_oid`、`item_oid`——全部寫入 session read-oids**（scope-gate 對 `shelf_schedule` 驗 pkg_oid、對 `inventory_platform` 驗 item_oid；只登記 prod_oid 會讓合法建立一律被 SCOPE_NOT_READ 拒絕）。§6.2 的合法滿足前提不變：**讀取確實發生在 server 端本 session**，非面板自報。
 - 沿用 rate budget 計數。
 
 ### 5.2 `app_create_changeset`（app-only）
@@ -127,3 +132,5 @@ input `{ action_type, prod_oids?: string[] }`（prod_oids 僅作面板預填，*
 - `packages?show_supplier=1` 若缺兩顆庫存布林 → 補讀 supplier-configs（工時 +1h，Task 內處理）。
 - 面板工時爆 → 降級順序：先砍「per-方案多時間點」（只留單一時間套用全部）、再砍多商品載入（單商品）。
 - demo 當天 SIT 資料被他人改動 → demo 前一晚重置 34133 目標方案狀態並記錄基準。
+
+<!-- agy-peer-reviewed: 2026-08-14T13:59:53Z rounds=3 verdict=approved -->
