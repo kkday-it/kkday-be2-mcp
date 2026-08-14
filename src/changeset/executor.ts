@@ -17,7 +17,18 @@ export interface ExecutorDeps {
 // forward. The caller resolves `who` first, then CAS's pending_approval -> approved, then calls
 // executeChangeSet — so a resolution failure simply leaves the change-set pending_approval
 // (retryable), never stuck mid-execution.
-export interface ExecutorIdentity { accessToken: string; userLabel: string; modifyUser: string; sessionId: string }
+// Final whole-branch review Minor: `channel` records which approval surface actually decided this
+// change-set, so the per-item changeset.execute audit rows below reflect reality instead of the
+// hardcoded 'confirm-page' every branch used to write regardless of caller. Defaults to
+// 'confirm_page' semantics (via clientInfoFor's fallback) for any pre-existing direct caller that
+// doesn't pass it — see clientInfoFor below.
+export interface ExecutorIdentity { accessToken: string; userLabel: string; modifyUser: string; sessionId: string; channel?: 'panel' | 'confirm_page' }
+
+// Same channel->label mapping as confirmService.ts's clientInfoPrefix, but for the PER-ITEM
+// changeset.execute audit rows (as opposed to confirmService's single changeset.approve decision
+// row) — intentionally a DIFFERENT literal ('app-panel', not 'panel') so the two audit surfaces
+// stay visually distinguishable when scanning audit_log by clientInfo.
+function clientInfoFor(who: ExecutorIdentity): string { return who.channel === 'panel' ? 'app-panel' : 'confirm-page' }
 
 export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, who: ExecutorIdentity): Promise<{ status: 'done' | 'partial' | 'failed'; results: ItemResult[] }> {
   const rec = deps.changeSets.get(changesetId)
@@ -46,7 +57,7 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
     deps.changeSets.recordResults(changesetId, results)
     for (const r of results) {
       deps.audit.record({
-        userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-page', tool: 'changeset.execute',
+        userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: clientInfoFor(who), tool: 'changeset.execute',
         // I-2: anything that is not a clean 'done'/'skipped_noop' (e.g. 'partial' — some dates
         // really failed) must audit as 'error', or audit scans filtering on error miss it.
         params: { changeset_id: changesetId, item: r.item_key },
@@ -74,7 +85,7 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
     deps.changeSets.recordResults(changesetId, results)
     for (const r of results) {
       deps.audit.record({
-        userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-page', tool: 'changeset.execute',
+        userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: clientInfoFor(who), tool: 'changeset.execute',
         params: { changeset_id: changesetId, item: r.item_key },
         status: (r.status === 'done' || r.status === 'skipped_noop') ? 'ok' : 'error',
         errorMessage: r.error_message, traceId: r.trace_id, durationMs: 0,
@@ -100,7 +111,7 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
     deps.changeSets.recordResults(changesetId, results)
     for (const r of results) {
       deps.audit.record({
-        userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-page', tool: 'changeset.execute',
+        userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: clientInfoFor(who), tool: 'changeset.execute',
         params: { changeset_id: changesetId, item: r.item_key },
         status: (r.status === 'done' || r.status === 'skipped_noop') ? 'ok' : 'error',
         errorMessage: r.error_message, traceId: r.trace_id, durationMs: 0,
@@ -152,7 +163,7 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
   deps.changeSets.recordResults(changesetId, results)
   for (const r of results) {
     deps.audit.record({
-      userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-page', tool: 'changeset.execute',
+      userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: clientInfoFor(who), tool: 'changeset.execute',
       // I-2: same rule as the inventory loop above — anything not a clean 'done'/'skipped_noop'
       // audits as 'error'.
       params: { changeset_id: changesetId, item: r.item_key },

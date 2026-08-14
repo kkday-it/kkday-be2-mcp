@@ -140,6 +140,6 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
   })
 
   // (4) execute.
-  const out = await executeChangeSet(deps, rec.id, { accessToken: who.accessToken, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId })
+  const out = await executeChangeSet(deps, rec.id, { accessToken: who.accessToken, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId, channel })
   return { status: out.status, results: out.results }
 }

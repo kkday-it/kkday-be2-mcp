@@ -283,3 +283,31 @@ describe('approveAndExecute — audit clientInfo prefix (Task 11 Finding 3)', ()
     expect(row.clientInfo).toBe('panel:')
   })
 })
+
+describe('approveAndExecute — executor per-item audit clientInfo reflects the real approval channel (final whole-branch review Minor)', () => {
+  // executor.ts's changeset.execute rows used to hardcode clientInfo: 'confirm-page' regardless of
+  // which channel actually approved the change-set — a panel approval's per-item audit trail would
+  // misleadingly read as if it went through the confirm page. approveAndExecute must thread the
+  // real channel through to executeChangeSet so the per-item rows match reality.
+  it('panel approval -> changeset.execute audit rows record clientInfo "app-panel"', async () => {
+    const gw = shelfGateway()
+    const { store, deps, audit } = makeDeps(gw)
+    const rec = seedShelf(store, 'cs-exec-panel')
+    const version = await realShelfDiffVersion(rec, gw)
+    await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: ['p1'], channel: 'panel' })
+    const rows = audit.recent().filter(r => r.tool === 'changeset.execute')
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(row.clientInfo).toBe('app-panel')
+  })
+
+  it('confirm_page approval -> changeset.execute audit rows record clientInfo "confirm-page" (unchanged default)', async () => {
+    const gw = shelfGateway()
+    const { store, deps, audit } = makeDeps(gw)
+    const rec = seedShelf(store, 'cs-exec-page')
+    const version = await realShelfDiffVersion(rec, gw)
+    await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, channel: 'confirm_page' })
+    const rows = audit.recent().filter(r => r.tool === 'changeset.execute')
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(row.clientInfo).toBe('confirm-page')
+  })
+})
