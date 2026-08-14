@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import type { ChangeSetRecord, ChangeSetStatus, ItemResult } from './types.js'
+import type { AnyDiffItem, ChangeSetRecord, ChangeSetStatus, ItemResult } from './types.js'
 
 export class ChangeSetStore {
   private now: () => number
@@ -59,6 +59,23 @@ export class ChangeSetStore {
   casStatus(id: string, from: ChangeSetStatus, to: ChangeSetStatus, decidedAt?: number): boolean {
     const result = this.db.prepare('UPDATE change_sets SET status = ?, decided_at = COALESCE(?, decided_at) WHERE id = ? AND status = ?')
       .run(to, decidedAt ?? null, id, from)
+    return result.changes === 1
+  }
+
+  // Final whole-branch review Important 2: the panel path (app_get_changeset_view) reads
+  // rec.diff/rec.diffVersion straight off the store — unlike the confirm page's GET (which always
+  // recomputes a live diff), it never recomputed anything itself, so a DIFF_STALE response from
+  // approveAndExecute had no way to ever converge — every subsequent view/approval attempt would
+  // keep reading the SAME stale creation-time diff/version forever. approveAndExecute now calls
+  // this to persist the diff it just recomputed (the one that caused the staleness detection) back
+  // into the store, so the next read is fresh. Restricted to WHERE status = 'pending_approval' —
+  // same discipline as casStatus — so a race against a concurrent approve/reject/expiry can never
+  // resurrect/overwrite a change-set that has already left pending_approval. Returns whether the
+  // write happened (false is not currently acted upon by any caller, but mirrors casStatus's
+  // signature for consistency and so a future caller can detect the race without a separate read).
+  updateDiff(id: string, diff: AnyDiffItem[], diffVersion: string): boolean {
+    const result = this.db.prepare('UPDATE change_sets SET diff_json = ?, diff_version = ? WHERE id = ? AND status = ?')
+      .run(JSON.stringify(diff), diffVersion, id, 'pending_approval')
     return result.changes === 1
   }
 

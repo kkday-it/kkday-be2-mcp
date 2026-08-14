@@ -219,6 +219,46 @@ describe('approveAndExecute — real confirmed_keys validation (Task 11 Finding 
   })
 })
 
+describe('approveAndExecute — stale diff write-back (final whole-branch review Important 2)', () => {
+  // app_get_changeset_view (src/tools/appTools.ts) reads rec.diff/rec.diffVersion straight off the
+  // store — it never recomputes. Before this fix, a DIFF_STALE result from approveAndExecute never
+  // wrote anything back, so the panel's "reload the view" recovery had nothing fresher to read:
+  // every reload would return the SAME stale diff_version forever and every re-approval attempt
+  // would 're-detect' the exact same staleness — the panel could never converge. This pins that
+  // approveAndExecute persists the live-recomputed diff/version into the store on the stale path,
+  // so a subsequent store.get() (what app_get_changeset_view does) sees it.
+  it('on stale detection, the recomputed diff+version is written back to the store', async () => {
+    const gw = shelfGateway({ is_active: true })
+    const { store, deps } = makeDeps(gw)
+    const rec = seedShelf(store, 'cs-stale-1')
+    // Live drifted after seeding (seed's placeholder diffVersion 'seed' never matches a real hash).
+    const out = await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: 'stale-version-from-a-stale-page', channel: 'confirm_page' })
+    expect(out.stale).toBe(true)
+    const stored = store.get('cs-stale-1')!
+    expect(stored.status).toBe('pending_approval')   // not consumed — still approvable
+    expect(stored.diffVersion).not.toBe('seed')
+    expect(stored.diffVersion).not.toBe('stale-version-from-a-stale-page')
+    // The freshly-stored version is exactly what a live recompute produces right now — i.e. it
+    // converges: approving AGAIN with this stored version must succeed (not stale a second time).
+    const version2 = await realShelfDiffVersion(store.get('cs-stale-1')!, gw)
+    expect(stored.diffVersion).toBe(version2)
+    const out2 = await approveAndExecute(deps, { rec: store.get('cs-stale-1')!, who: WHO, expectedDiffVersion: version2, channel: 'confirm_page' })
+    expect(out2.stale).toBeUndefined()
+    expect(out2.status).toBeDefined()
+  })
+
+  it('does NOT write back once the change-set has already left pending_approval (no resurrecting a decided change-set)', async () => {
+    const gw = shelfGateway({ is_active: true })
+    const { store, deps } = makeDeps(gw)
+    seedShelf(store, 'cs-stale-2')
+    store.setStatus('cs-stale-2', 'rejected')
+    const rejectedRec = store.get('cs-stale-2')!
+    const out = await approveAndExecute(deps, { rec: rejectedRec, who: WHO, expectedDiffVersion: 'whatever', channel: 'confirm_page' })
+    expect(out.stale).toBe(true)   // version mismatch still detected/reported...
+    expect(store.get('cs-stale-2')!.diffVersion).toBe(rejectedRec.diffVersion)   // ...but store.updateDiff no-ops: status is no longer pending_approval
+  })
+})
+
 describe('approveAndExecute — audit clientInfo prefix (Task 11 Finding 3)', () => {
   it('confirm_page channel records the ORIGINAL pre-refactor "confirm-page:" (hyphen) prefix', async () => {
     const gw = shelfGateway()

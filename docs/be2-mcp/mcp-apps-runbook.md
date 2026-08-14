@@ -53,7 +53,7 @@ Phase 2b 起，change-set 的批准有**兩條通道**：
    - 一般 action_type：直接呼叫 `app_confirm_changeset`（帶 nonce + diff_version + confirmed_keys），伺服器端即時重算 diff、比對 staleness、CAS、執行、寫入稽核，通常在同一次呼叫內就拿到終態（`done`/`partial`/`failed`）。
    - **高風險 action_type（目前是 `inventory_setting`，庫存寫入立即影響前台可售並清快取）**：按「確認執行」不會馬上送出，面板會先顯示一個紅字二次確認 banner，要求再按一次「確定執行」才真的呼叫 `app_confirm_changeset`；按「取消」則回到勾選畫面，什麼都不送。
 5. 按「拒絕」：change-set 轉為 `rejected`，不執行、可重建。
-6. 若 be2 現況在你審閱期間又變了（diff 過期），伺服器回 `DIFF_STALE`，面板會自動重新拉一次 `app_get_changeset_view` 取得新 diff + 新 nonce，你需要重新審閱、重新按一次。
+6. 若 be2 現況在你審閱期間又變了（diff 過期），伺服器回 `DIFF_STALE`，面板會顯示「現況已變」提示與一顆「回檢視重載」按鈕——**不是自動重拉**，按下後才重新呼叫 `app_get_changeset_view` 取得新 diff + 新 nonce（伺服器偵測到 stale 時已把重算後的 diff/diff_version 寫回該 change-set，所以重載後拿到的版本必與此刻現況一致，不會再次卡在同一個 stale 版本），回到「檢視」步驟讓你重新審閱、再按一次批准。
 7. 面板上永遠保留一顆「前往核准（確認頁）」按鈕（`openLink` 開 `/confirm/<id>`）——即使面板批准可用，也可以改用確認頁；兩者互不影響，同一個 change-set 誰先按（CAS）誰生效，另一邊會拿到 `ALREADY_PROCESSED`。
 
 ## Claude Code（無 Apps 能力）怎麼辦

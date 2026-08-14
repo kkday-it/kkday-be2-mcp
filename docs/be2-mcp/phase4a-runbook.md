@@ -27,7 +27,7 @@ BAA（BE2 Action Assistant，既有內部工具）的「四步驟精靈（選擇
    - `inventory_platform`：勾選任一方案時，**自動連動勾選所有共用同一 `(item_oid, supplier_oid)` 的兄弟方案**並標示「將一併變更」——這是真實寫入粒度的必要保護，不是 UI bug；下方三選一單選鈕（BE2／BE2_SCM／EXTERNAL）選目標平台。
    - `shelf_schedule`：一個共用的日期＋時＋分＋時區＋上/下架下拉，按「套用到所有已勾選」把這組時間寫進每個已勾選（非 bundle）方案的排程佇列。
 3. **步驟 2 檢視**：面板呼叫 `app_create_changeset`（走與 `be2_create_changeset` 完全同一條 service 路徑）建立 draft change-set，再呼叫 `app_get_changeset_view` 取得 diff 渲染——`shelf_schedule` 會顯示「原排程將被整組取代」警語＋本地時區/UTC 雙顯示；`inventory_platform` 顯示現況→目標平台。
-4. **步驟 3 批准**：面板內按「批准 N 項變更」呼叫 `app_confirm_changeset`（帶面板專屬 nonce + `diff_version` + `confirmed_keys`）。**agent 拿不到這顆 nonce**——它只在 app-only 的 `app_get_changeset_view` 回傳裡發放，model 的工具清單裡沒有 `app_confirm_changeset` 本身（host 依 spike T6 結論把 app-only 工具從送給 model 的工具陣列濾除）。若 be2 現況在審閱期間又變了，回 `DIFF_STALE`，面板會自動重新拉一次最新 diff + 新 nonce。
+4. **步驟 3 批准**：面板內按「批准 N 項變更」呼叫 `app_confirm_changeset`（帶面板專屬 nonce + `diff_version` + `confirmed_keys`）。**agent 拿不到這顆 nonce**——它只在 app-only 的 `app_get_changeset_view` 回傳裡發放，model 的工具清單裡沒有 `app_confirm_changeset` 本身（host 依 spike T6 結論把 app-only 工具從送給 model 的工具陣列濾除）。若 be2 現況在審閱期間又變了，回 `DIFF_STALE`，面板會顯示提示與一顆「回檢視重載」按鈕——**不是自動重拉**，按下後才重新呼叫 `app_get_changeset_view` 取得新 diff + 新 nonce（伺服器偵測到 stale 時已把重算後的 diff/diff_version 寫回 change-set，故重載後拿到的必是與此刻現況一致的版本），回到步驟 2 讓你重新核對後再次按批准。
 5. **步驟 4 結果**：per-item ledger，逐項顯示 `done`／`skipped_noop`／`failed`（含錯誤碼）。
 6. Claude Code（無 Apps 能力）：`be2_open_batch_wizard` 回覆文字說明後，改走 `docs/be2-mcp/phase2b-runbook.md` 的確認頁 SSO 流程——你自己到瀏覽器開 `http://127.0.0.1:8787/confirm/<changeset_id>` 批准。
 

@@ -53,6 +53,30 @@ describe('ChangeSetStore', () => {
     ])
     expect(s.getResults('cs1').map(r => r.item_key)).toEqual(['a-first', 'm-mid', 'z-last'])
   })
+  // Final whole-branch review Important 2: app_get_changeset_view always returned the diff/
+  // diff_version stored at CREATION time — the panel's DIFF_STALE recovery path had no way to ever
+  // converge, because nothing ever wrote a fresher diff back to the store. updateDiff is that
+  // write-back primitive: confirmService.approveAndExecute calls it when it detects staleness, so
+  // the next view/approval attempt reads the recomputed diff instead of the stale original.
+  it('updateDiff overwrites diff/diff_version while still pending_approval', () => {
+    const s = new ChangeSetStore(openDb(':memory:'), { now: () => 1000 })
+    s.create(rec())
+    const newDiff: DiffItem[] = [{ prod_oid: '1', target_is_active: false, no_op: true, current_is_active: false }]
+    const won = s.updateDiff('cs1', newDiff, 'v2')
+    expect(won).toBe(true)
+    const got = s.get('cs1')!
+    expect(got.diffVersion).toBe('v2')
+    expect(got.diff).toEqual(newDiff)
+  })
+  it('updateDiff is a no-op (returns false) once the change-set has left pending_approval', () => {
+    const s = new ChangeSetStore(openDb(':memory:'), { now: () => 1000 })
+    s.create(rec({ status: 'approved' }))
+    const won = s.updateDiff('cs1', [], 'v2')
+    expect(won).toBe(false)
+    const got = s.get('cs1')!
+    expect(got.diffVersion).toBe('v1')   // untouched — approved change-set's diff must not be rewritten
+  })
+
   it('casStatus transitions only when current status matches `from`, and reports who won', () => {
     const s = new ChangeSetStore(openDb(':memory:'), { now: () => 1000 })
     s.create(rec({ status: 'pending_approval' }))

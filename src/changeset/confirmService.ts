@@ -94,7 +94,18 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
   // 面板當下的舊 diff。
   const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: deps.gateway, accessToken: who.accessToken, userLabel: rec.creatorLabel })
   const version = diffVersionHash(diff)
-  if (version !== expectedDiffVersion) return { stale: true }
+  if (version !== expectedDiffVersion) {
+    // Final whole-branch review Important 2: without this write-back, app_get_changeset_view
+    // (which reads rec.diff/rec.diffVersion straight off the store, unlike the confirm page's GET
+    // which always recomputes live) would return the SAME stale diff/version forever — the
+    // panel's "reload after DIFF_STALE" recovery path had nothing fresher to ever read, so it
+    // could never converge. Persist the diff we just recomputed (the one that revealed the
+    // staleness) so the next read sees it. Gated on status still being pending_approval inside
+    // updateDiff itself — if a concurrent approve/reject/expiry already moved this change-set on,
+    // this is correctly a no-op (never resurrects/overwrites a decided change-set).
+    deps.changeSets.updateDiff(rec.id, diff, version)
+    return { stale: true }
+  }
 
   // CRITICAL ordering (carried over verbatim from the pre-extraction confirmRoutes.ts, agy
   // round-2): resolve modifyUser BEFORE the CAS below. modifyUserFrom can throw (the Fix-4

@@ -269,6 +269,88 @@ describe('batch-wizard panel: inventory_platform flow', () => {
   })
 })
 
+describe('batch-wizard panel: DIFF_STALE recovery (final whole-branch review Important 2)', () => {
+  const wizardEl = doc.getElementById('wizard')
+  beforeEach(() => { wizardEl.children.length = 0 })
+
+  // Before this fix, doApprove() on a DIFF_STALE error just called showFallback with a message and
+  // stopped — there was no way for the panel itself to ever get back to a state where re-approving
+  // could succeed (the user would have to close and reopen the whole wizard). This pins the new
+  // "回檢視重載" button: it re-calls app_get_changeset_view (picking up the fresher diff_version +
+  // nonce the server now writes back on staleness detection, see src/changeset/confirmService.ts)
+  // and returns to step 2, from which the user can proceed to approve again — this time
+  // successfully.
+  it('DIFF_STALE renders a "回檢視重載" button; clicking it reloads the view and a second approval succeeds', async () => {
+    const batchViewResult = envelope([{
+      products: [{ prod_oid: 'P1', name: '商品1', plans: [{ pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', current_platform: 'BE2' }] }],
+    }])
+    const createResult = envelope([{ changeset_id: 'cs-stale' }])
+    let viewCall = 0
+    const confirmCalls: Array<Record<string, unknown>> = []
+
+    const { app, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => batchViewResult,
+      app_create_changeset: () => createResult,
+      app_get_changeset_view: () => {
+        viewCall += 1
+        return viewCall === 1
+          ? envelope([{
+              changeset_id: 'cs-stale', status: 'pending_approval', nonce: 'nonce-v1', diff_version: 'dv-1',
+              diff: { items: [{ item_oid: 'I1', supplier_oid: 'S1', current: 'BE2', target: 'BE2_SCM', noop: false, affected_pkgs: [] }] },
+            }])
+          : envelope([{
+              changeset_id: 'cs-stale', status: 'pending_approval', nonce: 'nonce-v2', diff_version: 'dv-2',
+              diff: { items: [{ item_oid: 'I1', supplier_oid: 'S1', current: 'BE2_SCM', target: 'BE2_SCM', noop: true, affected_pkgs: [] }] },
+            }])
+      },
+      app_confirm_changeset: (args: Record<string, unknown>) => {
+        confirmCalls.push(args)
+        return confirmCalls.length === 1
+          ? makeEnvelopeWithError('cs-stale', 'DIFF_STALE', 'stale')
+          : envelope([{ changeset_id: 'cs-stale', status: 'done', results: [{ item_key: 'I1:S1', status: 'done', trace_id: 't1' }] }])
+      },
+    })
+
+    initWizard(app as never)
+    fireLaunch('inventory_platform', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    const cbA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    cbA.checked = true
+    cbA.onclick!()
+    const radios = wizardEl.querySelectorAll('input[type=radio][name=target]')
+    radios.find(r => r.value === 'BE2_SCM')!.checked = true
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+    findByRole(wizardEl, 'toApproveBtn').onclick!()
+
+    // First approval attempt -> DIFF_STALE.
+    findByRole(wizardEl, 'approveBtn').onclick!()
+    await flush()
+    expect(confirmCalls[0]).toMatchObject({ diff_version: 'dv-1', nonce: 'nonce-v1' })
+
+    const reloadBtn = findByRole(wizardEl, 'reloadBtn')
+    // Reload -> back to step 2 with the fresh diff/nonce.
+    reloadBtn.onclick!()
+    await flush()
+    expect(viewCall).toBe(2)
+
+    // Proceed to step 3 again and approve — this time with the fresh nonce/diff_version.
+    findByRole(wizardEl, 'toApproveBtn').onclick!()
+    findByRole(wizardEl, 'approveBtn').onclick!()
+    await flush()
+    expect(confirmCalls[1]).toMatchObject({ diff_version: 'dv-2', nonce: 'nonce-v2' })
+
+    const resultRows = wizardEl.querySelectorAll('[data-item-key]')
+    expect(resultRows.length).toBe(1)
+    expect(resultRows[0].dataset.status).toBe('done')
+  })
+})
+
+function makeEnvelopeWithError(key: string, code: string, message: string) {
+  return { items: [], errors: [{ key, code, message }], read_oids: [] }
+}
+
 describe('batch-wizard panel: shelf_schedule flow', () => {
   const wizardEl = doc.getElementById('wizard')
   beforeEach(() => { wizardEl.children.length = 0 })

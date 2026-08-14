@@ -410,11 +410,35 @@ export function initWizard(app: WizardApp): void {
       })
       const env = r.structuredContent
       const err = env?.errors?.[0]
-      if (err?.code === 'DIFF_STALE') { showFallback(fallbackEl, '現況已變，請回上一步重載'); return }
+      // Final whole-branch review Important 2: DIFF_STALE used to be a dead end — the panel just
+      // showed a message and stopped, with no way for the user to get back to an approvable state
+      // short of closing/reopening the wizard. Server now also writes the recomputed diff+version
+      // back to the store on staleness detection (confirmService.ts), so a fresh
+      // app_get_changeset_view call (via doReload below) picks up a diff/nonce that WILL match on
+      // the next approval attempt (barring further live drift). Offer that reload inline instead
+      // of a dead-end message.
+      if (err?.code === 'DIFF_STALE') { renderStaleNotice(); return }
       if (err) { showFallback(fallbackEl, `批准失敗：${err.code ?? ''} ${err.message ?? ''}`); return }
       const rec = (env?.items?.[0] as { results?: unknown[] } | undefined) ?? {}
       renderStep4((rec.results as Array<Record<string, unknown>> | undefined) ?? [])
     } catch (e) { showFallback(fallbackEl, '送出失敗：' + String(e)) }
+  }
+
+  function renderStaleNotice(): void {
+    showFallback(fallbackEl, '現況已變，請按下方按鈕重新載入檢視後再次批准')
+    const reloadBtn = document.createElement('button')
+    reloadBtn.textContent = '回檢視重載'
+    reloadBtn.dataset.role = 'reloadBtn'
+    reloadBtn.onclick = () => { void doReload() }
+    wizardEl.appendChild(reloadBtn)
+  }
+
+  async function doReload(): Promise<void> {
+    fallbackEl.hidden = true
+    statusEl.textContent = '重新載入中…'
+    const rec = await loadView()
+    if (!rec) return
+    renderStep2(rec)
   }
 
   // ---- Step 4: 結果 ----
