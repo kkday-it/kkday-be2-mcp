@@ -65,11 +65,15 @@ const itemShape = z.union([
   invPlatformItemShape,
   shelfScheduleItemShape,
 ])
-const inputShape = {
+// Exported (Task 6): app_create_changeset (src/tools/appTools.ts) reuses this SAME zod shape
+// verbatim — the wizard panel's create-changeset entry point must accept exactly what
+// be2_create_changeset accepts, not a hand-copied subset that could silently drift.
+export const createChangesetInputShape = {
   action_type: z.enum(['shelf_toggle_product', 'shelf_toggle_plan', 'inventory_setting', 'inventory_platform', 'shelf_schedule']),
   items: z.array(itemShape).min(1).max(20),
   note: z.string().max(500).optional(),
 }
+const inputShape = createChangesetInputShape
 
 const isInventoryItem = (i: unknown): i is InventoryItem =>
   typeof (i as InventoryItem).item_oid === 'string' && Array.isArray((i as InventoryItem).dates)
@@ -85,20 +89,15 @@ const isShelfScheduleItem = (i: unknown): i is ShelfScheduleItem =>
   typeof (i as ShelfScheduleItem).pkg_oid === 'string' &&
   Array.isArray((i as ShelfScheduleItem).queue)
 
-export const createChangesetTool: L2ToolDef = {
-  name: 'be2_create_changeset',
-  description:
-    'Stage a DRAFT shelf-on/off change for products (shelf_toggle_product) or plans (shelf_toggle_plan) — max 20 items. ' +
-    'Returns { changeset_id, status, diff } — a preview only; it does NOT apply anything and returns NO confirm link. ' +
-    'A human operator must open the confirm page for this change-set in a browser and log in via be2-auth SSO to review ' +
-    'and approve or reject it there; only then does the write execute. You CANNOT approve or execute this change-set ' +
-    'yourself — report the changeset_id and the diff to the user and tell them to open the confirm page to decide. ' +
-    'Only pass oids you already looked up this session. ' +
-    'inventory_setting stages per-date inventory quantity changes ({item_oid, supplier_oid, op: set|adjust, quantity, dates}); ' +
-    'read the item inventory first — adjust is computed against live quantities at approval time.',
-  inputShape,
-  uiResourceUri: 'ui://be2/changeset-panel.html',
-  async handler(args, ctx: L2ToolContext) {
+// Task 6: extracted so app_create_changeset (src/tools/appTools.ts, the wizard panel's create
+// entry point) walks the EXACT SAME validation / §6.2 scope-gate / businessList fail-fast /
+// per-user changeset budget / diff-compute / store-create / emitConfirmUrl sequence as the
+// model-facing be2_create_changeset tool below — one implementation, two thin callers, so the
+// two entry points structurally cannot drift apart. `ctx` only needs the L2ToolContext shape;
+// AppToolContext (src/server/appPipeline.ts) is a structural superset of it (readOids,
+// changeSets, rateBudget, businessList, emitConfirmUrl, etc. all present under the same names),
+// so an AppToolContext value can be passed here without any adapter.
+export async function createChangesetCore(args: Record<string, unknown>, ctx: L2ToolContext) {
     const items = args.items as AnyChangeSetItem[]
     const actionType = args.action_type as ActionType
     if (actionType === 'inventory_setting') {
@@ -197,7 +196,7 @@ export const createChangesetTool: L2ToolDef = {
         items,
         diff,
         diffVersion,
-        note: args.note,
+        note: args.note as string | undefined,
         status: 'pending_approval',
         createdAt: ctx.now(),
       })
@@ -218,6 +217,23 @@ export const createChangesetTool: L2ToolDef = {
     } catch (e) {
       return makeEnvelope([], [toEnvelopeError('create_changeset', e)])
     }
+}
+
+export const createChangesetTool: L2ToolDef = {
+  name: 'be2_create_changeset',
+  description:
+    'Stage a DRAFT shelf-on/off change for products (shelf_toggle_product) or plans (shelf_toggle_plan) — max 20 items. ' +
+    'Returns { changeset_id, status, diff } — a preview only; it does NOT apply anything and returns NO confirm link. ' +
+    'A human operator must open the confirm page for this change-set in a browser and log in via be2-auth SSO to review ' +
+    'and approve or reject it there; only then does the write execute. You CANNOT approve or execute this change-set ' +
+    'yourself — report the changeset_id and the diff to the user and tell them to open the confirm page to decide. ' +
+    'Only pass oids you already looked up this session. ' +
+    'inventory_setting stages per-date inventory quantity changes ({item_oid, supplier_oid, op: set|adjust, quantity, dates}); ' +
+    'read the item inventory first — adjust is computed against live quantities at approval time.',
+  inputShape,
+  uiResourceUri: 'ui://be2/changeset-panel.html',
+  async handler(args, ctx: L2ToolContext) {
+    return createChangesetCore(args, ctx)
   },
 }
 

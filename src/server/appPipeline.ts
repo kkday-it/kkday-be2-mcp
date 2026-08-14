@@ -22,15 +22,19 @@ export interface AppToolContext {
   sessionId: string
   bearerHash: string
   businessList: unknown[]
-  // Task 5: same §6.2 scope-binding substrate the L0/L2 tools share (readOids) plus the LLM-facing
-  // read RateBudget (session/day window). Added for app_get_batch_view, which does real gateway
-  // reads on behalf of the wizard panel and must register into the SAME scope-gate substrate
-  // be2_create_changeset's SCOPE_NOT_READ check reads from, and must count against the same daily
-  // read budget an equivalent L0 tool call would. This is DISTINCT from appRateBudget below (the
-  // panel-polling sliding window) — deliberately not auto-consumed by every app tool call (that
-  // would re-couple panel polling to the LLM's 100/session budget, exactly what appRateBudget was
-  // introduced to avoid); tools that do real reads must call ctx.rateBudget.consume() themselves,
-  // mirroring L2 tools' explicit ctx.rateBudget.consumeChangeset() call.
+  // Task 5/6: same §6.2 scope-binding substrate the L0/L2 tools share (readOids) plus the two
+  // independent budget counters RateBudget owns (session/day READ window via .consume(), and the
+  // per-user-day CHANGE-SET window via .consumeChangeset()). Added for app_get_batch_view (reads)
+  // and app_create_changeset (change-set creation), which must register/count against the SAME
+  // substrate an equivalent L0/L2 tool call would. This is DISTINCT from appRateBudget below (the
+  // panel-polling sliding window, consumed unconditionally by wrapAppTool itself for every app
+  // tool call). The app pipeline shell deliberately does NOT force-count any RateBudget counter —
+  // only appRateBudget is shell-enforced; a tool that does a real gateway read must call
+  // ctx.rateBudget.consume() itself (app_get_batch_view), and a tool that stages a change-set
+  // gets ctx.rateBudget.consumeChangeset() "for free" only because it calls into
+  // src/changeset/tools.ts#createChangesetCore, which calls it internally — app_create_changeset
+  // must NOT also call ctx.rateBudget.consume() itself, that would double-charge the unrelated
+  // read budget for a call that does no standalone gateway read of its own.
   readOids: ReadOidStore
   rateBudget: RateBudget
   changeSets: ChangeSetStore
@@ -43,6 +47,11 @@ export interface AppToolContext {
   // from tool input — so an app tool can never approve/execute AS someone other than the caller
   // this session's bearer resolved to.
   approveAndExecute: (p: Omit<ApproveParams, 'who'>) => Promise<ApproveResult>
+  // Task 6: same out-of-band delivery contract as L2ToolContext.emitConfirmUrl (src/server/
+  // l2Context.ts) — added so app_create_changeset (src/tools/appTools.ts) can call the shared
+  // src/changeset/tools.ts#createChangesetCore unmodified. AppToolContext is now a full
+  // structural superset of L2ToolContext.
+  emitConfirmUrl: (changesetId: string, url: string) => void
 }
 
 export interface AppToolDef {
@@ -66,6 +75,10 @@ export interface AppPipelineDeps {
   now: () => number
   genId: () => string
   baseUrl: string
+  // Task 6: same instance app.ts wires into l2Deps.emitConfirmUrl — both entry points into
+  // createChangesetCore (be2_create_changeset and app_create_changeset) must deliver the
+  // confirm_url out-of-band identically.
+  emitConfirmUrl: (changesetId: string, url: string) => void
   // Same lazy-resolver contract as confirmRoutes.ts's ConfirmDeps.modifyUserFrom (src/server/
   // app.ts's modifyUserFromPlaceholder) — only ever invoked LAZILY inside approveAndExecute, never
   // here at pipeline-construction/request time.
@@ -101,6 +114,7 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
           changeSets: deps.changeSets, nonces: deps.nonces,
           now: deps.now, genId: deps.genId,
           baseUrl: deps.baseUrl,
+          emitConfirmUrl: deps.emitConfirmUrl,
           // Closure binds THIS request's resolved identity (accessToken/userLabel/sessionId) —
           // never taken from tool args. modifyUser stays unresolved until approveAndExecute needs
           // it (lazy), so read-only app tools (e.g. app_get_changeset_view) never pay the cost of
@@ -115,8 +129,15 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
         // be2_create_changeset's SCOPE_NOT_READ gate reads from. Harmless no-op for the other app
         // tools (view/confirm-link/confirm), which never populate envelope.read_oids.
         if (envelope.read_oids.length) deps.readOids.record(reqCtx.sessionId, envelope.read_oids)
-        if (envelope.items.length === 0 && envelope.errors.length > 0) {
-          status = 'error'; const f = envelope.errors[0]; message = f.code ? `${f.code}: ${f.message}` : f.message
+        // Task 6: mirrors toolPipeline.ts's runWrapped exactly (was previously out of sync — see
+        // carry-forward from Task 2 review). Fully failed (no items) => audited as error. Items +
+        // errors => status stays ok but the first error entry is STILL recorded into audit
+        // errorMessage: that's how a spec-§4.3 degraded gate (warn-and-proceed, e.g.
+        // ACTION_CODE_UNVERIFIED from app_create_changeset) leaves an audit trace — no separate
+        // warning pathway exists, so without this the warning silently never reached audit_log.
+        if (envelope.errors.length > 0) {
+          const f = envelope.errors[0]; message = f.code ? `${f.code}: ${f.message}` : f.message
+          if (envelope.items.length === 0) status = 'error'
         }
         result = { content: [{ type: 'text', text: JSON.stringify(envelope) }], structuredContent: envelope as never }
       } catch (e) {
@@ -130,8 +151,12 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
         // 安全衛生：nonce 是一次性批准密碼，即使 verifyAndConsume 已消耗掉、對重放已無用，
         // 仍不該明文留在 audit_log。稽核只記編輯過的副本，handler 收到的 args 不受影響。
         const auditParams = 'nonce' in args ? { ...args, nonce: '[redacted]' } : args
+        // message may be set even when status==='ok' (partial errors / degrade warnings, see the
+        // comment above at the envelope.errors branch) — record it as-is, matching
+        // toolPipeline.ts's runWrapped, so the audit trail shows warn-and-proceed outcomes too,
+        // not only hard failures.
         deps.audit.record({ userLabel, sessionId: reqCtx.sessionId, clientInfo: reqCtx.clientInfo,
-          tool: `app/${tool.name}`, params: auditParams, status, errorMessage: status === 'ok' ? undefined : message,
+          tool: `app/${tool.name}`, params: auditParams, status, errorMessage: message,
           traceId, durationMs: Date.now() - started })
         span.end()
       }

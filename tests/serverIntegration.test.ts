@@ -100,13 +100,15 @@ describe('MCP server integration', () => {
     await client.connect(transport) // known credential (BEARER, enrolled in beforeAll) -> passes the gate
     await client.close()
   })
-  it('initializes and lists all 5 tools (3 L0 read + 2 L2 change-set)', async () => {
+  it('initializes and lists all 6 tools (4 L0 read + 2 L2 change-set)', async () => {
     const { client, transport } = mcpClient(BEARER)
     await client.connect(transport)
     const { tools } = await client.listTools()
+    // Task 6: be2_open_batch_wizard is model-visible (plain TOOLS entry, see src/server/app.ts)
+    // and thus always listed, regardless of host Apps support — same as the pre-existing L0 tools.
     expect(tools.map(t => t.name).sort()).toEqual([
       'be2_create_changeset', 'be2_find_products', 'be2_get_changeset_status',
-      'be2_get_inventory_settings', 'be2_get_product_plans',
+      'be2_get_inventory_settings', 'be2_get_product_plans', 'be2_open_batch_wizard',
     ])
     await client.close()
   })

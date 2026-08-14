@@ -31,6 +31,7 @@ import { registerAppResources } from './appResources.js'
 import { findProductsTool } from '../tools/findProducts.js'
 import { productPlansTool } from '../tools/productPlans.js'
 import { inventorySettingsTool } from '../tools/inventorySettings.js'
+import { openBatchWizardTool } from '../tools/openBatchWizard.js'
 import { createChangesetTool, getChangesetStatusTool } from '../changeset/tools.js'
 import { APP_TOOLS } from '../tools/appTools.js'
 import type { ToolDef } from '../tools/types.js'
@@ -47,7 +48,13 @@ export function hostSupportsApps(caps: unknown): boolean {
   return !!ui?.mimeTypes?.includes(RESOURCE_MIME_TYPE)
 }
 
-const TOOLS: ToolDef[] = [findProductsTool as ToolDef, productPlansTool as ToolDef, inventorySettingsTool as ToolDef]
+const TOOLS: ToolDef[] = [
+  findProductsTool as ToolDef, productPlansTool as ToolDef, inventorySettingsTool as ToolDef,
+  // Task 6: model-visible entry point for the batch wizard panel (ui://be2/batch-wizard.html,
+  // built in Task 7). A plain L0-style ToolDef — it does no gateway reads of its own, so it needs
+  // nothing beyond the base ToolContext wrapTool already provides.
+  openBatchWizardTool as ToolDef,
+]
 const L2_TOOLS: L2ToolDef[] = [createChangesetTool, getChangesetStatusTool]
 
 // PLACEHOLDER — Task 1's SIT write-contract probe (docs/be2-mcp/sit-write-contracts.md #1)
@@ -134,6 +141,17 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // of three copies of the same string.
   const baseUrl = `http://127.0.0.1:${config.port}`
 
+  // Fix 1: the confirm_url never reaches the tool response / the model's context — it is
+  // printed to the be2-mcp SERVER's own stdout, which only the human running `npm run dev`
+  // sees. The agent has no way to read this terminal. Phase 2b moved confirm-page auth to the
+  // be2-auth SSO session cookie, so the URL carries no capability token to begin with (the
+  // dead `?token=` capability-token surface from Phase 2a — mint, store, and embed — has been
+  // removed entirely; confirmRoutes.ts never reads req.query at all).
+  // Task 6: one shared instance wired into BOTH l2Deps and appDeps below — be2_create_changeset
+  // and app_create_changeset both funnel through src/changeset/tools.ts#createChangesetCore,
+  // which must deliver the confirm_url out-of-band identically regardless of entry point.
+  const emitConfirmUrl = (id: string, url: string): void => { console.log(`[be2-mcp] change-set ${id} awaiting approval: ${url}`) }
+
   const deps: PipelineDeps = { tokenManager, rateBudget, audit, gateway, readOids }
   const l2Deps: L2PipelineDeps = {
     ...deps,
@@ -141,13 +159,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     baseUrl,
     genId: randomUUID,
     now: Date.now,
-    // Fix 1: the confirm_url never reaches the tool response / the model's context — it is
-    // printed to the be2-mcp SERVER's own stdout, which only the human running `npm run dev`
-    // sees. The agent has no way to read this terminal. Phase 2b moved confirm-page auth to the
-    // be2-auth SSO session cookie, so the URL carries no capability token to begin with (the
-    // dead `?token=` capability-token surface from Phase 2a — mint, store, and embed — has been
-    // removed entirely; confirmRoutes.ts never reads req.query at all).
-    emitConfirmUrl: (id, url) => { console.log(`[be2-mcp] change-set ${id} awaiting approval: ${url}`) },
+    emitConfirmUrl,
   }
 
   // 面板輪詢（app-only tools）獨立限流，見 src/limits/appRateBudget.ts 的說明——與 rateBudget
@@ -162,6 +174,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     nonces: new ApprovalNonceStore(),
     now: Date.now, genId: randomUUID,
     baseUrl,
+    emitConfirmUrl,
     modifyUserFrom: modifyUserFromPlaceholder,
   }
 

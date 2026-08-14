@@ -65,6 +65,10 @@ function fakeAppDeps(over: Partial<AppPipelineDeps> = {}): AppPipelineDeps {
     now: Date.now,
     genId: () => 'id1',
     baseUrl: 'http://127.0.0.1:8787',
+    // Task 6: required by AppPipelineDeps (feeds createChangesetCore via app_create_changeset);
+    // unused by the read-only tools this suite drives (appGetChangesetViewTool), but must satisfy
+    // the type.
+    emitConfirmUrl: () => {},
     // Task 11: required by AppPipelineDeps (feeds the approveAndExecute closure); unused by the
     // read-only tools this suite drives (appGetChangesetViewTool), but must satisfy the type.
     modifyUserFrom: (at: string) => 'MU:' + at,
@@ -131,6 +135,30 @@ describe('wrapAppTool（runtime，透過真實 app tool 驅動三條分支）', 
     const params = records[0].params as Record<string, unknown>
     expect(params.nonce).toBe('[redacted]')                    // 稽核副本被 redact
     expect(params.changeset_id).toBe('cs1')                    // 其餘欄位不受影響
+  })
+
+  // Task 6 carry-forward (Task 2 review): before this fix, wrapAppTool only recorded errorMessage
+  // when envelope.items was EMPTY — a degrade-warning envelope (items present + a warning in
+  // errors, e.g. app_create_changeset's ACTION_CODE_UNVERIFIED) left status:'ok' with NO
+  // errorMessage at all, silently dropping the warning from audit_log. toolPipeline.ts's
+  // runWrapped has always recorded the first error's message regardless of whether items is
+  // empty (only using items.length to decide status ok-vs-error) — this test proves wrapAppTool
+  // now matches that semantic exactly.
+  it('items 非空但 errors 非空（degrade warning，如 ACTION_CODE_UNVERIFIED）：status 仍 ok，但 audit errorMessage 記下第一個 error（與 toolPipeline 同語義）', async () => {
+    const records: Array<Record<string, unknown>> = []
+    const deps = fakeAppDeps({ audit: { record: (e: Record<string, unknown>) => { records.push(e) } } as never })
+    const warnTool: AppToolDef = {
+      name: 'warn_probe', description: 'probe', inputShape: {},
+      async handler() {
+        return makeEnvelope([{ ok: true }], [{ key: 'x', code: 'ACTION_CODE_UNVERIFIED', message: 'staging allowed, degrade' }])
+      },
+    }
+    const wrapped = wrapAppTool(warnTool, deps)
+    const out = await requestContext.run({ bearer: 'b', sessionId: 's1', clientInfo: 'test' }, () => wrapped({}))
+    expect(out.isError).toBeUndefined()
+    expect(records).toHaveLength(1)
+    expect(records[0].status).toBe('ok')
+    expect(records[0].errorMessage).toBe('ACTION_CODE_UNVERIFIED: staging allowed, degrade')
   })
 })
 

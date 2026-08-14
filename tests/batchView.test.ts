@@ -178,6 +178,7 @@ describe('app_get_batch_view — 全鏈路：read-oids 登記 + budget 計數', 
       nonces: new ApprovalNonceStore(),
       now: Date.now, genId: () => 'id1',
       baseUrl: 'http://127.0.0.1:8787',
+      emitConfirmUrl: () => {},
       modifyUserFrom: () => 'MU',
     }
     return { deps, readOids, rateBudget }

@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { AppToolDef, AppToolContext } from '../server/appPipeline.js'
 import { makeEnvelope, toEnvelopeError } from './envelope.js'
 import { buildBatchView } from './batchView.js'
+import { createChangesetCore, createChangesetInputShape } from '../changeset/tools.js'
 
 // 無 existence leak：找不到 id 與「id 存在但非自己建立」回同一種錯誤，讓外部觀察者無法用
 // error 差異探測他人 change-set 是否存在。
@@ -112,4 +113,32 @@ export const appGetBatchViewTool: AppToolDef = {
   },
 }
 
-export const APP_TOOLS: AppToolDef[] = [appGetChangesetViewTool, appGetConfirmLinkTool, appConfirmChangesetTool, appGetBatchViewTool]
+// Task 6 (design doc §5.2): wizard step-2 "stage the change-set the panel just built". Walks the
+// EXACT SAME path as be2_create_changeset — same zod input shape (createChangesetInputShape,
+// imported verbatim from src/changeset/tools.ts, not hand-copied), same §6.2 scope-gate, same
+// businessList fail-fast/degrade, same per-user daily change-set budget, same audit trail — by
+// delegating to createChangesetCore, which both entry points share. The only difference from the
+// model-facing tool's response is shape: the panel already has (or will separately fetch via
+// app_get_changeset_view) the full diff, so this only needs to hand back the changeset_id per
+// spec §5.2. A pure failure (no changeset created) is forwarded unchanged so its error code/key
+// still reaches the panel and — via wrapAppTool's audit recording — audit_log.
+export const appCreateChangesetTool: AppToolDef = {
+  name: 'app_create_changeset',
+  description:
+    'Panel-only: stage a DRAFT change-set from the batch wizard (wizard step 2) — same validation, ' +
+    '§6.2 read-scope gate, businessList fail-fast, and per-user daily change-set budget as ' +
+    'be2_create_changeset; only the entry point differs. Returns only { changeset_id } — use ' +
+    'app_get_changeset_view to load the diff for rendering. Creating a change-set here does NOT ' +
+    'approve or execute it; that still requires app_confirm_changeset with its panel-issued nonce.',
+  inputShape: createChangesetInputShape as never,
+  async handler(args, ctx: AppToolContext) {
+    const env = await createChangesetCore(args as never, ctx)
+    if (env.items.length === 0) return env   // pure failure: forward errors/warnings unchanged
+    const { changeset_id } = env.items[0] as { changeset_id: string }
+    return makeEnvelope([{ changeset_id }], env.errors, env.read_oids)
+  },
+}
+
+export const APP_TOOLS: AppToolDef[] = [
+  appGetChangesetViewTool, appGetConfirmLinkTool, appConfirmChangesetTool, appGetBatchViewTool, appCreateChangesetTool,
+]
