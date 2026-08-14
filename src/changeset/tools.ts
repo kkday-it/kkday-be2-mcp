@@ -2,8 +2,9 @@ import { z } from 'zod'
 import type { L2ToolContext, L2ToolDef } from '../server/l2Context.js'
 import { computeChangesetDiff, diffVersionHash } from './diff.js'
 import { validateInventoryItems } from './inventoryValidate.js'
+import { validateInventoryPlatformItems, validateShelfScheduleItems } from './batchValidate.js'
 import { makeEnvelope, toEnvelopeError } from '../tools/envelope.js'
-import type { ActionType, AnyChangeSetItem, ChangeSetItem, InventoryItem } from './types.js'
+import type { ActionType, AnyChangeSetItem, ChangeSetItem, InventoryItem, InventoryPlatformItem, ShelfScheduleItem } from './types.js'
 
 // FINALIZE(Task 1): confirmed live against SIT be2-220 (docs/be2-mcp/sit-write-contracts.md
 // "inventory" section, Task 1 probe) — this is the real businessList action code, not a
@@ -17,6 +18,15 @@ const ACTION_CODES: Record<ActionType, string[]> = {
   shelf_toggle_product: ['product.product-sale-status.update'],
   shelf_toggle_plan: ['product.product-sale-status.update', 'product.bundle-package-sale-status.update'],
   inventory_setting: INVENTORY_ACTION_CODES,
+  // Confirmed live against SIT be2-220 (docs/superpowers/specs/2026-08-14-be2-mcp-baa-wizard-design.md §4.3) —
+  // same action code as inventory_setting (both are product-inventory writes).
+  inventory_platform: INVENTORY_ACTION_CODES,
+  // §4.3: no dedicated action code confirmed yet for the native-reserve endpoint — reuses the
+  // shelf_toggle_plan package-config codes verbatim (spec: "沿用 Phase 2a shelf_toggle 實查的
+  // package-config 類 code"). If this later proves not to be the verify-side gate, spec §4.3
+  // calls for degrading this check to an audit warning instead of a hard block — not yet wired
+  // here; that's an executor-level concern for a later task.
+  shelf_schedule: ['product.product-sale-status.update', 'product.bundle-package-sale-status.update'],
 }
 
 export function businessListAllowsAction(businessList: unknown[], actionType: ActionType): boolean {
@@ -32,19 +42,36 @@ const invItemShape = z.object({
   quantity: z.number(),
   dates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).min(1).max(62),  // 62 provisional — Task 1 Q4/Q6
 })
+// inventory_platform / shelf_schedule items are validated structurally + semantically in
+// batchValidate.ts (not per-field zod), so their zod shape is deliberately loose here — a
+// generic record — same pattern as inventory_setting used a strict shape for zod plus a
+// separate semantic validator (inventoryValidate.ts); the detail just moved further downstream.
+const looseItemShape = z.record(z.string(), z.unknown())
 const itemShape = z.union([
   z.object({ prod_oid: z.string().min(1), target_is_active: z.boolean() }),
   z.object({ prod_oid: z.string().min(1), pkg_oid: z.string().min(1), target_is_active: z.boolean() }),
   invItemShape,
+  looseItemShape,
 ])
 const inputShape = {
-  action_type: z.enum(['shelf_toggle_product', 'shelf_toggle_plan', 'inventory_setting']),
+  action_type: z.enum(['shelf_toggle_product', 'shelf_toggle_plan', 'inventory_setting', 'inventory_platform', 'shelf_schedule']),
   items: z.array(itemShape).min(1).max(20),
   note: z.string().max(500).optional(),
 }
 
 const isInventoryItem = (i: unknown): i is InventoryItem =>
   typeof (i as InventoryItem).item_oid === 'string' && Array.isArray((i as InventoryItem).dates)
+
+const isInventoryPlatformItem = (i: unknown): i is InventoryPlatformItem =>
+  typeof (i as InventoryPlatformItem).item_oid === 'string' &&
+  typeof (i as InventoryPlatformItem).supplier_oid === 'string' &&
+  typeof (i as InventoryPlatformItem).target === 'string' &&
+  Array.isArray((i as InventoryPlatformItem).affected_pkgs)
+
+const isShelfScheduleItem = (i: unknown): i is ShelfScheduleItem =>
+  typeof (i as ShelfScheduleItem).prod_oid === 'string' &&
+  typeof (i as ShelfScheduleItem).pkg_oid === 'string' &&
+  Array.isArray((i as ShelfScheduleItem).queue)
 
 export const createChangesetTool: L2ToolDef = {
   name: 'be2_create_changeset',
@@ -76,6 +103,38 @@ export const createChangesetTool: L2ToolDef = {
           key: notRead.map(i => i.item_oid).join(','),
           code: 'SCOPE_NOT_READ',
           message: 'These item_oids were not looked up in this session; query them first (be2_get_inventory_settings / be2_get_product_plans) before staging a change.',
+        }])
+      }
+    } else if (actionType === 'inventory_platform') {
+      if (!items.every(isInventoryPlatformItem)) {
+        return makeEnvelope([], [{ key: actionType, code: 'INVALID_ITEMS', message: 'inventory_platform items need {item_oid, supplier_oid, target, affected_pkgs}.' }])
+      }
+      const plat = items as InventoryPlatformItem[]
+      const bad = validateInventoryPlatformItems(plat)
+      if (bad) return makeEnvelope([], [{ key: actionType, code: 'INVALID_ITEMS', message: bad }])
+      // §6.2 scope-binding gate — write unit is (item_oid, supplier_oid); item_oid is what was read.
+      const notRead = plat.filter(i => !ctx.readOids.has(ctx.sessionId, i.item_oid))
+      if (notRead.length) {
+        return makeEnvelope([], [{
+          key: notRead.map(i => i.item_oid).join(','),
+          code: 'SCOPE_NOT_READ',
+          message: 'These item_oids were not looked up in this session; query them first (be2_get_product_plans) before staging a change.',
+        }])
+      }
+    } else if (actionType === 'shelf_schedule') {
+      if (!items.every(isShelfScheduleItem)) {
+        return makeEnvelope([], [{ key: actionType, code: 'INVALID_ITEMS', message: 'shelf_schedule items need {prod_oid, pkg_oid, queue}.' }])
+      }
+      const sched = items as ShelfScheduleItem[]
+      const bad = validateShelfScheduleItems(sched, ctx.now)
+      if (bad) return makeEnvelope([], [{ key: actionType, code: 'INVALID_ITEMS', message: bad }])
+      // §6.2 scope-binding gate
+      const notRead = sched.filter(i => !ctx.readOids.has(ctx.sessionId, i.prod_oid) || !ctx.readOids.has(ctx.sessionId, i.pkg_oid))
+      if (notRead.length) {
+        return makeEnvelope([], [{
+          key: notRead.map(i => i.pkg_oid).join(','),
+          code: 'SCOPE_NOT_READ',
+          message: 'These oids were not looked up in this session; query them first (be2_get_product_plans) before staging a change.',
         }])
       }
     } else {
