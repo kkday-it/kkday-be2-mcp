@@ -4,6 +4,7 @@ import { join } from 'node:path'
 
 const built = join(process.cwd(), 'dist', 'ui', 'products-panel.html')
 const builtChangeset = join(process.cwd(), 'dist', 'ui', 'changeset-panel.html')
+const builtBatchWizard = join(process.cwd(), 'dist', 'ui', 'batch-wizard.html')
 describe.skipIf(process.env.CI)('panel smoke', () => {
   it('build 產物存在且內嵌 JS（無 __PANEL_JS__ 佔位殘留）', () => {
     expect(existsSync(built)).toBe(true)
@@ -43,5 +44,20 @@ describe.skipIf(process.env.CI)('panel smoke', () => {
     expect(html).toContain('showHighRiskConfirm')
     expect(html).toContain('HIGH_RISK_ACTIONS')
     expect(html).toContain('inventory_setting') // 高風險 action_type 白名單
+  })
+
+  it('batch-wizard 面板產物內嵌四步驟工具呼叫 + UTC 轉換邏輯（Task 7）', () => {
+    expect(existsSync(builtBatchWizard)).toBe(true)
+    const html = readFileSync(builtBatchWizard, 'utf8')
+    expect(html).not.toContain('__PANEL_JS__')
+    // 四個 app-only tool 呼叫,對應四步驟(選擇→檢視→批准→結果)。
+    expect(html).toContain('app_get_batch_view')
+    expect(html).toContain('app_create_changeset')
+    expect(html).toContain('app_get_changeset_view')
+    expect(html).toContain('app_confirm_changeset')
+    expect(html).toContain('confirmed_keys')
+    expect(html).toContain('diff_version')
+    expect(html).toContain('toReserveDateUtc') // UTC 轉換函式(命名),禁第三方時區庫
+    expect(html).toContain('DIFF_STALE')
   })
 })

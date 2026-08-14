@@ -9,7 +9,7 @@ const srcDir = join(root, 'src', 'ui')
 const outDir = join(root, 'dist', 'ui')
 mkdirSync(outDir, { recursive: true })
 
-const entries = ['products-panel', 'changeset-panel']
+const entries = ['products-panel', 'changeset-panel', 'batch-wizard']
 for (const name of entries) {
   const tsPath = join(srcDir, `${name}.ts`)
   const htmlPath = join(srcDir, `${name}.html`)
