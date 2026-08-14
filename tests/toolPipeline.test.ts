@@ -89,6 +89,19 @@ describe('wrapTool pipeline', () => {
     expect(errSpy).not.toHaveBeenCalled()
     errSpy.mockRestore()
   })
+  // Spec §4.3 degrade: a warn-and-proceed envelope (items present + warning entry in errors)
+  // must leave an audit trace via the EXISTING audit channel — status stays ok, but the
+  // warning lands in error_message so the append-only audit_log shows the degraded gate.
+  it('ok-with-warning envelope (items + errors) audits status ok WITH the warning message recorded', async () => {
+    const { db, deps } = makeDeps()
+    tool.handler.mockResolvedValueOnce(
+      makeEnvelope([{ ok: 1 }], [{ key: 'inventory_platform', code: 'ACTION_CODE_UNVERIFIED', message: 'not in businessList; /verify remains authoritative' }]))
+    const out = await requestContext.run(ctx, () => wrapTool(tool as never, deps)({ v: 'x' }))
+    expect(out.isError).toBeUndefined()
+    const row = new AuditLog(db).recent()[0]
+    expect(row.status).toBe('ok')
+    expect(row.errorMessage).toContain('ACTION_CODE_UNVERIFIED')
+  })
   it('fully-failed read (empty items, non-empty errors) is audited as error, not ok', async () => {
     const { db, deps } = makeDeps()
     tool.handler.mockResolvedValueOnce(

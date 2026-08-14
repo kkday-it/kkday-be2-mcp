@@ -3,7 +3,7 @@ import type { L2ToolContext, L2ToolDef } from '../server/l2Context.js'
 import { computeChangesetDiff, diffVersionHash } from './diff.js'
 import { validateInventoryItems } from './inventoryValidate.js'
 import { validateInventoryPlatformItems, validateShelfScheduleItems } from './batchValidate.js'
-import { makeEnvelope, toEnvelopeError } from '../tools/envelope.js'
+import { makeEnvelope, toEnvelopeError, type EnvelopeError } from '../tools/envelope.js'
 import type { ActionType, AnyChangeSetItem, ChangeSetItem, InventoryItem, InventoryPlatformItem, ShelfScheduleItem } from './types.js'
 
 // FINALIZE(Task 1): confirmed live against SIT be2-220 (docs/be2-mcp/sit-write-contracts.md
@@ -42,16 +42,28 @@ const invItemShape = z.object({
   quantity: z.number(),
   dates: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).min(1).max(62),  // 62 provisional — Task 1 Q4/Q6
 })
-// inventory_platform / shelf_schedule items are validated structurally + semantically in
-// batchValidate.ts (not per-field zod), so their zod shape is deliberately loose here — a
-// generic record — same pattern as inventory_setting used a strict shape for zod plus a
-// separate semantic validator (inventoryValidate.ts); the detail just moved further downstream.
-const looseItemShape = z.record(z.string(), z.unknown())
+// Strict shapes for the two Phase 4a item kinds (Task 2 review #1: a loose z.record in the
+// union would swallow malformed SHELF items that previously failed zod, silently weakening
+// existing validation). Field existence + types live here; cross-item semantic rules
+// (duplicates, future-time) stay in batchValidate.ts — same split as invItemShape above vs
+// inventoryValidate.ts.
+const invPlatformItemShape = z.object({
+  item_oid: z.string().min(1),
+  supplier_oid: z.string().min(1),
+  target: z.enum(['BE2', 'BE2_SCM', 'EXTERNAL']),
+  affected_pkgs: z.array(z.object({ prod_oid: z.string().min(1), pkg_oid: z.string().min(1), pkg_name: z.string() })),
+})
+const shelfScheduleItemShape = z.object({
+  prod_oid: z.string().min(1),
+  pkg_oid: z.string().min(1),
+  queue: z.array(z.object({ reserve_date_utc: z.string(), reserve_status: z.boolean() })),  // empty = clear schedule
+})
 const itemShape = z.union([
   z.object({ prod_oid: z.string().min(1), target_is_active: z.boolean() }),
   z.object({ prod_oid: z.string().min(1), pkg_oid: z.string().min(1), target_is_active: z.boolean() }),
   invItemShape,
-  looseItemShape,
+  invPlatformItemShape,
+  shelfScheduleItemShape,
 ])
 const inputShape = {
   action_type: z.enum(['shelf_toggle_product', 'shelf_toggle_plan', 'inventory_setting', 'inventory_platform', 'shelf_schedule']),
@@ -151,9 +163,24 @@ export const createChangesetTool: L2ToolDef = {
         }])
       }
     }
-    // businessList fail-fast (action_type only)
+    // businessList fail-fast (action_type only). Spec §4.3 degrade: for the two Phase 4a
+    // action_types the verify-rule-side action code has not been double-confirmed against the
+    // businessList catalogue (Phase 3a hit exactly this UI-vs-verify code mismatch), so a miss
+    // must NOT block creation — it degrades to a warning entry in the envelope (which the
+    // toolPipeline audit shell records into audit_log error_message while status stays ok).
+    // The authoritative permission check remains gateway /verify at execution (fail-closed).
+    // The three pre-existing action_types keep the hard block unchanged.
+    const warnings: EnvelopeError[] = []
     if (!businessListAllowsAction(ctx.businessList, actionType)) {
-      return makeEnvelope([], [{ key: actionType, code: 'ACTION_NOT_ALLOWED', message: 'Your be2 permissions do not include this shelf action.' }])
+      if (actionType === 'inventory_platform' || actionType === 'shelf_schedule') {
+        warnings.push({
+          key: actionType,
+          code: 'ACTION_CODE_UNVERIFIED',
+          message: 'businessList does not contain the expected action code for this action_type; staging is allowed (spec §4.3 degrade) — the authoritative permission check happens at gateway /verify when the change-set executes.',
+        })
+      } else {
+        return makeEnvelope([], [{ key: actionType, code: 'ACTION_NOT_ALLOWED', message: 'Your be2 permissions do not include this shelf action.' }])
+      }
     }
     try {
       // Per-user daily change-set budget (§8) — throws RateError over the cap.
@@ -187,7 +214,7 @@ export const createChangesetTool: L2ToolDef = {
         changeset_id: id,
         status: 'pending_approval',
         diff: { items: diff },
-      }], [], readOidsOut)
+      }], warnings, readOidsOut)
     } catch (e) {
       return makeEnvelope([], [toEnvelopeError('create_changeset', e)])
     }

@@ -12,6 +12,13 @@ export function platformToBooleans(t: InventoryPlatform): { is_external_inventor
     case 'BE2': return { is_external_inventory: false, is_inventory_mgmt: false }
     case 'BE2_SCM': return { is_external_inventory: false, is_inventory_mgmt: true }
     case 'EXTERNAL': return { is_external_inventory: true, is_inventory_mgmt: false }
+    default: {
+      // Exhaustive guard (Task 2 review #2): zod's target enum makes this unreachable from
+      // tool input, but a raw value from a direct internal caller must fail loudly here
+      // instead of letting `undefined` booleans flow downstream into a gateway PUT.
+      const impossible: never = t
+      throw new Error(`unknown InventoryPlatform: ${String(impossible)}`)
+    }
   }
 }
 

@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { z } from 'zod'
+import { createChangesetTool } from '../src/changeset/tools.js'
 import {
   platformToBooleans,
   booleansToPlatform,
@@ -28,6 +30,42 @@ describe('platformToBooleans / booleansToPlatform', () => {
   })
   it('undefined combo (EXTERNAL+mgmt=true, "11") maps back to undefined', () => {
     expect(booleansToPlatform({ is_external_inventory: true, is_inventory_mgmt: true })).toBeUndefined()
+  })
+  it('platformToBooleans throws on an out-of-enum value (exhaustive guard, never silently undefined)', () => {
+    expect(() => platformToBooleans('BOGUS' as never)).toThrow(/BOGUS/)
+  })
+})
+
+// Regression (Task 2 review #1): the new item shapes must be strict z.objects in the union —
+// a loose z.record would swallow malformed SHELF items (missing target_is_active, or entirely
+// unrelated objects) that previously failed zod, silently weakening existing validation.
+describe('createChangesetTool zod inputShape strictness', () => {
+  const schema = z.object(createChangesetTool.inputShape)
+  const platItems = [{ item_oid: 'i1', supplier_oid: 's1', target: 'BE2_SCM', affected_pkgs: [{ prod_oid: 'p1', pkg_oid: 'k1', pkg_name: 'A' }] }]
+
+  it('still rejects a malformed shelf item missing target_is_active', () => {
+    expect(schema.safeParse({ action_type: 'shelf_toggle_product', items: [{ prod_oid: 'p1' }] }).success).toBe(false)
+  })
+  it('still rejects a completely unrelated object as an item', () => {
+    expect(schema.safeParse({ action_type: 'shelf_toggle_product', items: [{ foo: 'bar' }] }).success).toBe(false)
+  })
+  it('accepts valid inventory_platform items', () => {
+    expect(schema.safeParse({ action_type: 'inventory_platform', items: platItems }).success).toBe(true)
+  })
+  it('rejects an out-of-enum target at the zod layer', () => {
+    expect(schema.safeParse({ action_type: 'inventory_platform', items: [{ ...platItems[0], target: 'SCM' }] }).success).toBe(false)
+  })
+  it('rejects affected_pkgs entries missing a required string field', () => {
+    expect(schema.safeParse({ action_type: 'inventory_platform', items: [{ ...platItems[0], affected_pkgs: [{ prod_oid: 'p1', pkg_oid: 'k1' }] }] }).success).toBe(false)
+  })
+  it('accepts valid shelf_schedule items, including an empty queue', () => {
+    expect(schema.safeParse({ action_type: 'shelf_schedule', items: [
+      { prod_oid: 'p1', pkg_oid: 'k1', queue: [{ reserve_date_utc: '2026-08-20 10:00:00', reserve_status: true }] },
+      { prod_oid: 'p1', pkg_oid: 'k2', queue: [] },
+    ] }).success).toBe(true)
+  })
+  it('rejects a queue entry whose reserve_status is not boolean', () => {
+    expect(schema.safeParse({ action_type: 'shelf_schedule', items: [{ prod_oid: 'p1', pkg_oid: 'k1', queue: [{ reserve_date_utc: '2026-08-20 10:00:00', reserve_status: 'yes' }] }] }).success).toBe(false)
   })
 })
 

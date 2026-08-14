@@ -71,10 +71,14 @@ function runWrapped<Ctx>(
         const toolCtx = buildCtx(user, reqCtx)
         const envelope = await callHandler(toolCtx, args)
         if (envelope.read_oids.length) deps.readOids.record(reqCtx.sessionId, envelope.read_oids)
-        if (envelope.items.length === 0 && envelope.errors.length > 0) {
-          status = 'error'
+        if (envelope.errors.length > 0) {
+          // Fully failed (no items) => audited as error. Items + errors => status stays ok but
+          // the first error entry is still recorded into audit error_message: that's how a
+          // spec-§4.3 degraded gate (warn-and-proceed, e.g. ACTION_CODE_UNVERIFIED) leaves an
+          // audit trace through the existing channel — no separate warning pathway.
           const first = envelope.errors[0]
           message = first.code ? `${first.code}: ${first.message}` : first.message
+          if (envelope.items.length === 0) status = 'error'
         }
         // 一份結果兩個受眾：text 給 model（格式不變＝零回歸）、structuredContent 給面板。
         // envelope 是純資料物件，直接當 structuredContent。敏感值一律不在 envelope 裡（見計畫 Global Constraints）。
@@ -93,7 +97,9 @@ function runWrapped<Ctx>(
       } finally {
         deps.audit.record({
           userLabel, sessionId: reqCtx.sessionId, clientInfo: reqCtx.clientInfo, tool: toolName,
-          params: args, status, errorMessage: status === 'ok' ? undefined : message,
+          // message may be set even when status==='ok' (partial errors / degrade warnings) —
+          // record it so the audit trail shows warn-and-proceed outcomes, not just failures.
+          params: args, status, errorMessage: message,
           traceId, durationMs: Date.now() - started,
         })
         span.end()
