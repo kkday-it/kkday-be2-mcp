@@ -136,6 +136,28 @@ describe('confirm routes — inventory_platform renderer (final whole-branch rev
     expect(gw.calls.some(c => c.m === 'PUT' && c.path === '/product/api/v1/items/i1/supplier-configs/s1/inventory-setting')).toBe(true)
   })
 
+  // Final whole-branch review Important 3: the packages endpoint is queried per claimed prod_oid
+  // to recompute affected_pkgs server-side (src/changeset/platformDiff.ts). When that read fails,
+  // computePlatformDiff degrades to the self-reported list flagged affected_pkgs_unverified — the
+  // confirm page must surface that so the approver knows the "受影響方案" column wasn't verified.
+  it('GET shows "(未經伺服器驗證)" when the packages recompute read fails', async () => {
+    gw.packagesByProd = { p1: undefined } // GET resolves but not to a usable packages shape
+    // Force the packages GET to actually throw so recomputeAffectedPkgs's catch branch fires.
+    const originalGet = gw.get.bind(gw)
+    gw.get = async (path: string) => {
+      if (/\/products\/[^/]+\/packages$/.test(path)) throw Object.assign(new Error('boom'), { code: 'HTTP_500' })
+      return originalGet(path)
+    }
+    seedPlatform(store, 'cs-plat-unverified', {
+      item_oid: 'i1', supplier_oid: 's1', target: 'BE2_SCM',
+      affected_pkgs: [{ prod_oid: 'p1', pkg_oid: 'k1', pkg_name: 'Plan A' }],
+    })
+    const res = await http(base, 'GET', '/confirm/cs-plat-unverified', undefined, COOKIE)
+    expect(res.status).toBe(200)
+    expect(res.text).toContain('未經伺服器驗證')
+    expect(res.text).toContain('Plan A')
+  })
+
   it('approve 409s when the live current platform drifted since the page was rendered (stale guard)', async () => {
     seedPlatform(store, 'cs-plat-3', {
       item_oid: 'i1', supplier_oid: 's1', target: 'BE2_SCM',

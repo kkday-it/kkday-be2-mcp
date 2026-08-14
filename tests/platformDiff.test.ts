@@ -49,11 +49,19 @@ describe('computePlatformDiff', () => {
     const [d] = await computePlatformDiff([item({ target: 'BE2_SCM' })], ctxOf(gw))
     expect(d).toMatchObject({ current: 'BE2_SCM', target: 'BE2_SCM', noop: true })
   })
-  it('reads via the item-level endpoint only — never calls packages', async () => {
+  // Final whole-branch review Important 3: the current/target platform read still goes through
+  // the item-level endpoint ONLY — this pins that computePlatformDiff never substitutes the
+  // packages endpoint for that read (it would be the wrong source of truth for the two
+  // booleans). The affected_pkgs *display annotation* separately does read packages now (see the
+  // "server-side affected_pkgs recompute" describe block below) — that is a deliberate addition,
+  // not a violation of this invariant, so this test's gatewayWith stub (which only serves
+  // /configs) intentionally leaves any packages call unanswered (undefined) rather than
+  // asserting packages is never called at all.
+  it('current/target platform is read via the item-level endpoint only', async () => {
     const gw = gatewayWith({ i1: configs([{ supplier_oid: 's1', is_external_inventory: false, is_inventory_mgmt: false }]) })
-    await computePlatformDiff([item()], ctxOf(gw))
-    expect(gw.calls).toEqual(['/product/api/v1/items/i1/configs'])
-    expect(gw.calls.some(c => c.includes('packages'))).toBe(false)
+    const [d] = await computePlatformDiff([item()], ctxOf(gw))
+    expect(gw.calls).toContain('/product/api/v1/items/i1/configs')
+    expect(d.current).toBe('BE2')
   })
   it('missing booleans -> DiffError', async () => {
     const gw = gatewayWith({ i1: { supplier_configs: [] } })
@@ -67,6 +75,67 @@ describe('computePlatformDiff', () => {
     const gw = gatewayWith({ i1: configs([{ supplier_oid: 's1', is_external_inventory: false, is_inventory_mgmt: false }]) })
     const [d] = await computePlatformDiff([item()], ctxOf(gw))
     expect(d.affected_pkgs).toEqual([{ prod_oid: 'p1', pkg_oid: 'k1', pkg_name: 'A' }])
+  })
+})
+
+// Final whole-branch review Important 3: affected_pkgs on InventoryPlatformItem is entirely
+// self-reported by whoever created the change-set (the wizard panel / a tool caller) — a
+// low-balled list would let an approver believe the blast radius is smaller than it really is.
+// computePlatformDiff must re-derive the list server-side from the packages endpoint (scoped to
+// the prod_oids the creator claimed — a full reverse item_oid -> all products lookup is out of
+// scope) rather than trusting the claim outright.
+describe('computePlatformDiff — server-side affected_pkgs recompute (final whole-branch review Important 3)', () => {
+  function gatewayWithPackages(configsByItem: Record<string, unknown>, packagesByProd: Record<string, unknown>) {
+    return {
+      calls: [] as string[],
+      async get(path: string) {
+        this.calls.push(path)
+        const cfgM = /\/items\/([^/]+)\/configs$/.exec(path)
+        if (cfgM) return configsByItem[cfgM[1]]
+        const pkgM = /\/products\/([^/]+)\/packages$/.exec(path)
+        if (pkgM) {
+          const v = packagesByProd[pkgM[1]]
+          if (v instanceof Error) throw v
+          return v
+        }
+        return undefined
+      },
+      async put() { throw new Error('diff must never write') },
+    }
+  }
+
+  it('fills in a package the self-report omitted for a claimed prod_oid (under-reported blast radius)', async () => {
+    const gw = gatewayWithPackages(
+      { i1: configs([{ supplier_oid: 's1', is_external_inventory: false, is_inventory_mgmt: false }]) },
+      { p1: [
+        { pkg_oid: 'k1', pkg_name: 'A', item_oid: 'i1', supplier_mapping: [{ is_default: true, supplier_oid: 's1' }] },
+        { pkg_oid: 'k2', pkg_name: 'B(未自報)', item_oid: 'i1', supplier_mapping: [{ is_default: true, supplier_oid: 's1' }] },
+      ] },
+    )
+    const [d] = await computePlatformDiff([item({ affected_pkgs: [{ prod_oid: 'p1', pkg_oid: 'k1', pkg_name: 'A' }] })], ctxOf(gw))
+    expect(d.affected_pkgs).toEqual(expect.arrayContaining([
+      { prod_oid: 'p1', pkg_oid: 'k1', pkg_name: 'A' },
+      { prod_oid: 'p1', pkg_oid: 'k2', pkg_name: 'B(未自報)' },
+    ]))
+    expect(d.affected_pkgs).toHaveLength(2)
+    expect(d.affected_pkgs_unverified).toBeUndefined()
+  })
+
+  it('packages read failure degrades to the self-reported list, flagged affected_pkgs_unverified', async () => {
+    const gw = gatewayWithPackages(
+      { i1: configs([{ supplier_oid: 's1', is_external_inventory: false, is_inventory_mgmt: false }]) },
+      { p1: Object.assign(new Error('boom'), { code: 'HTTP_500' }) },
+    )
+    const [d] = await computePlatformDiff([item({ affected_pkgs: [{ prod_oid: 'p1', pkg_oid: 'k1', pkg_name: 'A' }] })], ctxOf(gw))
+    expect(d.affected_pkgs).toEqual([{ prod_oid: 'p1', pkg_oid: 'k1', pkg_name: 'A' }])
+    expect(d.affected_pkgs_unverified).toBe(true)
+  })
+
+  it('empty self-reported affected_pkgs -> nothing to verify against, flagged unverified', async () => {
+    const gw = gatewayWithPackages({ i1: configs([{ supplier_oid: 's1', is_external_inventory: false, is_inventory_mgmt: false }]) }, {})
+    const [d] = await computePlatformDiff([item({ affected_pkgs: [] })], ctxOf(gw))
+    expect(d.affected_pkgs).toEqual([])
+    expect(d.affected_pkgs_unverified).toBe(true)
   })
 })
 

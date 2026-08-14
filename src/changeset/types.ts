@@ -84,6 +84,11 @@ export interface InventoryPlatformDiffItem {
   target: InventoryPlatform
   noop: boolean
   affected_pkgs: Array<{ prod_oid: string; pkg_oid: string; pkg_name: string }>
+  // Final whole-branch review Important 3: set when the server could NOT re-verify
+  // affected_pkgs against the packages endpoint (read failure, or nothing self-reported to
+  // verify against) — affected_pkgs then falls back to the caller's self-reported (untrusted)
+  // list verbatim. Never set when the recompute succeeded, even if it changed nothing.
+  affected_pkgs_unverified?: boolean
 }
 
 export type AnyDiffItem = DiffItem | InventoryDiffItem | InventoryPlatformDiffItem | ShelfScheduleDiffItem

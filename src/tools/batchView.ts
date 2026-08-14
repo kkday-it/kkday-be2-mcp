@@ -35,7 +35,11 @@ export interface BatchViewResult {
 // supplier info lives under `supplier_mapping[]` (NOT `supplier`/`suppliers`); the response may
 // be missing `is_bundle` entirely (defensive: absent -> treated as "unknown", not "false" — the
 // authoritative is_bundle source is package-configs below, merged in by pkg_oid).
-function extractPackagesWithSupplier(raw: unknown): Array<{
+// Exported (final whole-branch review Important 3): src/changeset/platformDiff.ts reuses this
+// exact parser to recompute affected_pkgs server-side — same wire-shape knowledge (supplier info
+// under supplier_mapping[], is_bundle possibly absent), one implementation instead of a
+// hand-copied second parser that could silently drift from this one.
+export function extractPackagesWithSupplier(raw: unknown): Array<{
   pkg_oid: string; name?: string; item_oid?: string; is_active?: boolean; supplier_oid?: string; supplier_name?: string
 }> {
   const list = Array.isArray(raw) ? raw : (raw as Record<string, any>)?.data ?? (raw as Record<string, any>)?.packages ?? []
