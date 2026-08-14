@@ -167,6 +167,106 @@ describe('batch-wizard panel: inventory_platform flow', () => {
     expect(resultRows.length).toBe(1)
     expect(resultRows[0].dataset.status).toBe('done')
   })
+
+  // Shared fixture for the sibling-sync / filter regression tests below: plans A+B share the
+  // write unit (I1,S1); X is the review-finding case — SAME item_oid I1 but a DIFFERENT
+  // supplier S9, i.e. a different (item, supplier) write unit that must NOT be dragged in.
+  async function loadPanel() {
+    const batchViewResult = envelope([{
+      products: [{
+        prod_oid: 'P1', name: '商品1', plans: [
+          { pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', current_platform: 'BE2' },
+          { pkg_oid: 'B', name: '方案B', item_oid: 'I1', supplier_oid: 'S1', current_platform: 'BE2' },
+          { pkg_oid: 'X', name: '方案X', item_oid: 'I1', supplier_oid: 'S9', current_platform: 'BE2' },
+          { pkg_oid: 'C', name: '方案C', item_oid: 'I2', supplier_oid: 'S2', current_platform: 'BE2' },
+        ],
+      }],
+    }])
+    const { app, fireLaunch } = makeFakeApp({ app_get_batch_view: () => batchViewResult })
+    initWizard(app as never)
+    fireLaunch('inventory_platform', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    return {
+      cb: (pkg: string) => checkboxesFor(wizardEl, 'pkg-oid', pkg)[0],
+      row: (pkg: string) => checkboxesFor(wizardEl, 'pkg-oid', pkg)[0].parentNode!,
+      badge: (pkg: string) => checkboxesFor(wizardEl, 'pkg-oid', pkg)[0].parentNode!.querySelectorAll('[data-role=coBadge]')[0],
+    }
+  }
+
+  it('review fix 1: 同 item、不同 supplier 不連動（寫入單位是 item×supplier，不能靜默擴大到未選 supplier）', async () => {
+    const p = await loadPanel()
+    p.cb('A').checked = true
+    p.cb('A').onclick!()
+    expect(p.cb('B').checked).toBe(true)  // same (I1,S1): co-selected
+    expect(p.cb('X').checked).toBe(false) // same item I1 but supplier S9: must NOT be dragged in
+    expect(p.cb('C').checked).toBe(false)
+  })
+
+  it('review fix 3: 取消勾選連動取消同 (item,supplier) 兄弟列並移除「將一併變更」標示（整組進/整組不進）', async () => {
+    const p = await loadPanel()
+    p.cb('A').checked = true
+    p.cb('A').onclick!()
+    expect(p.cb('B').checked).toBe(true)
+    expect(p.badge('B').hidden).toBe(false) // co-change badge shown while co-selected
+
+    p.cb('A').checked = false
+    p.cb('A').onclick!()
+    expect(p.cb('B').checked).toBe(false)  // whole write unit leaves together
+    expect(p.badge('B').hidden).toBe(true) // badge removed — no stale "將一併變更" on an unchecked row
+
+    // Symmetric direction: unchecking the auto-included sibling (B) must also release A.
+    p.cb('A').checked = true
+    p.cb('A').onclick!()
+    p.cb('B').checked = false
+    p.cb('B').onclick!()
+    expect(p.cb('A').checked).toBe(false)
+    expect(p.badge('A').hidden).toBe(true)
+    expect(p.badge('B').hidden).toBe(true)
+  })
+
+  it('review fix 2: 「篩選方案…」即時過濾（比對方案名/pkg_oid）與「隱藏未勾選」toggle（spec §5.4）', async () => {
+    const p = await loadPanel()
+    const filter = findByRole(wizardEl, 'filterInput')
+
+    // Filter by plan name substring.
+    filter.value = '方案B'
+    filter.oninput!()
+    expect(p.row('A').hidden).toBe(true)
+    expect(p.row('B').hidden).toBe(false)
+    expect(p.row('X').hidden).toBe(true)
+    expect(p.row('C').hidden).toBe(true)
+
+    // Filter by pkg_oid.
+    filter.value = 'C'
+    filter.oninput!()
+    expect(p.row('C').hidden).toBe(false)
+    expect(p.row('A').hidden).toBe(true)
+
+    // Clearing the filter restores all rows.
+    filter.value = ''
+    filter.oninput!()
+    for (const k of ['A', 'B', 'X', 'C']) expect(p.row(k).hidden).toBe(false)
+
+    // Hide-unchecked toggle: only checked rows stay visible; toggling again restores all.
+    p.cb('C').checked = true
+    p.cb('C').onclick!()
+    const toggle = findByRole(wizardEl, 'hideUncheckedBtn')
+    toggle.onclick!()
+    expect(p.row('C').hidden).toBe(false)
+    expect(p.row('A').hidden).toBe(true)
+    expect(p.row('B').hidden).toBe(true)
+    expect(p.row('X').hidden).toBe(true)
+    toggle.onclick!()
+    for (const k of ['A', 'B', 'X', 'C']) expect(p.row(k).hidden).toBe(false)
+
+    // Filter AND hide-unchecked compose (both conditions must hold to stay visible).
+    filter.value = '方案'
+    filter.oninput!()
+    toggle.onclick!()
+    expect(p.row('C').hidden).toBe(false) // matches filter + checked
+    expect(p.row('A').hidden).toBe(true)  // matches filter but unchecked
+  })
 })
 
 describe('batch-wizard panel: shelf_schedule flow', () => {

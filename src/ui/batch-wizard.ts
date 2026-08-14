@@ -63,6 +63,7 @@ export interface WizardApp {
 interface RowState {
   checkbox: HTMLInputElement
   badge: HTMLElement
+  rowEl: HTMLElement
   prod_oid: string
   pkg_oid: string
   pkg_name: string
@@ -154,10 +155,45 @@ export function initWizard(app: WizardApp): void {
       } catch (e) { showFallback(fallbackEl, '載入失敗：' + String(e)) }
     }
 
+    // 列可見性（review fix 2, spec §5.4）：filter（比對方案名/pkg_oid,即時）與「隱藏未勾選」toggle
+    // 兩個條件都成立才顯示。只影響顯示,不動 checked 狀態——buildXxxItems() 仍以 checked 為準,
+    // 被 filter 藏起來的已勾選列一樣會進批次（所以配 fix 3 的整組連動,不會出現「看不見但被送出」
+    // 的驚喜組合:被藏的列必然是使用者自己勾的或連動標示過的）。
+    let filterQuery = ''
+    let hideUnchecked = false
+    function applyVisibility(): void {
+      const q = filterQuery.toLowerCase()
+      for (const r of rows) {
+        const matchesFilter = q === '' || r.pkg_name.toLowerCase().includes(q) || r.pkg_oid.toLowerCase().includes(q)
+        r.rowEl.hidden = !matchesFilter || (hideUnchecked && !r.checkbox.checked)
+      }
+    }
+
     function renderPlanTable(container: HTMLElement, products: Array<{ prod_oid: string; name?: string; plans: Array<Record<string, unknown>> }>): void {
       container.textContent = ''
       rows = []
       radioButtons = []
+      filterQuery = ''
+      hideUnchecked = false
+
+      const filterBar = document.createElement('div')
+      const filterInput = document.createElement('input')
+      filterInput.type = 'text'
+      ;(filterInput as HTMLInputElement).placeholder = '篩選方案…'
+      filterInput.dataset.role = 'filterInput'
+      filterInput.oninput = () => { filterQuery = filterInput.value.trim(); applyVisibility() }
+      filterBar.appendChild(filterInput)
+      const hideBtn = document.createElement('button')
+      hideBtn.textContent = '隱藏未勾選'
+      hideBtn.dataset.role = 'hideUncheckedBtn'
+      hideBtn.onclick = () => {
+        hideUnchecked = !hideUnchecked
+        hideBtn.textContent = hideUnchecked ? '顯示全部' : '隱藏未勾選'
+        applyVisibility()
+      }
+      filterBar.appendChild(hideBtn)
+      container.appendChild(filterBar)
+
       if (actionType === 'inventory_platform') {
         const radioBar = document.createElement('div')
         for (const target of ['BE2', 'BE2_SCM', 'EXTERNAL']) {
@@ -185,14 +221,18 @@ export function initWizard(app: WizardApp): void {
           if (actionType === 'shelf_schedule' && isBundle) cb.disabled = true
           const badge = document.createElement('span')
           renderText(badge, '將一併變更')
+          badge.dataset.role = 'coBadge'
           badge.hidden = true
           const rs: RowState = {
-            checkbox: cb, badge, prod_oid: prod.prod_oid, pkg_oid: String(plan.pkg_oid),
+            checkbox: cb, badge, rowEl: row, prod_oid: prod.prod_oid, pkg_oid: String(plan.pkg_oid),
             pkg_name: (plan.name as string | undefined) ?? String(plan.pkg_oid),
             item_oid: itemOid, supplier_oid: supplierOid, is_bundle: isBundle, queue: [],
           }
           rows.push(rs)
-          cb.onclick = () => { if (actionType === 'inventory_platform') syncSiblings(rs) }
+          cb.onclick = () => {
+            if (actionType === 'inventory_platform') syncSiblings(rs)
+            applyVisibility() // hideUnchecked 開啟時,勾/取消勾都可能改變本列(與連動列)的可見性
+          }
           row.appendChild(cb)
           const nameSpan = document.createElement('span')
           renderText(nameSpan, rs.pkg_name)
@@ -218,17 +258,24 @@ export function initWizard(app: WizardApp): void {
       }
     }
 
-    // brief: 勾選 inventory_platform 的一個方案時,自動連動勾選「同 item_oid」的其他方案(它們的庫存
-    // 平台切換是同一個寫入單位——item_oid×supplier_oid,見 src/changeset/types.ts
-    // InventoryPlatformItem),並標示「將一併變更」讓使用者知道發生了什麼,而不是靜默擴大影響範圍。
+    // 寫入單位是 (item_oid, supplier_oid)（src/changeset/types.ts InventoryPlatformItem;
+    // batchValidate.ts 的重複鍵檢查同此),所以連動必須同時比對兩者——review fix 1:先前只比
+    // item_oid,會把「同 item、不同 supplier」的方案(不同寫入單位)誤連動,靜默把使用者沒選的
+    // supplier 納入批次。
+    // 對稱雙向（review fix 3）:同一寫入單位要嘛整組進、要嘛整組不進——取消勾選任一列(含被自動
+    // 連動的兄弟列)時,整組一起取消,並移除所有「將一併變更」標示,不留「未勾選卻掛著連動標示」
+    // 的殘留誤導。
     function syncSiblings(changed: RowState): void {
-      if (!changed.checkbox.checked || !changed.item_oid) return
+      if (!changed.item_oid) return
+      const on = changed.checkbox.checked
       for (const r of rows) {
-        if (r !== changed && r.item_oid === changed.item_oid) {
-          r.checkbox.checked = true
-          r.badge.hidden = false
+        if (r !== changed && r.item_oid === changed.item_oid && r.supplier_oid === changed.supplier_oid) {
+          r.checkbox.checked = on
+          r.badge.hidden = !on
         }
       }
+      // 自己這列的 badge:勾選發起者本人不掛「將一併變更」(那是標示「被連帶」的列);取消時一律清。
+      if (!on) changed.badge.hidden = true
     }
 
     function renderDefaultTimeBar(): HTMLElement {

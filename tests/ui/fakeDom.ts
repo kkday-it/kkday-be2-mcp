@@ -23,6 +23,7 @@ export interface FakeElement {
   parentNode: FakeElement | null
   onclick: (() => void) | null
   onchange: (() => void) | null
+  oninput: (() => void) | null
   appendChild<T extends FakeElement>(child: T): T
   removeChild(child: FakeElement): void
   remove(): void
@@ -46,6 +47,7 @@ class FakeElementImpl implements FakeElement {
   parentNode: FakeElement | null = null
   onclick: (() => void) | null = null
   onchange: (() => void) | null = null
+  oninput: (() => void) | null = null
 
   private _textContent = ''
   // Real DOM: assigning .textContent replaces all children with a single text node — the whole
