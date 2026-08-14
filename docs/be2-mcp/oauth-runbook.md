@@ -29,7 +29,17 @@ claude mcp add be2-mcp --transport http http://127.0.0.1:8787/mcp
 5. 登入成功，be2-auth 用 `postMessage` 把 authorizationCode 傳回過場頁（驗證訊息來源 origin）；過場頁 POST 到 be2-mcp 的 `/oauth/authorize/complete`，由 server 端帶 service key 換 `{accessToken, refreshToken, businessList}`，建立 identity + 鑄一次性 OAuth authz code，導回 Claude Code 的 loopback redirect_uri。
 6. Claude Code 用 PKCE code_verifier 打 `/oauth/token` 換 `{access_token, refresh_token}`——此後每次 tool call 帶這組 Bearer，Claude Code 到期自動用 refresh_token 續期，全程免手動介入。
 
-**Claude Desktop** 走同一套端點（MCP 規範的標準 OAuth 發現/註冊/授權流程），差異只在 host app 本身如何呈現彈出登入視窗；不需要為 Desktop 另外設定。
+**Claude Desktop**（2026-08-14 實測落地路徑）：Settings → Developer → Local MCP servers → Edit Config（`claude_desktop_config.json`）加 `mcp-remote` stdio 代理，由它處理 OAuth（DCR、開瀏覽器、token 快取在 `~/.mcp-auth/`）：
+
+```json
+{
+  "mcpServers": {
+    "be2-mcp": { "command": "npx", "args": ["-y", "mcp-remote", "http://127.0.0.1:8787/mcp", "--transport", "http-only"] }
+  }
+}
+```
+
+已知行為兩則：(1) `mcp-remote` 用**隨機 loopback port + `/oauth/callback`** 當 redirect_uri——`redirectUri.ts` 的 loopback 規則已放寬為任意 path（RFC 8252，commit `ef79956`），舊版鎖死 `/callback` 會讓 DCR 直接被拒。(2) 不帶 `--transport http-only` 時，授權可能**同時跳出兩個瀏覽器分頁**（預設 `http-first` 對 Streamable HTTP 與 SSE fallback 各發起一次 auth；be2-mcp 只有 Streamable HTTP，SSE 那次是浪費）——上面 config 已帶此參數鎖單一 transport，只會有一個分頁；若沿用舊 config 看到兩個，完成其中一個、關掉另一個即可，無害。（Settings → Connectors 的「Add custom connector」掛在 claude.ai 帳號層，亦可用，但同一顆 connector 在 claude.ai 網頁版連不到 `127.0.0.1`，屬預期。）
 
 **登入腿為何是 POPUP、不是 REDIRECT**：見 `docs/be2-mcp/spike-oauth-login-leg.md`——POPUP 已在 SIT be2-220 實測跑通（`phase0-inventory.md` A8），REDIRECT flow 的跨網域 `redirectPath` allowlist 行為未實證，為求穩定先落地 POPUP，REDIRECT 留作未來優化（非阻擋項）。
 
@@ -80,7 +90,9 @@ npm run oauth-purge
 
 Live 驗收（真實 Claude Code + Desktop 各跑一次 OAuth 接入、確認同瀏覽器免二次登入、批准一個 draft change-set）由人工執行，結果記錄於本節：
 
-> **狀態：Claude Code ✅ 已通（2026-08-14，SIT be2-220）**；Claude Desktop 待跑（步驟同，見下）；「同瀏覽器開確認頁免二次登入」與「批准一個 draft change-set」待一併驗。
+> **狀態：Claude Code ✅ + Claude Desktop ✅ 皆已通（2026-08-14，SIT be2-220）**；「同瀏覽器開確認頁免二次登入」與「批准一個 draft change-set」待一併驗。
+
+- **真人 Claude Desktop 接入 ✅**：走 `mcp-remote` stdio 代理（config 見「接入」節），OAuth 過場頁登入後，對話內 `be2_find_products` 查真商品成功（34133，PUBLISHED/上架中）。過程揪出並修掉 loopback redirect_uri path 鎖死問題（commit `ef79956`）。
 
 2026-08-14 驗收記錄：
 - **自動化 e2e（playwright，`FULL_E2E_OK`）**：DCR → `/oauth/authorize` 過場頁 → be2-auth POPUP 真帳密登入 → `CONFIRM_LOGIN_DOMAIN` 握手 → `UPDATE_AUTH_TOKEN` 收 code → server 端換碼建 identity → PKCE token exchange → 以 OAuth Bearer 打 `/mcp` `tools/list`（5 工具全列）。
