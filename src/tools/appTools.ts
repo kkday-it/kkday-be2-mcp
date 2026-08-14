@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { AppToolDef, AppToolContext } from '../server/appPipeline.js'
 import { makeEnvelope, toEnvelopeError } from './envelope.js'
+import { buildBatchView } from './batchView.js'
 
 // 無 existence leak：找不到 id 與「id 存在但非自己建立」回同一種錯誤，讓外部觀察者無法用
 // error 差異探測他人 change-set 是否存在。
@@ -88,4 +89,27 @@ export const appConfirmChangesetTool: AppToolDef = {
   },
 }
 
-export const APP_TOOLS: AppToolDef[] = [appGetChangesetViewTool, appGetConfirmLinkTool, appConfirmChangesetTool]
+// Task 5 (design doc §5.1): wizard step-1 "load products -> plans + current state". This is the
+// server-side scope-gate legalization point for the two Phase 4a batch action_types — its
+// wrapAppTool auto-records read_oids into the SAME session-scoped ReadOidStore
+// be2_create_changeset's SCOPE_NOT_READ gate reads from (see appPipeline.ts's wrapAppTool). The
+// panel's own selections are NOT trusted for scope — only what actually got read here counts.
+export const appGetBatchViewTool: AppToolDef = {
+  name: 'app_get_batch_view',
+  description: 'Panel-only: load products -> plans + current state for the batch wizard (registers server-side read-scope).',
+  inputShape: {
+    action_type: z.enum(['inventory_platform', 'shelf_schedule']),
+    prod_oids: z.array(z.string().min(1)).min(1).max(10),
+  } as never,
+  async handler(args, ctx: AppToolContext) {
+    // 沿用既有 L0/L2 讀取工具慣例：view 每次呼叫做真實 gateway 讀取，計一次讀取 budget（與
+    // appRateBudget 的面板輪詢節流是兩個獨立額度，見 appPipeline.ts AppToolContext 註解）。
+    ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId)
+    const { products, errors, read_oids } = await buildBatchView(
+      ctx.gateway, ctx.accessToken, args.action_type as 'inventory_platform' | 'shelf_schedule', args.prod_oids as string[],
+    )
+    return makeEnvelope([{ products }], errors, read_oids)
+  },
+}
+
+export const APP_TOOLS: AppToolDef[] = [appGetChangesetViewTool, appGetConfirmLinkTool, appConfirmChangesetTool, appGetBatchViewTool]
