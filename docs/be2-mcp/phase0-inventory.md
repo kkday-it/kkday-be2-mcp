@@ -93,7 +93,7 @@
 | # | 項目 | 狀態 | 對象 |
 |---|---|---|---|
 | B1 | service key 申請 + scope | 🟢 SIT 已取得（`.env` `SIT_AUTHSVC_SERVICE_KEY`）；prod 版待另申請 | auth-service team |
-| B2 | be2-auth redirect/callback（機制已內建 A7，SIT 實測跑通 A8）| 🟢 基本收 | be2-auth team（只剩小確認）|
+| B2 | be2-auth redirect/callback（機制已內建 A7，SIT 實測跑通 A8）| ✅ **全收（2026-08-14 live 驗收）** | SIT 零外部依賴；prod 上線前需 BE2_DOMAIN 白名單 |
 | B3 | 公網 HTTPS ingress | 🟢 **本情境不需要**（Code+Desktop 走內網；只有 claude.ai 網頁才需公網）|
 | B4 | Option 2 ciphertext 離境核可 | ⬜ **若改 Option 1 則歸零**（見 §0）| 資安 |
 
@@ -106,7 +106,7 @@
 - **原本擔心**：be2-auth 不見得支援讓第三方 redirect 進來登入、帶 token 回去。
 - **原始碼查證結果（A7）**：**機制已內建**。`GET auth/{userType}/login?redirectPath=<callback>&loginFlow=REDIRECT|POPUP`，`LoginPage.vue` 登入成功後把 token POST 到 `redirectPath`（REDIRECT）或發 `UPDATE_AUTH_TOKEN` 給 opener（POPUP）；`validateRedirectPath` 幾乎不設限。be2-web 自己就是這樣登入。
 - **SIT live 實測（A8）**：be2-web 就是用 `auth-220/auth/be2/login?loginFlow=POPUP`（popup + postMessage）跑通。換碼在 be2-web **後端**做（`/v2/api/v1/auth/login-authorization-code/{uuid}`）= be2-mcp 要照抄的模式。
-- **剩下小確認**：(1) be2-mcp 若用 REDIRECT flow（非 POPUP），`redirectPath` 跨網域是否被 `validateOrigin`/allowlist 擋——POPUP 模式已證可用、可直接沿用；(2) POPUP 的 postMessage origin 檢查。**不是要對方開發新功能。**
+- **✅ 全收（2026-08-14）**：小確認 (1)(2) 都有了定論——讀 kkday-auth-service 原始碼 + live 驗收：POPUP guard = `AUTH_LOGIN_READY`→opener 500ms 內回 `CONFIRM_LOGIN_DOMAIN` 握手 + opener origin 對 `login.be2.domain`（env `BE2_DOMAIN`）白名單；**SIT/local 環境 `ALLOW_LOCAL_LOGIN=true` 跳過 origin 檢查（auth-220 已開）→ SIT 零外部依賴**；REDIRECT flow 驗 `document.referrer` 同一份白名單（直開 404 已實測），不採用。OAuth 登入腿完整 live e2e + 真人 Claude Code 接入皆通過（`oauth-runbook.md` Live 驗收）。**唯一殘項移到 prod**：上線前請 auth-service 把 be2-mcp 部署 origin 納 `BE2_DOMAIN`（prod `isDevEnv` 硬編 false）。
 - **不解會怎樣**：退回 fallback（be2-mcp 自架登入頁打 REST），能動但 Claude 與確認頁各自登一次、失去 SSO 無縫。
 - **登入腿定案（2026-08-13，OAuth `/oauth/authorize` Task 8 spike + Task 9 落地）：選 POPUP，REDIRECT 延後不做。** POPUP 已 SIT 實測跑通（A8）、可直接復用確認頁 `ssoRoutes.ts` 的 `exchangeCodeToIdentity` + postMessage + origin 檢查機制，實作面零未知；REDIRECT 的跨網域 `redirectPath` allowlist 行為仍未實證，賭它可行會引入一個 live 阻擋點，故不採用。功能等價、對 Claude Code/Desktop 的 OAuth 客戶端無影響（它只在意拿到 authz code 回 redirect_uri）。決策記錄與取捨見 `docs/be2-mcp/spike-oauth-login-leg.md`；接入步驟見 `docs/be2-mcp/oauth-runbook.md`。REDIRECT 若日後想換取更教科書的體驗，留待獨立 live spike，非本波阻擋項。
 

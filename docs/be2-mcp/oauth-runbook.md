@@ -80,4 +80,10 @@ npm run oauth-purge
 
 Live 驗收（真實 Claude Code + Desktop 各跑一次 OAuth 接入、確認同瀏覽器免二次登入、批准一個 draft change-set）由人工執行，結果記錄於本節：
 
-> **狀態：待補**（本文件由開發者撰寫程式碼與文件後產出；Live 驗收步驟需要真人在瀏覽器裡完成帳密+2FA，非自動化流程，待執行後回填本節）。
+> **狀態：Claude Code ✅ 已通（2026-08-14，SIT be2-220）**；Claude Desktop 待跑（步驟同，見下）；「同瀏覽器開確認頁免二次登入」與「批准一個 draft change-set」待一併驗。
+
+2026-08-14 驗收記錄：
+- **自動化 e2e（playwright，`FULL_E2E_OK`）**：DCR → `/oauth/authorize` 過場頁 → be2-auth POPUP 真帳密登入 → `CONFIRM_LOGIN_DOMAIN` 握手 → `UPDATE_AUTH_TOKEN` 收 code → server 端換碼建 identity → PKCE token exchange → 以 OAuth Bearer 打 `/mcp` `tools/list`（5 工具全列）。
+- **真人 Claude Code 接入 ✅**：`claude mcp add be2-mcp --transport http http://127.0.0.1:8787/mcp`（不帶 `--header`）→ `/mcp` Authenticate → 瀏覽器過場頁點「登入 be2」→ be2-auth 彈窗登入 → 自動導回、connected，tool call 正常。
+- 過程修掉兩個 live 揪出的缺陷：(1) 過場頁未回 be2-auth 的 `CONFIRM_LOGIN_DOMAIN` 握手 → popup 一律 /404（commit `850ab96`）；(2) Phase 2b 前的舊 on-disk db `web_sessions` 缺 `identity_id` → complete 500，`openDb` 加舊 schema 重建 migration（commit `7fcdd85`）。
+- **SIT 零外部依賴**：auth-220 開著 `ALLOW_LOCAL_LOGIN=true`（SIT/local 環境跳過 origin 白名單）。**prod 上線前**仍需請 auth-service 把 be2-mcp 部署 origin 納入 `login.be2.domain`（env `BE2_DOMAIN`，`includes()` 精確比對；prod `isDevEnv` 硬編 false）。詳見 `mcp-oauth-upstream-idp-pattern.md`。

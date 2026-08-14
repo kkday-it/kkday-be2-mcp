@@ -60,7 +60,7 @@ Phase 2b 關閉這個洞：確認頁的 `/confirm/:id`、`/confirm/:id/approve`�
 | 批准時 `409` + 重新整理的頁面（有紅字提示） | **live diff 過期**：頁面載入後、批准前，be2 上的現況又被改了（你自己或別人） | 重新檢視最新 diff 後再決定是否批准 |
 | 批准/拒絕時 `409 已被處理或已過期`（純文字，非頁面） | 這個 change-set 已經被處理過（可能是你在另一分頁按過、或已 `done`/`rejected`） | 用 `be2_get_changeset_status` 查真正結果，不要重試 |
 | 登入彈窗被瀏覽器擋掉 | 彈窗不是在使用者手勢（click）內開啟，或瀏覽器封鎖彈窗 | 直接點「登入 be2」按鈕本身（不要用腳本/自動化去觸發），並允許該網站的彈出視窗 |
-| 一直無法完成登入 / postMessage 沒反應 | be2-auth POPUP 訊息格式或 `redirectPath` 尚待對真實 be2-auth 環境最終確認（見下方 Phase 2b 限制） | 回報給 be2-mcp 維護者；這是已知的 carry-forward 待確認項，非使用者可自行排除 |
+| 一直無法完成登入 / postMessage 沒反應 | 多半是彈窗被擋（見上一列）；訊息契約與握手已於 2026-08-14 對真實 be2-auth live 驗證通過（見下方已知限制） | 允許彈窗後重點「登入 be2」；仍不行回報 be2-mcp 維護者 |
 
 ## Session、audit 存放位置
 
@@ -76,7 +76,7 @@ Phase 2b 關閉這個洞：確認頁的 `/confirm/:id`、`/confirm/:id/approve`�
 ## Phase 2b 已知限制
 
 - **Loopback、單機**。確認頁只在 `127.0.0.1:$BE2_MCP_PORT` 服務,跟 Phase 1a/2a 一樣是單一 server 實例,`web_sessions` 表是 in-process/SQLite-single-writer。
-- **be2-auth POPUP 訊息契約 + `redirectPath` 值仍待對真實 be2-auth 環境做最終確認（carry-forward）**：目前程式假設 be2-auth 登入成功後會用 `postMessage` 送出 `{authorizationCode}` 或 `{code}`（`src/server/ssoRoutes.ts` 兩個 key 都接受),且 `redirectPath` 參數目前是回填 be2-auth 自己的登入頁 URL 當佔位值（POPUP flow 理論上不依賴 `redirectPath` 導頁,只靠 `postMessage`,但 be2-auth 端是否要求這個參數是合法/可達的 URL 尚未在真實環境驗證過)。這是 Phase 0 inventory 記錄的 B2 小確認項的延伸,在真的接上 be2-auth（非 mock）前應先核對一次真實的訊息格式與 `redirectPath` 語意。
+- **be2-auth POPUP 訊息契約：✅ 已對真實 be2-auth live 驗證（2026-08-14，carry-forward 收案）**：真實序列 = popup 先發 `{event:'AUTH_LOGIN_READY'}`（opener **必須 500ms 內回 `{event:'CONFIRM_LOGIN_DOMAIN'}`**，否則 popup client-route 到 /404——這個握手一度是 live 404 的根因，已修，commit `850ab96`）；登入成功後 popup 發 `{event:'UPDATE_AUTH_TOKEN', data:{authorizationCode, device}}`（code 在巢狀 `data.data`，`ssoRoutes.ts`/`authorizeRoutes.ts` 已依真實契約解析，commit `705850c`）。`redirectPath`：be2-web 實測**不帶**，帶了反而 /404，登入 URL 已移除該參數。guard 原始碼解析與 SIT/prod 白名單行為見 `mcp-oauth-upstream-idp-pattern.md`。
 - **寫入仍被 403 卡住**（per 環境/per 帳號,非 mechanism 問題）：見下方 PENDING 區塊與 `docs/be2-mcp/sit-write-contracts.md`。
 - **`modify_user` 仍是 placeholder**：同 Phase 2a,`src/server/app.ts` 的 `modifyUserFromPlaceholder` 預設丟 `MODIFY_USER_UNRESOLVED`,需要 `BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER=1` 才會回退到（錯誤但語法合法的）JWT `platformId`。在有寫入權限的帳號可用之前,不要在真實寫入路徑上開這個旗標。
 
@@ -86,7 +86,7 @@ Phase 2b 關閉這個洞：確認頁的 `/confirm/:id`、`/confirm/:id/approve`�
 
 **狀態：契約已雙證（見 `docs/be2-mcp/sit-write-contracts.md`：be2-web 實測 + stage 200 兩處都證實了 executor 的 read-merge-write 路徑是對的),差的只是「用 be2-mcp 自己的程式跑一次真正的 200」——目前 SIT `.env` 帳號 `lance.chien@kkday.com` 對 shelf-toggle 寫入端點回乾淨 403（無寫入權限,即使是自己名下的商品),不是 mechanism 壞掉。**
 
-Phase 2b 新增的「SSO 登入」本身在**本機沒有 be2-auth 的自動化整合測試**（`tests/ssoRoutes.test.ts` 用假的 `authServiceClient.exchangeCode` mock,不打真實 be2-auth),所以除了寫入 403 這個既有卡點,**還有一項 Phase 2b 專屬的待驗證項**：真實 be2-auth 環境下的 POPUP `postMessage` 契約是否如預期（見上方「已知限制」）。
+Phase 2b 的「SSO 登入」待驗證項**已收案（2026-08-14）**：真實 be2-auth 環境的 POPUP `postMessage` 契約（含 `CONFIRM_LOGIN_DOMAIN` 握手）已 live 驗證通過——OAuth 登入腿以相同機制跑完整 e2e（真帳密登入 → code → 換 token → tool call），見 `oauth-runbook.md`「Live 驗收」。剩下的只有寫入 403 這個既有卡點。
 
 ### 等到有可寫帳號 / 可對真實 be2-auth 測試時，照這個順序跑一次：
 
