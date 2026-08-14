@@ -1,7 +1,7 @@
 # be2-mcp Phase 4a — BAA 批次精靈搬進 MCP Apps（24h POC）design
 
 日期：2026-08-14（demo deadline：24h 內完成、2026-08-18 向老闆展示）
-狀態：待 agy review
+狀態：agy APPROVED（rounds=3，2026-08-14）
 
 ## 1. 背景與目標
 
@@ -67,13 +67,13 @@ BAA（BE2 Action Assistant）是既有內部工具，AM 用它做批次操作：
 - diff：現況 `reserve_queue` → 新 queue，**明示「原排程將被整組取代」**；現況與目標深相等者 `skipped_noop`。
 - `diff_version`：hash 綁（pkg_oid, 現況 reserve_queue **淨化後內容：只取 `{reserve_date, reserve_status}`、剔除 server 欄位（created_at/created_by）、依 reserve_date 排序**——避免上游回傳順序不定造成假 stale 409）。noop 深比較同用此淨化形。
 - executor：**依 prod_oid 分組，單 PUT 帶多 pkg**（原生批次）；一個 prod 失敗不影響其他 prod（allSettled）；結果 per-pkg 記錄（同 PUT 內的 pkg 共用結果狀態，稽核註明）。
+- 時區：**server/store 一律 UTC**；面板負責「使用者選時區＋本地時間 → UTC」轉換與雙顯示（GMT+X 與 UTC 並列，仿 BAA 檢視頁）。
 
 ### 4.3 businessList fail-fast action codes
 
 - `inventory_platform` → `product.product-inventory.update`（帳號 businessList 已實查存在）。
 - `shelf_schedule` → 沿用 Phase 2a `shelf_toggle` 實查的 package-config 類 code；實作時以真實 businessList 比對確認。
 - 兩者的 live 授權皆已實證（200）；若實作時發現 verify 規則綁的 code 與清單對不上（Phase 3a 曾遇 UI/verify 不同顆），fail-fast 對該 action_type 降級為「記 audit 警示、不擋建立」，authoritative 判斷仍交給 gateway `/verify`（fail-closed 不變）。
-- 時區：**server/store 一律 UTC**；面板負責「使用者選時區＋本地時間 → UTC」轉換與雙顯示（GMT+X 與 UTC 並列，仿 BAA 檢視頁）。
 
 ## 5. App tools 與面板
 
