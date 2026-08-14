@@ -147,7 +147,17 @@ async function runShelfScheduleRoundTrip(
   const queueAfter1 = sanitizeQueue((rowAfter1?.reserve_queue as Array<{ reserve_date?: unknown; reserve_status?: unknown }>) ?? [])
   const landed = queueAfter1.some(e => e.reserve_date_utc === FAR_FUTURE && e.reserve_status === true)
   console.log(`    reserve_queue now has ${queueAfter1.length} entries; contains the scheduled entry: ${landed}`)
-  if (!landed) return false
+  if (!landed) {
+    // Execute reported 'done' (the PUT returned 200), so the write may well have REALLY landed
+    // even though this re-read didn't observe it (read-after-write lag, or an unexpected
+    // server-side shape). Bailing out here would be the one path that leaves a possibly-applied
+    // write behind with no restore attempt — so flag it loudly AND still fall through to the
+    // step-4 restore below (a full-replace back to the original queue is correct/idempotent
+    // whether or not the far-future entry actually landed).
+    console.log('    WARNING: execute reported done but the re-read did NOT observe the scheduled entry —')
+    console.log('    the write may still have landed (read-after-write lag). Proceeding to the restore step anyway.')
+    console.log(`    MANUAL CLEANUP NEEDED (if the restore below fails): pkg_oid=${pkgOid} should be restored to queue=${JSON.stringify(originalQueue)}`)
+  }
 
   console.log('  step 4/4: restore — create + approve + execute a change-set back to the ORIGINAL queue, then verify')
   ctx.readOids.record(ctx.sessionId, [prodOid, pkgOid])
@@ -176,7 +186,18 @@ async function runShelfScheduleRoundTrip(
   const queueAfter2 = sanitizeQueue((rowAfter2?.reserve_queue as Array<{ reserve_date?: unknown; reserve_status?: unknown }>) ?? [])
   const restored = queuesEqual(sortQueue(queueAfter2), sortQueue(originalQueue))
   console.log(`    reserve_queue now has ${queueAfter2.length} entries; matches original: ${restored}`)
-  return restored
+  if (!restored) {
+    console.log(`    MANUAL CLEANUP NEEDED: pkg_oid=${pkgOid} should be restored to queue=${JSON.stringify(originalQueue)}`)
+    return false
+  }
+  if (!landed) {
+    // Restored fine, but step 3 never observed the scheduled entry — the round trip is NOT
+    // proven (the "write landed" leg failed verification), so report honestly and fail overall.
+    console.log('    NOTE: state restored to original, but the step-3 landing verification had FAILED —')
+    console.log('    recording this run as "write-landing verification failed but state was restored"; overall result stays FAILED.')
+    return false
+  }
+  return true
 }
 
 async function runInventoryPlatformExpectBlocked(
