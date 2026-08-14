@@ -2,9 +2,10 @@ import { trace } from '@opentelemetry/api'
 import type { ChangeSetStore } from './store.js'
 import type { GatewayClient } from '../gateway/client.js'
 import type { AuditLog } from '../audit/auditLog.js'
-import type { ItemResult, ChangeSetItem, InventoryItem } from './types.js'
+import type { ItemResult, ChangeSetItem, InventoryItem, InventoryPlatformItem } from './types.js'
 import { AppError } from '../errors.js'
 import { execInventory } from './executorInventory.js'
+import { execInventoryPlatform } from './executorPlatform.js'
 
 export interface ExecutorDeps {
   changeSets: ChangeSetStore; gateway: GatewayClient; audit: AuditLog; now: () => number
@@ -47,6 +48,32 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
         userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-page', tool: 'changeset.execute',
         // I-2: anything that is not a clean 'done'/'skipped_noop' (e.g. 'partial' — some dates
         // really failed) must audit as 'error', or audit scans filtering on error miss it.
+        params: { changeset_id: changesetId, item: r.item_key },
+        status: (r.status === 'done' || r.status === 'skipped_noop') ? 'ok' : 'error',
+        errorMessage: r.error_message, traceId: r.trace_id, durationMs: 0,
+      })
+    }
+    const status = results.every(r => r.status === 'done' || r.status === 'skipped_noop') ? 'done'
+      : results.every(r => r.status === 'failed') ? 'failed' : 'partial'
+    deps.changeSets.setStatus(changesetId, status, deps.now())
+    return { status, results }
+  }
+
+  if (rec.actionType === 'inventory_platform') {
+    // Batch-shaped executor (Task 3): unlike execInventory above, execInventoryPlatform takes
+    // the WHOLE record and handles all items itself (item×supplier writes are independent, no
+    // busy-guard/serialization needed) — one span, one call, one Promise.allSettled internally.
+    const results = await tracer.startActiveSpan('changeset.execute/inventory_platform', async span => {
+      try { return await execInventoryPlatform(rec, { gateway: deps.gateway, accessToken: at, modifyUser, traceId: span.spanContext().traceId }) }
+      finally { span.end() }
+    }).catch(e => (rec.items as InventoryPlatformItem[]).map(it => ({
+      item_key: `${it.item_oid}:${it.supplier_oid}`, status: 'failed' as const,
+      error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: 'n/a',
+    })))
+    deps.changeSets.recordResults(changesetId, results)
+    for (const r of results) {
+      deps.audit.record({
+        userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-page', tool: 'changeset.execute',
         params: { changeset_id: changesetId, item: r.item_key },
         status: (r.status === 'done' || r.status === 'skipped_noop') ? 'ok' : 'error',
         errorMessage: r.error_message, traceId: r.trace_id, durationMs: 0,

@@ -1,7 +1,7 @@
 import { computeChangesetDiff, diffVersionHash } from './diff.js'
 import { executeChangeSet, itemKey, type ExecutorDeps } from './executor.js'
 import { AppError } from '../errors.js'
-import type { ChangeSetRecord, ChangeSetItem, InventoryItem, ItemResult } from './types.js'
+import type { ChangeSetRecord, ChangeSetItem, InventoryItem, InventoryPlatformItem, ItemResult } from './types.js'
 
 // Task 11: the change-set approval+execution sequence used to live ONLY inside
 // src/server/confirmRoutes.ts's POST /confirm/:id/approve handler. The MCP Apps panel
@@ -46,10 +46,17 @@ export interface ConfirmServiceDeps extends ExecutorDeps {
   modifyUserFrom: (accessToken: string) => string
 }
 
+// Explicit per-actionType branch (Task 3 review): inventory_platform's item key is
+// `${item_oid}:${supplier_oid}`, the SAME shape as inventory_setting — but before this branch
+// existed, any actionType other than 'inventory_setting' fell through to the shelf `itemKey()`
+// cast, which reads `.prod_oid`/`.pkg_oid` (both undefined on InventoryPlatformItem) and returns
+// undefined for every item. That would permanently mismatch any real confirmedKeys sent by the
+// panel and lock the approval path shut (CONFIRMED_KEYS_MISMATCH on every attempt).
 function itemKeysOf(rec: ChangeSetRecord): string[] {
-  return rec.actionType === 'inventory_setting'
-    ? (rec.items as InventoryItem[]).map(it => `${it.item_oid}:${it.supplier_oid}`)
-    : (rec.items as ChangeSetItem[]).map(itemKey)
+  if (rec.actionType === 'inventory_setting' || rec.actionType === 'inventory_platform') {
+    return (rec.items as Array<InventoryItem | InventoryPlatformItem>).map(it => `${it.item_oid}:${it.supplier_oid}`)
+  }
+  return (rec.items as ChangeSetItem[]).map(itemKey)
 }
 
 export async function approveAndExecute(deps: ConfirmServiceDeps, params: ApproveParams): Promise<ApproveResult> {

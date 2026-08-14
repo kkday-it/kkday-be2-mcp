@@ -201,8 +201,8 @@ export const createChangesetTool: L2ToolDef = {
         status: 'pending_approval',
         createdAt: ctx.now(),
       })
-      const readOidsOut = actionType === 'inventory_setting'
-        ? [...new Set((items as InventoryItem[]).map(i => i.item_oid))]
+      const readOidsOut = actionType === 'inventory_setting' || actionType === 'inventory_platform'
+        ? [...new Set((items as Array<InventoryItem | InventoryPlatformItem>).map(i => i.item_oid))]
         : [...new Set((items as ChangeSetItem[]).flatMap(i => [i.prod_oid, i.pkg_oid].filter((x): x is string => !!x)))]
       // Fix 1: the confirm_url must NOT enter the model's context — deliver it out-of-band to the
       // human instead. The tool response carries only the changeset_id, status, and diff (data

@@ -3,8 +3,9 @@ import type { ToolContext } from '../tools/types.js'
 import { findProductsTool } from '../tools/findProducts.js'
 import { productPlansTool } from '../tools/productPlans.js'
 import type { ActionType, AnyChangeSetItem, AnyDiffItem, ChangeSetItem, DiffItem } from './types.js'
-import type { InventoryDiffItem, InventoryItem } from './types.js'
+import type { InventoryDiffItem, InventoryItem, InventoryPlatformDiffItem, InventoryPlatformItem } from './types.js'
 import { computeInventoryDiff } from './inventoryDiff.js'
+import { computePlatformDiff } from './platformDiff.js'
 
 // Version hash binds ONLY what the approver is approving against (spec §4):
 //  shelf + inventory `set`: the live base (drift => stale 409);
@@ -12,6 +13,17 @@ import { computeInventoryDiff } from './inventoryDiff.js'
 //  "+50", not an absolute number, so live drift must NOT invalidate the approval.
 export function diffVersionHash(diff: AnyDiffItem[]): string {
   const canon = diff.map(d => {
+    // Explicit branch (Task 3 review): InventoryPlatformDiffItem also has `item_oid`, so it MUST
+    // be distinguished from InventoryDiffItem BEFORE the duck-typed `'item_oid' in d` check below
+    // — reading `.dates` off a platform diff item would crash. `target`/`affected_pkgs` are
+    // unique to this shape (DiffItem has `target_is_active`, InventoryDiffItem has no top-level
+    // `target`). Only `current` (the live-read state) is hashed — `target` is invariant per the
+    // change-set's own items and drift there is not what staleness is guarding against (same
+    // rule as the shelf/`set` branches below).
+    if ('target' in d && 'affected_pkgs' in d) {
+      const p = d as InventoryPlatformDiffItem
+      return `invplat:${p.item_oid}:${p.supplier_oid}=${p.current}`
+    }
     if ('item_oid' in d) {
       const inv = d as InventoryDiffItem
       if (inv.op === 'adjust') {
@@ -38,6 +50,12 @@ export class DiffError extends Error {
 
 export async function computeChangesetDiff(actionType: ActionType, items: AnyChangeSetItem[], ctx: ToolContext): Promise<AnyDiffItem[]> {
   if (actionType === 'inventory_setting') return computeInventoryDiff(items as InventoryItem[], ctx)
+  if (actionType === 'inventory_platform') return computePlatformDiff(items as InventoryPlatformItem[], ctx)
+  // shelf_schedule diff lands in Task 4 — must NOT silently fall through to computeShelfDiff
+  // below (a ShelfScheduleItem has no target_is_active; that would misread/crash on real data).
+  if (actionType === 'shelf_schedule') {
+    throw new DiffError([], 'shelf_schedule diff is not implemented yet (Task 4)')
+  }
   return computeShelfDiff(actionType, items as ChangeSetItem[], ctx)
 }
 

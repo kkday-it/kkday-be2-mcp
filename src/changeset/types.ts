@@ -65,7 +65,16 @@ export interface InventoryDiffItem {
   dates: InventoryDateDiff[]
 }
 
-export type AnyDiffItem = DiffItem | InventoryDiffItem
+export interface InventoryPlatformDiffItem {
+  item_oid: string
+  supplier_oid: string
+  current: InventoryPlatform
+  target: InventoryPlatform
+  noop: boolean
+  affected_pkgs: Array<{ prod_oid: string; pkg_oid: string; pkg_name: string }>
+}
+
+export type AnyDiffItem = DiffItem | InventoryDiffItem | InventoryPlatformDiffItem
 
 export interface ItemResult {
   item_key: string

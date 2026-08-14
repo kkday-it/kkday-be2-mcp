@@ -62,6 +62,15 @@ describe('businessList gate degrade (spec §4.3) — new action_types warn, old 
     expect(env.errors).toEqual([])
     expect((env.items[0] as { changeset_id: string }).changeset_id).toBe('cs1')
   })
+  // Task 3 review carry-forward: readOidsOut used to cast items to ChangeSetItem[] for every
+  // non-inventory_setting action_type, so inventory_platform items (which have no prod_oid/
+  // pkg_oid) always produced an EMPTY read_oids array — silently under-registering scope-read
+  // state for this session. Must collect item_oid like inventory_setting does.
+  it('inventory_platform: read_oids carries the item_oid(s), not an empty array', async () => {
+    const { ctx } = makeCtx({ businessList: ['product.product-inventory.update'] })
+    const env = await createChangesetTool.handler(platArgs, ctx)
+    expect(env.read_oids).toEqual(['i1'])
+  })
   it('existing action_types keep the HARD block (no degrade)', async () => {
     const { ctx, store } = makeCtx({ businessList: [] })
     const env = await createChangesetTool.handler(
