@@ -11,6 +11,7 @@ import { CredentialStore } from '../src/store/credentialStore.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 import type { Config } from '../src/config.js'
 import type Database from 'better-sqlite3'
+import { runLauncherScript } from './launcherHarness.js'
 
 function fakeJwt(claims: object): string {
   const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url')
@@ -140,6 +141,17 @@ describe('POST /oauth/authorize/complete — happy path（假 be2-auth 登入）
     base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
   })
   afterEach(() => new Promise<void>(r => server.close(() => { db.close(); r() })))
+
+  // 同 tests/ssoRoutes.test.ts 的握手測試：be2-auth popup 發 AUTH_LOGIN_READY 後，authorize
+  // 過場頁（opener）必須回 CONFIRM_LOGIN_DOMAIN，否則 be2-auth 500ms 後 client-route /404。
+  it('authorize 過場頁收到 AUTH_LOGIN_READY → 回 CONFIRM_LOGIN_DOMAIN 給 popup（targetOrigin 鎖 be2-auth）', async () => {
+    const url = `${base}/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&code_challenge=chal-xyz&code_challenge_method=S256&state=state-123`
+    const html = await (await fetch(url)).text()
+    const page = runLauncherScript(html)
+    const pop = page.clickLogin()
+    page.dispatchMessage({ origin: 'https://auth-220.sit.kkday.com', source: pop, data: { event: 'AUTH_LOGIN_READY' } })
+    expect(pop.posted).toEqual([{ data: { event: 'CONFIRM_LOGIN_DOMAIN' }, targetOrigin: 'https://auth-220.sit.kkday.com' }])
+  })
 
   it('登入成功 → 設 be2mcp_sid cookie、code 綁定正確、code 只存 hash、導回 redirect_uri 帶 code&state', async () => {
     const r = await fetch(`${base}/oauth/authorize/complete`, {

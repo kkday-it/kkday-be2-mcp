@@ -45,13 +45,19 @@ be2-auth 登入頁（`loginFlow=POPUP`）只讓**白名單網站**開它的彈�
 - `registered client origin` / `redirect_uri allowlist`
 - 「上游 IdP 要求 opener/referrer 在允許清單」是常見設計。
 
-**實測結論（2026-08-14,playwright 逐一驗證）**：be2-auth 的 guard 是**固定 host 白名單**（只認 be2-web/be2-220 等已註冊 origin,非 `.kkday.com` 後綴檢查）。127.0.0.1、假 kkday 主機名(http)、假 kkday 主機名(https+信任憑證) 全 404;唯 be2-web 渲染。搭 be2-web 便車攔 code 也死路（code 一次性、be2-web 先消耗）。→ **唯一通路 = 把 be2-mcp 部署 origin 加進 be2-auth 白名單**（be2-auth team 動作,外部依賴）。be2-mcp 的 OAuth code 完整、283 tests 綠,契約已 live 修正（`{event:'UPDATE_AUTH_TOKEN',data:{authorizationCode,device}}`,commit 705850c）。
+**實測結論（2026-08-14,playwright 逐一驗證;2026-08-14 稍後讀 kkday-auth-service 原始碼後修正）**：be2-auth 的 guard 有**兩層**（`LoginPage.vue` `validatePopupPageSource` + `AuthController.php` + `config/login.php`）：
+1. **握手（當時 404 的另一半根因,我方 bug）**：popup 發 `AUTH_LOGIN_READY` 後,opener 必須 **500ms 內回 `postMessage({event:'CONFIRM_LOGIN_DOMAIN'})`**,guard 驗的就是這則回覆的 `event.origin`。當時我方過場頁沒回 → 不論 origin 為何一律 404。**已修**（authorizeRoutes.ts / ssoRoutes.ts,測試 tests/launcherHarness.ts 實跑 inline script 驗行為）。
+2. **domain 白名單**：`config('login.be2.domain')` = `[env('BE2_DOMAIN')]`（單值 env、`includes()` 精確比對,非 `.kkday.com` 後綴檢查）。REDIRECT flow 驗 `document.referrer` 同一份名單,無 referrer 也 404（直開 URL 已實測 404）。
+**SIT 解卡**：`isDevEnv = APP_ENV in [local,sit] ? env('ALLOW_LOCAL_LOGIN', false) : false` — isDevEnv=true 時 origin 檢查整個跳過（握手仍必回）。→ 請 auth-service team 在 auth-220 設 **`ALLOW_LOCAL_LOGIN=true`**（sit-only 開關、零 code change、prod 硬編不受影響）。prod 正式路徑才需改 config 納 be2-mcp origin（可自備 PR）。搭 be2-web 便車攔 code 是死路（code 一次性、be2-web 先消耗）。契約已 live 修正（`{event:'UPDATE_AUTH_TOKEN',data:{authorizationCode,device}}`,commit 705850c）。
 
 ## 真實 postMessage 契約（live 攔到,供部署後對照）
 
 ```js
 // be2-auth popup → opener，序列（origin: https://auth-220.sit.kkday.com）
-{ event: 'AUTH_LOGIN_READY' }                                  // 握手（opener 不需回應）
+{ event: 'AUTH_LOGIN_READY' }                                  // 握手：opener 必須 500ms 內回下面這則,否則 popup 自路由 /404
+// opener → popup（targetOrigin 鎖 be2-auth origin）
+{ event: 'CONFIRM_LOGIN_DOMAIN' }
+// be2-auth popup → opener（登入成功後）
 { event: 'UPDATE_AUTH_TOKEN', data: { authorizationCode, device } }  // code 在 data.data.authorizationCode
 ```
 opener 用 `authorizationCode` back-channel 打 auth-service `GET /api/v1/login-authorization-code/{code}`（帶 service key）換 `{accessToken, refreshToken, businessList}`。**code 一次性**。

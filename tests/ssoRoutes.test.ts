@@ -6,6 +6,7 @@ import { IdentityStore } from '../src/store/identityStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 import { buildSsoRouter } from '../src/server/ssoRoutes.js'
+import { runLauncherScript } from './launcherHarness.js'
 
 function fakeJwt(claims: object): string {
   const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url')
@@ -67,6 +68,23 @@ describe('SSO routes', () => {
     expect(html).not.toContain('</script><script>alert')
     // next must have been rejected by the strict allowlist and fallen back to '/'
     expect(html).toMatch(/var NEXT = "\\?\/"/) // fell back to '/' (plain or unicode-escaped slash form)
+  })
+  // be2-auth LoginPage.vue（validatePopupPageSource）：popup 開啟後發 AUTH_LOGIN_READY，
+  // opener 必須在 500ms 內回 {event:'CONFIRM_LOGIN_DOMAIN'}，且 be2-auth 驗這則回覆的
+  // event.origin——不回就 client-route 到 /404（2026-08-14 live 404 的根因之一）。
+  it('launcher 收到 be2-auth 的 AUTH_LOGIN_READY → 回 CONFIRM_LOGIN_DOMAIN 給 popup（targetOrigin 鎖 be2-auth）', async () => {
+    const html = await (await fetch(`${base}/confirm/login`)).text()
+    const page = runLauncherScript(html)
+    const pop = page.clickLogin()
+    page.dispatchMessage({ origin: 'https://auth-220.sit.kkday.com', source: pop, data: { event: 'AUTH_LOGIN_READY' } })
+    expect(pop.posted).toEqual([{ data: { event: 'CONFIRM_LOGIN_DOMAIN' }, targetOrigin: 'https://auth-220.sit.kkday.com' }])
+  })
+  it('launcher 對非 be2-auth origin 的 AUTH_LOGIN_READY 不回握手', async () => {
+    const html = await (await fetch(`${base}/confirm/login`)).text()
+    const page = runLauncherScript(html)
+    const pop = page.clickLogin()
+    page.dispatchMessage({ origin: 'https://evil.example.com', source: pop, data: { event: 'AUTH_LOGIN_READY' } })
+    expect(pop.posted).toEqual([])
   })
   it('GET /confirm/login preserves a clean, allowlisted `next`', async () => {
     const r = await fetch(`${base}/confirm/login?next=${encodeURIComponent('/confirm/cs1')}`)

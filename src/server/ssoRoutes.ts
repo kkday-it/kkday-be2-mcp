@@ -68,6 +68,14 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
   });
   window.addEventListener('message', function (e) {
     if (e.origin !== AUTH_ORIGIN) return;            // MANDATORY origin check (spec §3)
+    // be2-auth LoginPage.vue (validatePopupPageSource) handshake: the popup posts
+    // AUTH_LOGIN_READY and the opener MUST reply CONFIRM_LOGIN_DOMAIN within 500ms,
+    // or the popup client-routes to /404 (root cause of the 2026-08-14 live 404s).
+    if (e.data && e.data.event === 'AUTH_LOGIN_READY') {
+      var w = e.source || pop;
+      if (w) w.postMessage({ event: 'CONFIRM_LOGIN_DOMAIN' }, AUTH_ORIGIN);
+      return;
+    }
     // Live-verified real contract: { event:'UPDATE_AUTH_TOKEN', data:{ authorizationCode, device } }.
     // The code is nested at e.data.data.authorizationCode (not top-level). Keep a flat fallback.
     var p = (e.data && e.data.data) ? e.data.data : e.data;
