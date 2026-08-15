@@ -168,6 +168,83 @@ describe('batch-wizard panel: inventory_platform flow', () => {
     expect(resultRows[0].dataset.status).toBe('done')
   })
 
+  it('platform mode: hides inactive rows by default, toggle shows them; row check reveals detail sub-row, radio updates preview, EXTERNAL warning toggles', async () => {
+    const batchViewResult = envelope([{
+      products: [{
+        prod_oid: 'P1', name: '商品1', plans: [
+          { pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', supplier_name: '供1', current_platform: 'BE2', is_active: true },
+          { pkg_oid: 'B', name: '方案B', item_oid: 'I2', supplier_oid: 'S2', supplier_name: '供2', current_platform: 'BE2_SCM', is_active: false }, // inactive
+        ],
+      }],
+    }])
+    const { app, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => batchViewResult,
+    })
+
+    initWizard(app as never)
+    fireLaunch('inventory_platform', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+
+    // 1. Inactive hidden by default, toggle shows them
+    const toggle = findByRole(wizardEl, 'showInactiveBtn')
+    const cbA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    const cbB = checkboxesFor(wizardEl, 'pkg-oid', 'B')[0]
+    const rowWrapA = cbA.parentNode!.parentNode!
+    const rowWrapB = cbB.parentNode!.parentNode!
+
+    expect(toggle.checked).toBe(false)
+    expect(rowWrapA.hidden).toBe(false)
+    expect(rowWrapB.hidden).toBe(true)
+
+    toggle.checked = true
+    toggle.onchange!()
+    expect(rowWrapB.hidden).toBe(false)
+
+    // 2. Checking a row inserts detail sub-row
+    expect(wizardEl.querySelectorAll('.bw-detail-row').length).toBe(0)
+    cbB.checked = true
+    cbB.onclick!()
+    
+    let detailRows = wizardEl.querySelectorAll('.bw-detail-row')
+    expect(detailRows.length).toBe(1)
+    expect(detailRows[0].textContent).toContain('供應商: S2 供2')
+    expect(detailRows[0].textContent).toContain('目前平台: BE2_SCM')
+    expect(detailRows[0].textContent).toContain('→ BE2')
+
+    // 3. Radio change updates preview
+    const radios = wizardEl.querySelectorAll('input[type=radio][name=target]')
+    const extRadio = radios.find(r => r.value === 'EXTERNAL')!
+    extRadio.checked = true
+    extRadio.onchange!()
+    
+    expect(detailRows[0].textContent).toContain('→ EXTERNAL')
+
+    const scmRadio = radios.find(r => r.value === 'BE2_SCM')!
+    scmRadio.checked = true
+    scmRadio.onchange!()
+    // current is BE2_SCM, target is BE2_SCM -> show "(相同，將略過)"
+    expect(detailRows[0].textContent).toContain('(相同，將略過)')
+
+    // 4. EXTERNAL warning appears/disappears
+    const extWarning = findByRole(wizardEl, 'extWarning')
+    expect(extWarning.hidden).toBe(true)
+    
+    extRadio.checked = true
+    extRadio.onchange!()
+    expect(extWarning.hidden).toBe(false)
+    expect(extWarning.textContent).toContain('串接外部庫存（B2D/B2S/rezio 等）開啟前請先與 IT 確認')
+
+    scmRadio.checked = true
+    scmRadio.onchange!()
+    expect(extWarning.hidden).toBe(true)
+    
+    // Unchecking removes detail row
+    cbB.checked = false
+    cbB.onclick!()
+    expect(wizardEl.querySelectorAll('.bw-detail-row').length).toBe(0)
+  })
+
   // Shared fixture for the sibling-sync / filter regression tests below: plans A+B share the
   // write unit (I1,S1); X is the review-finding case — SAME item_oid I1 but a DIFFERENT
   // supplier S9, i.e. a different (item, supplier) write unit that must NOT be dragged in.
@@ -189,7 +266,7 @@ describe('batch-wizard panel: inventory_platform flow', () => {
     await flush()
     return {
       cb: (pkg: string) => checkboxesFor(wizardEl, 'pkg-oid', pkg)[0],
-      row: (pkg: string) => checkboxesFor(wizardEl, 'pkg-oid', pkg)[0].parentNode!,
+      row: (pkg: string) => checkboxesFor(wizardEl, 'pkg-oid', pkg)[0].parentNode!.parentNode!,
       badge: (pkg: string) => checkboxesFor(wizardEl, 'pkg-oid', pkg)[0].parentNode!.querySelectorAll('[data-role=coBadge]')[0],
     }
   }
@@ -354,6 +431,21 @@ function makeEnvelopeWithError(key: string, code: string, message: string) {
 describe('batch-wizard panel: shelf_schedule flow', () => {
   const wizardEl = doc.getElementById('wizard')
   beforeEach(() => { wizardEl.children.length = 0 })
+
+  it('shelf_schedule: showInactiveBtn toggle is not present', async () => {
+    const batchViewResult = envelope([{
+      products: [{ prod_oid: 'P2', name: '商品2', plans: [{ pkg_oid: 'D', name: '方案D', is_bundle: false, reserve_queue: [] }] }],
+    }])
+    const { app, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => batchViewResult,
+    })
+    initWizard(app as never)
+    fireLaunch('shelf_schedule', ['P2'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+
+    expect(() => findByRole(wizardEl, 'showInactiveBtn')).toThrow()
+  })
 
   it('bundle rows are disabled; "套用到所有已勾選" applies the UTC-converted time to every checked row, and completes to step 4', async () => {
     const batchViewResult = envelope([{
@@ -581,8 +673,8 @@ describe('batch-wizard panel: additional UI behaviors', () => {
     const tabs = wizardEl.querySelectorAll('.bw-tab')
     expect(tabs.length).toBe(2)
     
-    const rowA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0].parentNode!
-    const rowB = checkboxesFor(wizardEl, 'pkg-oid', 'B')[0].parentNode!
+    const rowA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0].parentNode!.parentNode!
+    const rowB = checkboxesFor(wizardEl, 'pkg-oid', 'B')[0].parentNode!.parentNode!
 
     // P1 is active by default
     expect(rowA.hidden).toBe(false)

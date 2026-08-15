@@ -141,6 +141,14 @@ input.bw-input[type=number]{width:4.5rem}
 .bw-dot-red{background:var(--bw-danger)}
 .bw-dot-gray{background:#c7c7cc}
 
+/* ---- progressive disclosure details ---- */
+.bw-plan-row-wrapper{display:flex;flex-direction:column;margin-bottom:.25rem}
+.bw-detail-row{padding:.5rem 1rem .5rem 2.5rem;font-size:.8125rem;color:var(--bw-muted);background:rgba(10,132,255,.04);border-radius:0 0 8px 8px;margin-top:-4px}
+.bw-target-preview{color:var(--bw-tint);font-weight:500}
+.bw-preview-noop{color:var(--bw-muted);font-weight:400}
+.bw-detail-muted{color:#a1a1a6}
+.bw-ext-warning{margin-top:.5rem;font-size:.8125rem;color:#b8281f;background:rgba(255,59,48,.1);padding:.375rem .75rem;border-radius:6px}
+
 /* ---- banners ---- */
 .bw-banner{border-radius:10px;padding:.625rem .875rem;font-size:.875rem;margin-bottom:1rem}
 .bw-banner-danger{background:rgba(255,59,48,.1);color:#b8281f}
@@ -209,12 +217,17 @@ interface RowState {
   checkbox: HTMLInputElement
   badge: HTMLElement
   rowEl: HTMLElement
+  wrapperEl: HTMLElement
+  detailEl?: HTMLElement
   prod_oid: string
   pkg_oid: string
   pkg_name: string
   item_oid?: string
   supplier_oid?: string
+  supplier_name?: string
   is_bundle?: boolean
+  is_active?: boolean
+  current_platform?: string | null
   queue: ScheduleEntry[]
   cleared?: boolean
 }
@@ -372,6 +385,7 @@ export function initWizard(app: WizardApp): void {
 
     let filterQuery = ''
     let hideUnchecked = false
+    let showInactive = false
     let activeProdOid: string | undefined
     let notFoundDivs: Array<{ prod_oid: string; el: HTMLElement }> = []
     function applyVisibility(): void {
@@ -379,7 +393,8 @@ export function initWizard(app: WizardApp): void {
       for (const r of rows) {
         const matchesFilter = q === '' || r.pkg_name.toLowerCase().includes(q) || r.pkg_oid.toLowerCase().includes(q)
         const inActiveTab = !activeProdOid || r.prod_oid === activeProdOid
-        r.rowEl.hidden = !inActiveTab || !matchesFilter || (hideUnchecked && !r.checkbox.checked)
+        const isActiveFilter = showInactive || r.is_active !== false
+        r.wrapperEl.hidden = !inActiveTab || !matchesFilter || !isActiveFilter || (hideUnchecked && !r.checkbox.checked)
       }
       for (const nf of notFoundDivs) {
         nf.el.hidden = !activeProdOid || nf.prod_oid !== activeProdOid
@@ -393,6 +408,7 @@ export function initWizard(app: WizardApp): void {
       notFoundDivs = []
       filterQuery = ''
       hideUnchecked = false
+      showInactive = false
       activeProdOid = products.length > 1 ? products[0]?.prod_oid : undefined
 
       const cardTitle = document.createElement('div')
@@ -444,16 +460,43 @@ export function initWizard(app: WizardApp): void {
         applyVisibility()
       })
       filterBar.appendChild(hideBtn)
+      
+      if (actionType === 'inventory_platform') {
+        const inactiveLabel = document.createElement('label')
+        inactiveLabel.className = 'bw-row-inline'
+        inactiveLabel.style.fontSize = '.875rem'
+        const inactiveCb = document.createElement('input')
+        inactiveCb.type = 'checkbox'
+        inactiveCb.checked = false
+        inactiveCb.dataset.role = 'showInactiveBtn'
+        inactiveCb.onchange = () => { showInactive = inactiveCb.checked; applyVisibility() }
+        inactiveLabel.appendChild(inactiveCb)
+        const inactiveSpan = document.createElement('span')
+        renderText(inactiveSpan, '顯示下架方案')
+        inactiveLabel.appendChild(inactiveSpan)
+        filterBar.appendChild(inactiveLabel)
+      }
       container.appendChild(filterBar)
 
       if (actionType === 'inventory_platform') {
         const radioBar = document.createElement('div')
         radioBar.className = 'bw-radio-bar'
+
+        const extWarning = document.createElement('div')
+        extWarning.className = 'bw-ext-warning'
+        extWarning.dataset.role = 'extWarning'
+        extWarning.hidden = true
+        renderText(extWarning, '串接外部庫存（B2D/B2S/rezio 等）開啟前請先與 IT 確認')
+
         for (const target of ['BE2', 'BE2_SCM', 'EXTERNAL']) {
           const label = document.createElement('label')
           const r = document.createElement('input')
           r.type = 'radio'; r.name = 'target'; r.value = target
-          r.onchange = () => { clearFallback(fallbackEl) }
+          r.onchange = () => { 
+            clearFallback(fallbackEl)
+            extWarning.hidden = r.value !== 'EXTERNAL'
+            for (const row of rows) updateDetail(row)
+          }
           radioButtons.push(r)
           label.appendChild(r)
           const span = document.createElement('span'); renderText(span, target)
@@ -461,6 +504,7 @@ export function initWizard(app: WizardApp): void {
           radioBar.appendChild(label)
         }
         container.appendChild(radioBar)
+        container.appendChild(extWarning)
       }
 
       const headRow = document.createElement('div')
@@ -481,6 +525,9 @@ export function initWizard(app: WizardApp): void {
           notFoundDivs.push({ prod_oid: prod.prod_oid, el: msgDiv })
         }
         for (const plan of prod.plans) {
+          const wrapper = document.createElement('div')
+          wrapper.className = 'bw-plan-row-wrapper'
+
           const row = document.createElement('div')
           const cb = document.createElement('input')
           cb.type = 'checkbox'
@@ -496,9 +543,10 @@ export function initWizard(app: WizardApp): void {
           badge.dataset.role = 'coBadge'
           badge.hidden = true
           const rs: RowState = {
-            checkbox: cb, badge, rowEl: row, prod_oid: prod.prod_oid, pkg_oid: String(plan.pkg_oid),
+            checkbox: cb, badge, rowEl: row, wrapperEl: wrapper, prod_oid: prod.prod_oid, pkg_oid: String(plan.pkg_oid),
             pkg_name: (plan.name as string | undefined) ?? String(plan.pkg_oid),
-            item_oid: itemOid, supplier_oid: supplierOid, is_bundle: isBundle, queue: [],
+            item_oid: itemOid, supplier_oid: supplierOid, supplier_name: plan.supplier_name as string | undefined, 
+            is_bundle: isBundle, is_active: plan.is_active as boolean | undefined, current_platform: plan.current_platform as string | null | undefined, queue: [],
           }
           rows.push(rs)
           updateRowChecked(rs)
@@ -506,6 +554,7 @@ export function initWizard(app: WizardApp): void {
             clearFallback(fallbackEl)
             if (actionType === 'inventory_platform') syncSiblings(rs)
             updateRowChecked(rs)
+            updateDetail(rs)
             applyVisibility() // hideUnchecked 開啟時,勾/取消勾都可能改變本列(與連動列)的可見性
           }
           row.appendChild(cb)
@@ -561,7 +610,8 @@ export function initWizard(app: WizardApp): void {
           row.appendChild(statusWrap)
 
           row.appendChild(badge)
-          container.appendChild(row)
+          wrapper.appendChild(row)
+          container.appendChild(wrapper)
         }
       }
       // 初始渲染就套用一次可見性——多商品時預設只顯示第一個 tab 的方案；
@@ -576,6 +626,46 @@ export function initWizard(app: WizardApp): void {
     // 對稱雙向（review fix 3）:同一寫入單位要嘛整組進、要嘛整組不進——取消勾選任一列(含被自動
     // 連動的兄弟列)時,整組一起取消,並移除所有「將一併變更」標示,不留「未勾選卻掛著連動標示」
     // 的殘留誤導。
+    function updateDetail(r: RowState): void {
+      if (actionType !== 'inventory_platform') return
+      if (r.checkbox.checked) {
+        if (!r.detailEl) {
+          r.detailEl = document.createElement('div')
+          r.detailEl.className = 'bw-detail-row'
+          r.wrapperEl.appendChild(r.detailEl)
+        }
+        r.detailEl.textContent = ''
+        
+        const suppLabel = document.createElement('span')
+        const suppText = r.supplier_oid ? `${r.supplier_oid} ${r.supplier_name ?? ''}`.trim() : '—'
+        renderText(suppLabel, `供應商: ${suppText} ｜ `)
+        r.detailEl.appendChild(suppLabel)
+
+        const curLabel = document.createElement('span')
+        const curPlatformText = r.current_platform != null ? r.current_platform : '無法讀取'
+        const isCurNull = r.current_platform == null
+        if (isCurNull) curLabel.className = 'bw-detail-muted'
+        renderText(curLabel, `目前平台: ${curPlatformText}`)
+        r.detailEl.appendChild(curLabel)
+
+        const previewLabel = document.createElement('span')
+        const target = radioButtons.find(b => b.checked)?.value ?? 'BE2'
+        if (r.current_platform === target) {
+          previewLabel.className = 'bw-target-preview bw-preview-noop'
+          renderText(previewLabel, ` → ${target} (相同，將略過)`)
+        } else {
+          previewLabel.className = 'bw-target-preview'
+          renderText(previewLabel, ` → ${target}`)
+        }
+        r.detailEl.appendChild(previewLabel)
+      } else {
+        if (r.detailEl) {
+          r.wrapperEl.removeChild(r.detailEl)
+          r.detailEl = undefined
+        }
+      }
+    }
+
     function syncSiblings(changed: RowState): void {
       if (!changed.item_oid) return
       const on = changed.checkbox.checked
@@ -584,6 +674,7 @@ export function initWizard(app: WizardApp): void {
           r.checkbox.checked = on
           r.badge.hidden = !on
           updateRowChecked(r)
+          updateDetail(r)
         }
       }
       // 自己這列的 badge:勾選發起者本人不掛「將一併變更」(那是標示「被連帶」的列);取消時一律清。
