@@ -193,8 +193,19 @@ be2-web UI 完整鏈路已從原始碼證實(`kkday-be2-web` + `kkday-be2-api`,�
 
 ### Live 定案: basic-info 成功取代 configs
 - **原本首選 `items/{itemOid}/configs`:403** (已成歷史)
-- **取代方案 `items/{itemOid}/basic-info`:200** — 成功透過 user token 取得 `item_config`，內含 `supplier_configs` (包含 is_external_inventory 等) 與 `inventory_setting`。
+- **取代方案 `items/{itemOid}/basic-info`:200** — 成功透過 user token 取得 `item_config`，內含 `supplier_configs` 與 `inventory_setting`。
+- **Live 驗收 JSON 欄位樣貌 (Live sample shape)**:
+  ```json
+  {
+    "supplier_oid": 38028,
+    "is_inventory_mgmt": false,
+    "is_external_inventory": false
+  }
+  ```
+  且 `item_config.inventory_setting` 包含 `{control_type, inventory_type}`。
 - **依 spec §4.1:read 失敗(403/500)時 diff 一律丟 `DiffError` 擋下建立,嚴禁假設預設值。**
+- **權限狀態說明**：因為 `GET basic-info` 在使用 user token 時已被實證為 200 通暢，故待處理的 auth-service 權限申請目前**僅會影響逐日數量庫存（quantity PUT）端點**，對庫存管理平台切換（`inventory_platform`）已無影響（已解/歷史狀態）。
+- **`modify_user` 自動解析**：寫入時的 `modify_user` 會自動由 JWT token 的 `platformId` 欄位解析出來（毋需 env flag 設定；僅在 token 缺少該 claim 時才會回報 `MODIFY_USER_UNRESOLVED`）。
 
 ### 教訓(第三次同型)
 
