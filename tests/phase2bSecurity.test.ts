@@ -190,8 +190,6 @@ describe('phase2b security — reject-after-done (carry-forward from Phase 2a, s
     // answers with real data instead of an unreachable host, and (b) the modify_user placeholder
     // escape hatch (src/server/app.ts throws by default — see tests/modifyUserPlaceholder.test.ts —
     // since the real userUuid resolver is still a documented SIT blocker).
-    const ORIGINAL_FLAG = process.env.BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER
-    process.env.BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER = '1'
     try {
       let liveIsActive = true
       const realFetch = globalThis.fetch
@@ -234,8 +232,7 @@ describe('phase2b security — reject-after-done (carry-forward from Phase 2a, s
       expect(rejectRes.status).toBe(409)
       expect(store.get('cs-done')!.status).toBe('done')
     } finally {
-      if (ORIGINAL_FLAG === undefined) delete process.env.BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER
-      else process.env.BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER = ORIGINAL_FLAG
+      // no cleanup needed
     }
   })
 })

@@ -78,7 +78,7 @@ Phase 2b 關閉這個洞：確認頁的 `/confirm/:id`、`/confirm/:id/approve`�
 - **Loopback、單機**。確認頁只在 `127.0.0.1:$BE2_MCP_PORT` 服務,跟 Phase 1a/2a 一樣是單一 server 實例,`web_sessions` 表是 in-process/SQLite-single-writer。
 - **be2-auth POPUP 訊息契約：✅ 已對真實 be2-auth live 驗證（2026-08-14，carry-forward 收案）**：真實序列 = popup 先發 `{event:'AUTH_LOGIN_READY'}`（opener **必須 500ms 內回 `{event:'CONFIRM_LOGIN_DOMAIN'}`**，否則 popup client-route 到 /404——這個握手一度是 live 404 的根因，已修，commit `850ab96`）；登入成功後 popup 發 `{event:'UPDATE_AUTH_TOKEN', data:{authorizationCode, device}}`（code 在巢狀 `data.data`，`ssoRoutes.ts`/`authorizeRoutes.ts` 已依真實契約解析，commit `705850c`）。`redirectPath`：be2-web 實測**不帶**，帶了反而 /404，登入 URL 已移除該參數。guard 原始碼解析與 SIT/prod 白名單行為見 `mcp-oauth-upstream-idp-pattern.md`。
 - **寫入仍被 403 卡住**（per 環境/per 帳號,非 mechanism 問題）：見下方 PENDING 區塊與 `docs/be2-mcp/sit-write-contracts.md`。
-- **`modify_user` 仍是 placeholder**：同 Phase 2a,`src/server/app.ts` 的 `modifyUserFromPlaceholder` 預設丟 `MODIFY_USER_UNRESOLVED`,需要 `BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER=1` 才會回退到（錯誤但語法合法的）JWT `platformId`。在有寫入權限的帳號可用之前,不要在真實寫入路徑上開這個旗標。
+- **`modify_user` 自動解析**：執行器會自動解譯 access token 取出 `platformId` 做為 `modify_user` 欄位（已驗證為真實寫入所需的正確值）。若 token 無效或缺此欄位，會直接拋出 `MODIFY_USER_UNRESOLVED`。
 
 ---
 

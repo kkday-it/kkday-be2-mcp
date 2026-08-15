@@ -40,9 +40,9 @@ export interface ApproveResult {
 
 export interface ConfirmServiceDeps extends ExecutorDeps {
   // modify_user is resolved LAZILY inside approveAndExecute (see call site below) — never at
-  // caller/ctx-creation time. modifyUserFromPlaceholder (src/server/app.ts) throws unless
-  // BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER=1; eager resolution at AppToolContext construction time
-  // would make even read-only app tools (app_get_changeset_view) fail in the default config.
+  // caller/ctx-creation time. modifyUserFromToken (src/server/app.ts) throws if the token is invalid
+  // or missing the platformId claim; eager resolution at AppToolContext construction time
+  // would make even read-only app tools (app_get_changeset_view) fail when missing a platformId.
   modifyUserFrom: (accessToken: string) => string
 }
 

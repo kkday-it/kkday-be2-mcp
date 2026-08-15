@@ -9,7 +9,7 @@ import { RateBudget } from '../src/limits/rateBudget.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { createChangesetCore } from '../src/changeset/tools.js'
 import { approveAndExecute, type ConfirmServiceDeps } from '../src/changeset/confirmService.js'
-import { modifyUserFromPlaceholder } from '../src/server/app.js'
+import { modifyUserFromToken } from '../src/server/app.js'
 import { sanitizeQueue } from '../src/changeset/batchValidate.js'
 import { queuesEqual, sortQueue } from '../src/changeset/scheduleDiff.js'
 import type { L2ToolContext } from '../src/server/l2Context.js'
@@ -40,12 +40,6 @@ import type { ScheduleEntry, ShelfScheduleDiffItem } from '../src/changeset/type
 // Sanitization: never prints accessToken/refreshToken/service key/password. userLabel (the be2
 // login email) is printed — that is not a credential and is already the identity label persisted
 // in plaintext by audit_log (src/audit/auditLog.ts) and referenced throughout the docs.
-
-// This script IS the write-capable, human-run context modifyUserFromPlaceholder's env-var guard
-// exists to gate (see src/server/app.ts) — modify_user=platformId has been live-confirmed correct
-// (docs/be2-mcp/sit-write-contracts.md "The modify_user = the JWT platformId claim"). Setting this
-// only inside this manual script, never as a default served-app behavior.
-process.env.BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER = '1'
 
 const PROD_OID = process.argv[2] ?? '34133'
 
@@ -259,7 +253,7 @@ async function main() {
     // caller would have received.
     emitConfirmUrl: (id, url) => console.log(`  (confirm_url would have been: ${url} — this script approves directly instead)`),
   }
-  const confirmDeps: ConfirmServiceDeps = { changeSets, gateway, audit, now: Date.now, modifyUserFrom: modifyUserFromPlaceholder }
+  const confirmDeps: ConfirmServiceDeps = { changeSets, gateway, audit, now: Date.now, modifyUserFrom: modifyUserFromToken }
 
   console.log(`\n=== Part A: shelf_schedule — full live round trip (prod_oid=${PROD_OID}) ===`)
   let shelfScheduleOk = false

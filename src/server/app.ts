@@ -57,39 +57,25 @@ const TOOLS: ToolDef[] = [
 ]
 const L2_TOOLS: L2ToolDef[] = [createChangesetTool, getChangesetStatusTool]
 
-// PLACEHOLDER — Task 1's SIT write-contract probe (docs/be2-mcp/sit-write-contracts.md #1)
-// found the real `modify_user` be2 expects on writes is a distinct be2 userUuid (e.g.
-// `24c66807-352e-41da-8a28-53b482ba7f4e`) that is NOT any claim in the access-token JWT —
-// resolving it requires an auth-service call (candidate: verify response, or
-// `auth/be2/token/sub-user`) that is still unconfirmed, and the only SIT account available is
-// 403-blocked on shelf-toggle writes so the resolution can't be validated end-to-end yet
-// (Task 1 finding #4, BLOCKER). Until that's resolved with a write-capable SIT account, this
-// decodes the JWT and returns `platformId` (right UUID *format*, wrong *value* — it is NOT the
-// user's be2 userUuid) purely so the executor has a syntactically valid string to send. DO NOT
-// treat this as correct; wire the real resolver before any live write path is used.
-// Fix 4: THROW by default instead of silently returning a wrong value. Writes are 403-blocked on
-// SIT right now anyway (no write-capable account, see Task 1), so this can only ever fire in a
-// dev/test context — but if a write-capable account is enrolled later without the real userUuid
-// resolver wired in, this turns "silently attribute the write to the wrong be2 user" into a loud,
-// documented failure instead. executeChangeSet (src/changeset/executor.ts) already has a
-// stuck-state guard around the call site (modifyUserFrom is invoked inside the same try block as
-// getFreshByHash, right after it) that catches this throw, marks the change-set 'failed' (not
-// stuck in 'executing'), audits it, and rethrows — see tests/changesetExecutor.test.ts.
-export function modifyUserFromPlaceholder(accessToken: string): string {
-  if (process.env.BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER !== '1') {
-    throw new AppError(
-      'MODIFY_USER_UNRESOLVED',
-      'modify_user resolver not wired (see docs/be2-mcp/sit-write-contracts.md); set BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER=1 to allow the dev placeholder',
-      500,
-    )
-  }
+// Phase 2a's placeholder is now the true implementation. JWT platformId is the verified
+// correct value to use for `modify_user` (double-verified via playbook capture and live 200s,
+// see docs/be2-mcp/sit-write-contracts.md).
+// Fail-closed semantics: if the token cannot be parsed or lacks a platformId claim,
+// throw MODIFY_USER_UNRESOLVED immediately.
+export function modifyUserFromToken(accessToken: string): string {
   const parts = accessToken.split('.')
-  if (parts.length !== 3) return 'unknown'
+  if (parts.length !== 3) {
+    throw new AppError('MODIFY_USER_UNRESOLVED', 'invalid access token format', 500)
+  }
   try {
     const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as { platformId?: string }
-    return payload.platformId ?? 'unknown'
-  } catch {
-    return 'unknown'
+    if (!payload.platformId) {
+      throw new AppError('MODIFY_USER_UNRESOLVED', 'access token missing platformId claim', 500)
+    }
+    return payload.platformId
+  } catch (e) {
+    if (e instanceof AppError) throw e
+    throw new AppError('MODIFY_USER_UNRESOLVED', 'failed to parse access token', 500)
   }
 }
 
@@ -175,7 +161,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     now: Date.now, genId: randomUUID,
     baseUrl,
     emitConfirmUrl,
-    modifyUserFrom: modifyUserFromPlaceholder,
+    modifyUserFrom: modifyUserFromToken,
   }
 
   const transports = new Map<string, StreamableHTTPServerTransport>()
@@ -266,7 +252,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     // SSO router mints web_session credentials into — the shared `credentials` above (no
     // TokenStore adapter layer to route through anymore).
     changeSets, gateway, tokenManager, audit, webSessions, credentials,
-    modifyUserFrom: modifyUserFromPlaceholder,
+    modifyUserFrom: modifyUserFromToken,
     now: Date.now,
   }))
 
