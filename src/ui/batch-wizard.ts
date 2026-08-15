@@ -200,6 +200,7 @@ interface RowState {
   supplier_oid?: string
   is_bundle?: boolean
   queue: ScheduleEntry[]
+  cleared?: boolean
 }
 
 function showFallback(el: HTMLElement, m: string): void { el.hidden = false; el.textContent = m }
@@ -536,15 +537,29 @@ export function initWizard(app: WizardApp): void {
       }
       tz.value = 'Asia/Taipei'
       const status = document.createElement('select'); status.className = 'bw-select'; status.dataset.role = 'defStatus'
-      for (const [v, label] of [['true', '上架'], ['false', '下架']]) {
+      for (const [v, label] of [['true', '上架'], ['false', '下架'], ['clear', '取消排程']]) {
         const opt = document.createElement('option'); opt.value = v; renderText(opt, label); status.appendChild(opt)
       }
       status.value = 'true'
       const applyBtn = secondaryBtn('套用到所有已勾選', 'applyAllBtn', () => {
         lastTz = tz.value
-        const utc = toReserveDateUtc(date.value, Number(hour.value), Number(minute.value), tz.value)
+        const isClear = status.value === 'clear'
+        const utc = isClear ? '' : toReserveDateUtc(date.value, Number(hour.value), Number(minute.value), tz.value)
         for (const r of rows) {
-          if (r.checkbox.checked && !r.is_bundle) r.queue.push({ reserve_date_utc: utc, reserve_status: status.value === 'true' })
+          if (r.checkbox.checked && !r.is_bundle) {
+            if (isClear) {
+              r.queue = []
+              r.cleared = true
+              renderText(r.badge, '將清除排程')
+              r.badge.hidden = false
+            } else {
+              r.queue.push({ reserve_date_utc: utc, reserve_status: status.value === 'true' })
+              if (r.cleared) {
+                r.cleared = false
+                r.badge.hidden = true
+              }
+            }
+          }
         }
       })
       row.appendChild(date); row.appendChild(hour); row.appendChild(minute); row.appendChild(tz); row.appendChild(status); row.appendChild(applyBtn)
@@ -566,7 +581,7 @@ export function initWizard(app: WizardApp): void {
     }
 
     function buildShelfScheduleItems(): Array<{ prod_oid: string; pkg_oid: string; queue: ScheduleEntry[] }> {
-      return rows.filter(r => r.checkbox.checked && !r.is_bundle && r.queue.length > 0)
+      return rows.filter(r => r.checkbox.checked && !r.is_bundle && (r.queue.length > 0 || r.cleared))
         .map(r => ({ prod_oid: r.prod_oid, pkg_oid: r.pkg_oid, queue: r.queue }))
     }
 
@@ -603,11 +618,11 @@ export function initWizard(app: WizardApp): void {
 
   // 每筆日期項的雙顯示（GMT+X 淡字在上、UTC mono 小字在下）——重用 formatDualDisplay 的既有
   // 時區換算(不重寫時間數學),只是把它回傳的單行字串依既定分隔符拆成兩個獨立元素方便分層上色。
-  function renderQueueLines(el: HTMLElement, queue: ScheduleEntry[]): void {
+  function renderQueueLines(el: HTMLElement, queue: ScheduleEntry[], emptyLabel = '(空，將清除排程)'): void {
     if (queue.length === 0) {
       const p = document.createElement('div')
       p.className = 'bw-queue-empty'
-      renderText(p, '(空，將清除排程)')
+      renderText(p, emptyLabel)
       el.appendChild(p)
       return
     }
@@ -645,7 +660,7 @@ export function initWizard(app: WizardApp): void {
       row.className = 'bw-diff-row'
       const curSide = document.createElement('div')
       curSide.className = 'bw-diff-side'
-      renderQueueLines(curSide, Array.isArray(d.current_queue) ? (d.current_queue as ScheduleEntry[]) : [])
+      renderQueueLines(curSide, Array.isArray(d.current_queue) ? (d.current_queue as ScheduleEntry[]) : [], '(無排程)')
       const arrow = document.createElement('span')
       arrow.className = 'bw-diff-arrow'
       renderText(arrow, '→')

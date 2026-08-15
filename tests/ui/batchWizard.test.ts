@@ -424,4 +424,84 @@ describe('batch-wizard panel: shelf_schedule flow', () => {
     expect(primary?.textContent).toBe('方案D')
     expect(secondary?.textContent).toBe('P2:D')
   })
+
+  it('clear schedule: applies cleared state, outputs queue: [], applying time un-clears', async () => {
+    const batchViewResult = envelope([{
+      products: [{
+        prod_oid: 'P3', name: '商品3', plans: [
+          { pkg_oid: 'F', name: '方案F', is_bundle: false, reserve_queue: [{ reserve_date_utc: '2026-08-20 02:00:00', reserve_status: true }] },
+          { pkg_oid: 'G', name: '方案G', is_bundle: false, reserve_queue: [] },
+        ],
+      }],
+    }])
+    const createResult = envelope([{ changeset_id: 'cs-3' }])
+    const viewResult = envelope([{
+      changeset_id: 'cs-3', status: 'pending_approval', nonce: 'n3', diff_version: 'dv-3',
+      diff: { items: [
+        { prod_oid: 'P3', pkg_oid: 'F', pkg_name: '方案F', current_queue: [{ reserve_date_utc: '2026-08-20 02:00:00', reserve_status: true }], new_queue: [] },
+        { prod_oid: 'P3', pkg_oid: 'G', pkg_name: '方案G', current_queue: [], new_queue: [] }
+      ]}
+    }])
+    const confirmResult = envelope([{ changeset_id: 'cs-3', status: 'done', results: [{ item_key: 'P3:F', status: 'done' }, { item_key: 'P3:G', status: 'skipped_noop' }] }])
+
+    const { app, calls, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => batchViewResult,
+      app_create_changeset: () => createResult,
+      app_get_changeset_view: () => viewResult,
+      app_confirm_changeset: () => confirmResult,
+    })
+
+    initWizard(app as never)
+    fireLaunch('shelf_schedule', ['P3'])
+
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+
+    const cbF = checkboxesFor(wizardEl, 'pkg-oid', 'F')[0]
+    const cbG = checkboxesFor(wizardEl, 'pkg-oid', 'G')[0]
+
+    cbF.checked = true
+    cbG.checked = true
+
+    // 1. Select clear mode
+    const statusSelect = findByRole(wizardEl, 'defStatus') as FakeElement
+    statusSelect.value = 'clear'
+    
+    findByRole(wizardEl, 'applyAllBtn').onclick!()
+
+    const badgeF = cbF.parentNode!.querySelectorAll('[data-role=coBadge]')[0] as FakeElement
+    expect(badgeF.hidden).toBe(false)
+    expect(badgeF.textContent).toBe('將清除排程')
+
+    // 2. Un-clear by applying normal time
+    statusSelect.value = 'true'
+    ;(findByRole(wizardEl, 'defDate') as FakeElement).value = '2026-08-20'
+    ;(findByRole(wizardEl, 'defHour') as FakeElement).value = '10'
+    ;(findByRole(wizardEl, 'defMinute') as FakeElement).value = '0'
+    ;(findByRole(wizardEl, 'defTz') as FakeElement).value = 'UTC'
+    
+    // Only check G so we apply normal time to G, leaving F cleared
+    cbF.checked = false
+    findByRole(wizardEl, 'applyAllBtn').onclick!()
+    
+    const badgeG = cbG.parentNode!.querySelectorAll('[data-role=coBadge]')[0] as FakeElement
+    expect(badgeG.hidden).toBe(true)
+
+    // 3. Re-clear both for the final payload
+    cbF.checked = true
+    statusSelect.value = 'clear'
+    findByRole(wizardEl, 'applyAllBtn').onclick!()
+    
+    expect(badgeG.hidden).toBe(false)
+    expect(badgeG.textContent).toBe('將清除排程')
+
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+
+    expect(calls[1].name).toBe('app_create_changeset')
+    expect(calls[1].arguments.items).toEqual([
+      { prod_oid: 'P3', pkg_oid: 'F', queue: [] },
+      { prod_oid: 'P3', pkg_oid: 'G', queue: [] }
+    ])
+  })
 })
