@@ -179,7 +179,11 @@ input.bw-input[type=number]{width:4.5rem}
 .bw-ledger-row{display:flex;align-items:center;gap:.625rem;padding:.5rem .25rem;border-bottom:1px solid var(--bw-border)}
 .bw-ledger-row:last-child{border-bottom:none}
 .bw-ledger-key{font-size:.875rem}
-.bw-ledger-status{font-size:.8125rem;color:var(--bw-muted)}
+.bw-ledger-row .bw-plan-name{flex:1 1 auto;min-width:0}
+.bw-ledger-status{flex:0 0 auto;margin-left:auto;font-size:.75rem;font-weight:600;padding:.2rem .625rem;border-radius:999px;white-space:nowrap}
+.bw-ledger-status-ok{background:rgba(48,209,88,.15);color:#1d8a3c}
+.bw-ledger-status-skip{background:#f0f0f2;color:var(--bw-muted)}
+.bw-ledger-status-error{background:rgba(255,59,48,.12);color:var(--bw-danger)}
 .bw-ledger-code{font-family:ui-monospace,SFMono-Regular,monospace;font-size:.75rem;color:var(--bw-danger)}
 
 /* ---- step transitions: opacity+translateY fade on each full step re-render (only #wizard's
@@ -1061,8 +1065,9 @@ export function initWizard(app: WizardApp): void {
       row.appendChild(keyWrap)
 
       const statusSpan = document.createElement('span')
-      statusSpan.className = 'bw-ledger-status'
-      renderText(statusSpan, String(res.status))
+      const statusLabel = kind === 'ok' ? '已完成' : kind === 'skip' ? '無變更，略過' : `失敗（${String(res.status)}）`
+      statusSpan.className = `bw-ledger-status bw-ledger-status-${kind === 'ok' ? 'ok' : kind === 'skip' ? 'skip' : 'error'}`
+      renderText(statusSpan, statusLabel)
       row.appendChild(statusSpan)
 
       if (kind === 'error') {
