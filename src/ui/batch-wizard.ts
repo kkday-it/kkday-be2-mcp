@@ -240,10 +240,12 @@ function clearFallback(el: HTMLElement): void { el.hidden = true; el.textContent
 // render, inside the row's own onclick, and for every sibling syncSiblings() auto-toggles (so the
 // tint follows the same "whole write unit moves together" rule the checked/badge state already
 // follows).
-function updateRowChecked(r: RowState): void {
+function updateRowChecked(r: RowState, dimBundle: boolean): void {
   const cls = ['bw-plan-row']
   if (r.checkbox.checked) cls.push('bw-plan-row-checked')
-  if (r.is_bundle) cls.push('bw-plan-row-bundle')
+  // bundle 調暗只屬於排程模式（reserve-active 不支援 bundle）；庫存平台切換對 bundle 完全可寫
+  // （live 驗證：bundle 方案帶 item_oid+supplier_mapping，寫入單位不區分 bundle），不可誤暗示不可用。
+  if (r.is_bundle && dimBundle) cls.push('bw-plan-row-bundle')
   r.rowEl.className = cls.join(' ')
 }
 
@@ -549,11 +551,11 @@ export function initWizard(app: WizardApp): void {
             is_bundle: isBundle, is_active: plan.is_active as boolean | undefined, current_platform: plan.current_platform as string | null | undefined, queue: [],
           }
           rows.push(rs)
-          updateRowChecked(rs)
+          updateRowChecked(rs, actionType === 'shelf_schedule')
           cb.onclick = () => {
             clearFallback(fallbackEl)
             if (actionType === 'inventory_platform') syncSiblings(rs)
-            updateRowChecked(rs)
+            updateRowChecked(rs, actionType === 'shelf_schedule')
             updateDetail(rs)
             applyVisibility() // hideUnchecked 開啟時,勾/取消勾都可能改變本列(與連動列)的可見性
           }
@@ -673,7 +675,7 @@ export function initWizard(app: WizardApp): void {
         if (r !== changed && r.item_oid === changed.item_oid && r.supplier_oid === changed.supplier_oid) {
           r.checkbox.checked = on
           r.badge.hidden = !on
-          updateRowChecked(r)
+          updateRowChecked(r, actionType === 'shelf_schedule')
           updateDetail(r)
         }
       }
