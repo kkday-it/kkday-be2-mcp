@@ -228,6 +228,7 @@ interface RowState {
   is_bundle?: boolean
   is_active?: boolean
   current_platform?: string | null
+  inventory_mode?: string
   queue: ScheduleEntry[]
   cleared?: boolean
 }
@@ -548,7 +549,9 @@ export function initWizard(app: WizardApp): void {
             checkbox: cb, badge, rowEl: row, wrapperEl: wrapper, prod_oid: prod.prod_oid, pkg_oid: String(plan.pkg_oid),
             pkg_name: (plan.name as string | undefined) ?? String(plan.pkg_oid),
             item_oid: itemOid, supplier_oid: supplierOid, supplier_name: plan.supplier_name as string | undefined, 
-            is_bundle: isBundle, is_active: plan.is_active as boolean | undefined, current_platform: plan.current_platform as string | null | undefined, queue: [],
+            is_bundle: isBundle, is_active: plan.is_active as boolean | undefined, 
+            current_platform: plan.current_platform as string | null | undefined, 
+            inventory_mode: plan.inventory_mode as string | undefined, queue: [],
           }
           rows.push(rs)
           updateRowChecked(rs, actionType === 'shelf_schedule')
@@ -660,6 +663,13 @@ export function initWizard(app: WizardApp): void {
           renderText(previewLabel, ` → ${target}`)
         }
         r.detailEl.appendChild(previewLabel)
+
+        if (r.inventory_mode) {
+          const modeLabel = document.createElement('span')
+          modeLabel.className = 'bw-detail-muted'
+          renderText(modeLabel, ` ｜ 庫存模式: ${r.inventory_mode}`)
+          r.detailEl.appendChild(modeLabel)
+        }
       } else {
         if (r.detailEl) {
           r.wrapperEl.removeChild(r.detailEl)

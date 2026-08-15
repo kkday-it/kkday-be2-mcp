@@ -43,11 +43,16 @@ const PACKAGE_CONFIGS_34133 = [
 
 const PRODUCT_INFO_34133 = { description_module: { 'zh-tw': { name: 'Demo Product' } }, master_lang: 'zh-tw' }
 
-const CONFIGS_ITEM_1682339 = {
-  supplier_configs: [
-    { supplier_oid: 38028, is_external_inventory: false, is_inventory_mgmt: true },  // BE2_SCM
-    { supplier_oid: 38029, is_external_inventory: true, is_inventory_mgmt: false },  // EXTERNAL
-  ],
+const BASIC_INFO_1682339 = {
+  data: {
+    item_config: {
+      inventory_setting: { control_type: 2, inventory_type: 1 }, // 21 -> 'SKU依日期'
+      supplier_configs: [
+        { supplier_oid: 38028, is_external_inventory: false, is_inventory_mgmt: true },  // BE2_SCM
+        { supplier_oid: 38029, is_external_inventory: true, is_inventory_mgmt: false },  // EXTERNAL
+      ],
+    }
+  }
 }
 
 function fakeGateway(overrides: Record<string, unknown> = {}) {
@@ -55,7 +60,7 @@ function fakeGateway(overrides: Record<string, unknown> = {}) {
     '/product/api/v1/drafts/products/34133/info': PRODUCT_INFO_34133,
     '/product/api/v1/products/34133/packages': PACKAGES_34133,
     '/product/api/v1/products/34133/package-configs': PACKAGE_CONFIGS_34133,
-    '/product/api/v1/items/1682339/configs': CONFIGS_ITEM_1682339,
+    '/product/api/v1/items/1682339/basic-info': BASIC_INFO_1682339,
     ...overrides,
   }
   return {
@@ -69,7 +74,7 @@ function fakeGateway(overrides: Record<string, unknown> = {}) {
 }
 
 describe('buildBatchView — inventory_platform 模式', () => {
-  it('輸出形狀：每商品 {prod_oid,name,plans:[{pkg_oid,name,item_oid,supplier_oid,supplier_name,is_active,is_bundle,current_platform}]}', async () => {
+  it('輸出形狀：每商品 {prod_oid,name,plans:[{pkg_oid,name,item_oid,supplier_oid,supplier_name,is_active,is_bundle,current_platform,inventory_mode}]}', async () => {
     const out = await buildBatchView(fakeGateway(), 'AT', 'inventory_platform', ['34133'])
     expect(out.products).toHaveLength(1)
     const prod = out.products[0]
@@ -80,6 +85,7 @@ describe('buildBatchView — inventory_platform 模式', () => {
       pkg_oid: '1936562', name: 'Plan A', item_oid: '1682339',
       supplier_oid: '38028', supplier_name: 'Supplier X', // is_default:true entry
       is_active: true, is_bundle: false, current_platform: 'BE2_SCM',
+      inventory_mode: 'SKU依日期'
     })
     expect(planA.reserve_queue).toBeUndefined() // 非 shelf_schedule 模式不附
   })
@@ -87,11 +93,12 @@ describe('buildBatchView — inventory_platform 模式', () => {
   it('current_platform 讀不到（配置端點無此帳號權限/找不到列）時降級為 null + warning，不擋整批', async () => {
     // item 1682340 (Plan B) 沒有配置 fixture -> gateway.get 對它丟 404-like GatewayError
     const out = await buildBatchView(
-      fakeGateway({ '/product/api/v1/items/1682340/configs': new GatewayError('AU9403', 'forbidden', 403) }),
+      fakeGateway({ '/product/api/v1/items/1682340/basic-info': new GatewayError('AU9403', 'forbidden', 403) }),
       'AT', 'inventory_platform', ['34133'],
     )
     const planB = out.products[0].plans.find(p => p.pkg_oid === '1936563')!
     expect(planB.current_platform).toBeNull()
+    expect(planB.inventory_mode).toBeUndefined()
     expect(planB.is_bundle).toBe(true) // package-configs 仍成功，is_bundle 照樣帶出
     expect(out.errors.some(e => e.key === '1682340:38030')).toBe(true)
   })

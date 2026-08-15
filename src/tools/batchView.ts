@@ -16,6 +16,7 @@ export interface BatchPlan {
   is_active?: boolean
   is_bundle?: boolean
   current_platform?: 'BE2' | 'BE2_SCM' | 'EXTERNAL' | null
+  inventory_mode?: string
   reserve_queue?: ScheduleEntry[]
 }
 
@@ -77,19 +78,15 @@ function extractPackageConfigMap(raw: unknown): Map<string, PackageConfigRow> {
   return map
 }
 
-// Per docs/be2-mcp/sit-write-contracts.md §"定案:兩布林的 wire 來源" (also src/changeset/
-// platformDiff.ts#readSupplierInventorySetting): GET items/{itemOid}/configs -> supplier_configs[]
-// carries {supplier_oid, is_external_inventory, is_inventory_mgmt} per supplier. Unlike the
-// change-set diff path (which throws DiffError on any read failure — 嚴禁盲寫), this is a
-// best-effort DISPLAY read for the wizard's step-1 view: a 403/500/missing-row here degrades to
-// current_platform: null + a warning entry, never blocks the rest of the batch view (spec: "view
-// 是展示用途,不是 diff;diff 那條已在 Task 3 fail-closed,view 不需要擋死整個載入").
+import { readSupplierInventorySetting, parseInventoryMode } from '../changeset/platformRead.js'
+
+// Per docs/be2-mcp/sit-write-contracts.md Phase 4a read section: basic-info
 async function getConfigsCached(
   gateway: GatewayClient, accessToken: string, itemOid: string, cache: Map<string, Promise<unknown>>,
 ): Promise<unknown> {
   let p = cache.get(itemOid)
   if (!p) {
-    p = gateway.get(`/product/api/v1/items/${encodeURIComponent(itemOid)}/configs`, accessToken)
+    p = gateway.get(`/product/api/v1/items/${encodeURIComponent(itemOid)}/basic-info`, accessToken)
     cache.set(itemOid, p)
   }
   return p
@@ -97,25 +94,23 @@ async function getConfigsCached(
 
 async function resolveCurrentPlatform(
   gateway: GatewayClient, accessToken: string, itemOid: string, supplierOid: string, cache: Map<string, Promise<unknown>>,
-): Promise<{ platform: 'BE2' | 'BE2_SCM' | 'EXTERNAL' | null; warning?: EnvelopeError }> {
+): Promise<{ platform: 'BE2' | 'BE2_SCM' | 'EXTERNAL' | null; mode?: string; warning?: EnvelopeError }> {
   const key = `${itemOid}:${supplierOid}`
   try {
     const raw = await getConfigsCached(gateway, accessToken, itemOid, cache)
-    const rows = (raw as { supplier_configs?: unknown[] })?.supplier_configs
-    const row = Array.isArray(rows)
-      ? (rows as Array<Record<string, unknown>>).find(r => String(r?.supplier_oid) === supplierOid)
-      : undefined
-    const isExternal = row?.is_external_inventory
-    const isMgmt = row?.is_inventory_mgmt
-    if (typeof isExternal !== 'boolean' || typeof isMgmt !== 'boolean') {
+    const mode = parseInventoryMode(raw)
+    const booleans = await readSupplierInventorySetting(gateway, accessToken, itemOid, supplierOid, raw)
+    const platform = booleansToPlatform(booleans) ?? null
+    return { platform, mode }
+  } catch (e: any) {
+    // If readSupplierInventorySetting throws DiffError, we catch it here to degrade gracefully.
+    // DiffError doesn't have an exact matching shape for EnvelopeError, but toEnvelopeError handles it.
+    if (e.name === 'DiffError') {
       return {
         platform: null,
         warning: { key, code: 'PLATFORM_READ_UNAVAILABLE', message: `current inventory-platform config not readable for ${key}; shown as unknown (view is display-only, not a diff).` },
       }
     }
-    const platform = booleansToPlatform({ is_external_inventory: isExternal, is_inventory_mgmt: isMgmt }) ?? null
-    return { platform }
-  } catch (e) {
     return { platform: null, warning: toEnvelopeError(key, e) }
   }
 }
@@ -174,8 +169,9 @@ export async function buildBatchView(
       }
       if (actionType === 'inventory_platform') {
         if (plan.item_oid && plan.supplier_oid) {
-          const { platform, warning } = await resolveCurrentPlatform(gateway, accessToken, plan.item_oid, plan.supplier_oid, configsCache)
+          const { platform, mode, warning } = await resolveCurrentPlatform(gateway, accessToken, plan.item_oid, plan.supplier_oid, configsCache)
           plan.current_platform = platform
+          if (mode !== undefined) plan.inventory_mode = mode
           if (warning) errors.push(warning)
         } else {
           plan.current_platform = null

@@ -173,7 +173,7 @@ describe('batch-wizard panel: inventory_platform flow', () => {
       products: [{
         prod_oid: 'P1', name: '商品1', plans: [
           { pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', supplier_name: '供1', current_platform: 'BE2', is_active: true },
-          { pkg_oid: 'B', name: '方案B', item_oid: 'I2', supplier_oid: 'S2', supplier_name: '供2', current_platform: 'BE2_SCM', is_active: false }, // inactive
+          { pkg_oid: 'B', name: '方案B', item_oid: 'I2', supplier_oid: 'S2', supplier_name: '供2', current_platform: 'BE2_SCM', is_active: false, inventory_mode: 'SKU依日期' }, // inactive
         ],
       }],
     }])
@@ -211,6 +211,7 @@ describe('batch-wizard panel: inventory_platform flow', () => {
     expect(detailRows[0].textContent).toContain('供應商: S2 供2')
     expect(detailRows[0].textContent).toContain('目前平台: BE2_SCM')
     expect(detailRows[0].textContent).toContain('→ BE2')
+    expect(detailRows[0].textContent).toContain('庫存模式: SKU依日期')
 
     // 3. Radio change updates preview
     const radios = wizardEl.querySelectorAll('input[type=radio][name=target]')

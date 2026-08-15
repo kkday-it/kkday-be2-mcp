@@ -9,10 +9,10 @@ import type { ChangeSetRecord, InventoryPlatformItem } from '../src/changeset/ty
 
 const pkgs = [{ prod_oid: 'p1', pkg_oid: 'k1', pkg_name: 'A' }]
 const configs = (rows: Array<{ supplier_oid: string; is_external_inventory?: boolean; is_inventory_mgmt?: boolean }>) =>
-  ({ supplier_configs: rows })
+  ({ data: { item_config: { supplier_configs: rows } } })
 
 // Task 1 定案 read endpoint + Task 3 定案 write endpoint (design doc §4.1):
-// GET  /product/api/v1/items/{itemOid}/configs -> supplier_configs[]
+// GET  /product/api/v1/items/{itemOid}/basic-info -> data.item_config.supplier_configs[]
 // PUT  /product/api/v1/items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting
 function fakeGw(configsByItem: Record<string, unknown>, opts: { putShouldFail?: Set<string> } = {}) {
   const calls: Array<{ m: string; path: string; body?: unknown }> = []
@@ -20,7 +20,7 @@ function fakeGw(configsByItem: Record<string, unknown>, opts: { putShouldFail?: 
     calls,
     async get(path: string) {
       calls.push({ m: 'GET', path })
-      const m = /\/items\/([^/]+)\/configs$/.exec(path)!
+      const m = /\/items\/([^/]+)\/basic-info$/.exec(path)!
       return configsByItem[m[1]]
     },
     async put(path: string, _at: string, body: unknown) {

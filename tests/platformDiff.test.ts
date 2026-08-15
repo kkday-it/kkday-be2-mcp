@@ -3,13 +3,13 @@ import { computePlatformDiff, readSupplierInventorySetting } from '../src/change
 import { computeChangesetDiff, diffVersionHash, DiffError } from '../src/changeset/diff.js'
 import type { InventoryPlatformItem } from '../src/changeset/types.js'
 
-// Task 1 定案: GET /product/api/v1/items/{itemOid}/configs -> { supplier_configs: [{ supplier_oid, is_external_inventory, is_inventory_mgmt }] }
+// Task 1 定案: GET /product/api/v1/items/{itemOid}/basic-info -> { data: { item_config: { supplier_configs: [{ supplier_oid, is_external_inventory, is_inventory_mgmt }] } } }
 function gatewayWith(configsByItem: Record<string, unknown>) {
   return {
     calls: [] as string[],
     async get(path: string, _at: string) {
       this.calls.push(path)
-      const m = /\/items\/([^/]+)\/configs$/.exec(path)
+      const m = /\/items\/([^/]+)\/basic-info$/.exec(path)
       return configsByItem[m ? m[1] : '']
     },
     async put() { throw new Error('diff must never write') },
@@ -19,14 +19,19 @@ const ctxOf = (gw: unknown) => ({ gateway: gw as never, accessToken: 'at', userL
 const item = (o: Partial<InventoryPlatformItem> = {}): InventoryPlatformItem =>
   ({ item_oid: 'i1', supplier_oid: 's1', target: 'BE2_SCM', affected_pkgs: [{ prod_oid: 'p1', pkg_oid: 'k1', pkg_name: 'A' }], ...o })
 
-const configs = (rows: Array<{ supplier_oid: string; is_external_inventory?: boolean; is_inventory_mgmt?: boolean }>) =>
-  ({ supplier_configs: rows })
+const configs = (rows: Array<{ supplier_oid: string | number; is_external_inventory?: boolean; is_inventory_mgmt?: boolean }>) =>
+  ({ data: { item_config: { supplier_configs: rows } } })
 
 describe('readSupplierInventorySetting', () => {
   it('reads the two booleans for the matching supplier_oid from supplier_configs[]', async () => {
     const gw = gatewayWith({ i1: configs([{ supplier_oid: 's1', is_external_inventory: false, is_inventory_mgmt: true }]) })
     const b = await readSupplierInventorySetting(gw as never, 'at', 'i1', 's1')
     expect(b).toEqual({ is_external_inventory: false, is_inventory_mgmt: true })
+  })
+  it('reads correctly when supplier_oid is a number in the response but string in the query', async () => {
+    const gw = gatewayWith({ i1: configs([{ supplier_oid: 1234, is_external_inventory: true, is_inventory_mgmt: false }]) })
+    const b = await readSupplierInventorySetting(gw as never, 'at', 'i1', '1234')
+    expect(b).toEqual({ is_external_inventory: true, is_inventory_mgmt: false })
   })
   it('throws DiffError when supplier_oid is absent from supplier_configs[]', async () => {
     const gw = gatewayWith({ i1: configs([{ supplier_oid: 's-other', is_external_inventory: false, is_inventory_mgmt: false }]) })
@@ -55,16 +60,18 @@ describe('computePlatformDiff', () => {
   // booleans). The affected_pkgs *display annotation* separately does read packages now (see the
   // "server-side affected_pkgs recompute" describe block below) — that is a deliberate addition,
   // not a violation of this invariant, so this test's gatewayWith stub (which only serves
-  // /configs) intentionally leaves any packages call unanswered (undefined) rather than
+  // /basic-info) intentionally leaves any packages call unanswered (undefined) rather than
   // asserting packages is never called at all.
   it('current/target platform is read via the item-level endpoint only', async () => {
     const gw = gatewayWith({ i1: configs([{ supplier_oid: 's1', is_external_inventory: false, is_inventory_mgmt: false }]) })
     const [d] = await computePlatformDiff([item()], ctxOf(gw))
-    expect(gw.calls).toContain('/product/api/v1/items/i1/configs')
+    expect(gw.calls).toContain('/product/api/v1/items/i1/basic-info')
+    expect(gw.calls.some(c => c.includes('/configs'))).toBe(false)
+    // packages 可能被 affected_pkgs 展示重算呼叫（Important 3）——布林讀取本身不經 packages 由上兩行釘住
     expect(d.current).toBe('BE2')
   })
   it('missing booleans -> DiffError', async () => {
-    const gw = gatewayWith({ i1: { supplier_configs: [] } })
+    const gw = gatewayWith({ i1: { data: { item_config: { supplier_configs: [] } } } })
     await expect(computePlatformDiff([item()], ctxOf(gw))).rejects.toBeInstanceOf(DiffError)
   })
   it('undefined combination (external+mgmt both true, "11") -> DiffError', async () => {
@@ -90,7 +97,7 @@ describe('computePlatformDiff — server-side affected_pkgs recompute (final who
       calls: [] as string[],
       async get(path: string) {
         this.calls.push(path)
-        const cfgM = /\/items\/([^/]+)\/configs$/.exec(path)
+        const cfgM = /\/items\/([^/]+)\/basic-info$/.exec(path)
         if (cfgM) return configsByItem[cfgM[1]]
         const pkgM = /\/products\/([^/]+)\/packages$/.exec(path)
         if (pkgM) {

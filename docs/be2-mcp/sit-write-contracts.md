@@ -181,21 +181,20 @@ The `.env` SIT account is **not mapped to any supplier** on be2-220 for the test
 
 初版 probe(commit `36a939a`)只跑了 #1–#3,當時結論 BLOCKED;本節為源碼追蹤 + 補測後的**定案**。
 
-### 定案:兩布林的 wire 來源 = product-service `GET items/{itemOid}/configs` → `supplier_configs[]`
+### 定案:兩布林的 wire 來源 = product-service `GET items/{itemOid}/basic-info` → `data.item_config.supplier_configs[]`
 
 be2-web UI 完整鏈路已從原始碼證實(`kkday-be2-web` + `kkday-be2-api`,本機 repo):
 
 1. 庫存頁「供應商庫存管理平台」表格(`SupplierInventoryConfigEditTable.vue`)的每列 `{isExternalInventory, isInventoryMgmt}` 來自 `EditDetail.vue` 的 `activeItemSupplierConfigMappingList` = **`itemSupplierConfig`(兩布林所在)** merge `itemSupplierMapping`(只出 `supplier_name`/`is_default`,即候選 #3 那 3 欄——所以 #3 讀不到布林是設計如此)。
 2. `itemSupplierConfig` 由 store `requestGetInventoryBasicInfo` 從 be2-api `GET v1/product/item/{itemOid}/inventory/basic-info` 回應的 **`item_config.supplier_configs[]`** 取出(camelCase 轉換前的 wire 欄位即 `is_external_inventory`/`is_inventory_mgmt`,與 PUT 契約同名)。
-3. be2-api 的 `item_config` 是 S2S passthrough:`ProductApiService::getItemConfig()` → **product-service `GET items/{itemOid}/configs`**(`kkday-be2-api/app/Services/v1/ProductApiService.php:2431-2434`)。`item_inventory.is_inventory_mgmt`(getInventory 聚合)同樣源自 product-service 的 `items/{oid}/inventories/{supplierOid}`(S2S-only,user token 403,Phase 3a 已證)。
+3. S2S 原始端點: Phase 4a 發現 `GET items/{itemOid}/configs` 會對 user token 報 403。而 `GET /product/api/v1/items/{itemOid}/basic-info` 會成功回傳 200 (user token)。
 
-**⇒ Task 3 `readSupplierInventorySetting()` 定案:`GET /product/api/v1/items/{itemOid}/configs`,回應取 `supplier_configs[]` 中 `supplier_oid` 相符的列,讀 `is_external_inventory`/`is_inventory_mgmt`(item 級另有 `inventory_setting`)。**
+**⇒ Task 3 `readSupplierInventorySetting()` 定案:`GET /product/api/v1/items/{itemOid}/basic-info`,回應取 `data.item_config.supplier_configs[]` 中 `supplier_oid` 相符的列,讀 `is_external_inventory`/`is_inventory_mgmt`。**
 
-### Live 未竟:兩條路在 be2-220 對此帳號都不通(契約已源碼三角定位,200-with-booleans 樣本仍缺)
-
-- **首選 `items/{itemOid}/configs`:403** — 空 body、路由存在,與 Phase 3a quantity-PUT 的 AU9403 verify per-URI 拒絕同構(帳號群組缺該 URI 規則綁的 action)。**解卡路徑相同**:be2-220 授權補該 action、或補 `.env` stage keys 改打 stage(同帳號 stage 已證可寫)。
-- **退路 be2-api 聚合端點:500** — be2-220 的 be2-api 前綴 inventory 路由系統性壞掉(Phase 1a 舊識),與授權無關,不值得追;修好也只是 configs 的 wrapper。
-- **依 spec §4.1:read 失敗(403/500)時 diff 一律丟 `DiffError` 擋下建立,嚴禁假設預設值。** Task 3 可實作完成(endpoint、欄位名皆定案),live 驗證掛在與 quantity PUT 同一個授權 blocker 上,非新增阻擋項。
+### Live 定案: basic-info 成功取代 configs
+- **原本首選 `items/{itemOid}/configs`:403** (已成歷史)
+- **取代方案 `items/{itemOid}/basic-info`:200** — 成功透過 user token 取得 `item_config`，內含 `supplier_configs` (包含 is_external_inventory 等) 與 `inventory_setting`。
+- **依 spec §4.1:read 失敗(403/500)時 diff 一律丟 `DiffError` 擋下建立,嚴禁假設預設值。**
 
 ### 教訓(第三次同型)
 

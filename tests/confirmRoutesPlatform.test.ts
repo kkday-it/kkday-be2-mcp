@@ -16,7 +16,7 @@ import type { InventoryPlatformItem } from '../src/changeset/types.js'
 // regardless of the real target platform: an approver-misleading page. Mirrors the harness in
 // tests/confirmRoutesInventory.test.ts (buildConfirmRouter in isolation, plain fetch against a
 // listening express app, redirect:'manual') but seeds inventory_platform change-sets and a fake
-// gateway shaped like tests/executorPlatform.test.ts's fakeGw (GET .../items/{itemOid}/configs,
+// gateway shaped like tests/executorPlatform.test.ts's fakeGw (GET .../items/{itemOid}/basic-info,
 // PUT .../supplier-configs/{supplierOid}/inventory-setting).
 
 async function http(base: string, method: string, path: string, body?: object, cookie?: string) {
@@ -39,8 +39,8 @@ function fakeGw(opts: { configsByItem: Record<string, unknown>; packagesByProd?:
     packagesByProd: opts.packagesByProd ?? {},
     async get(path: string) {
       calls.push({ m: 'GET', path })
-      const cfgM = /\/items\/([^/]+)\/configs$/.exec(path)
-      if (cfgM) return this.configsByItem[cfgM[1]]
+      const cfgM = /\/items\/([^/]+)\/basic-info$/.exec(path)
+      if (cfgM) return { data: { item_config: { supplier_configs: (this.configsByItem[cfgM[1]] as { supplier_configs?: unknown[] } | undefined)?.supplier_configs } } }
       const pkgM = /\/products\/([^/]+)\/packages$/.exec(path)
       if (pkgM) return this.packagesByProd[pkgM[1]]
       return undefined
