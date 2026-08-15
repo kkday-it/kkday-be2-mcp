@@ -652,3 +652,136 @@ describe('batch-wizard panel: additional UI behaviors', () => {
     expect(fallbackEl.hidden).toBe(true)
   })
 })
+
+describe('batch-wizard panel: step 4 automatic read-back verification', () => {
+  const wizardEl = doc.getElementById('wizard')
+  beforeEach(() => { wizardEl.children.length = 0 })
+
+  it('verifies inventory_platform: match -> ✓, mismatch -> ⏳, re-verify -> ✓', async () => {
+    const batchViewResult1 = envelope([{
+      products: [{ prod_oid: 'P1', name: '商品1', plans: [{ pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', current_platform: 'BE2' }] }],
+    }])
+    const createResult = envelope([{ changeset_id: 'cs-1' }])
+    const viewResult = envelope([{
+      changeset_id: 'cs-1', status: 'pending_approval', nonce: 'n1', diff_version: 'dv-1',
+      diff: { items: [{ item_oid: 'I1', supplier_oid: 'S1', current: 'BE2', target: 'BE2_SCM', noop: false, affected_pkgs: [{ prod_oid: 'P1', pkg_oid: 'A', pkg_name: '方案A' }] }] },
+    }])
+    const confirmResult = envelope([{ changeset_id: 'cs-1', status: 'done', results: [{ item_key: 'I1:S1', status: 'done', trace_id: 't1' }] }])
+    
+    // (b) mismatched state -> ⏳ line
+    const batchViewResultMismatched = envelope([{
+      products: [{ prod_oid: 'P1', name: '商品1', plans: [{ pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', current_platform: 'BE2' }] }], // still BE2
+    }])
+
+    // (a) landed state matching targets -> ✓ line
+    const batchViewResultMatched = envelope([{
+      products: [{ prod_oid: 'P1', name: '商品1', plans: [{ pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', current_platform: 'BE2_SCM' }] }], // updated
+    }])
+
+    let viewCount = 0
+    const { app, fireLaunch, calls } = makeFakeApp({
+      app_get_batch_view: () => {
+        viewCount++
+        if (viewCount === 1) return batchViewResult1
+        if (viewCount === 2) return batchViewResultMismatched
+        return batchViewResultMatched
+      },
+      app_create_changeset: () => createResult,
+      app_get_changeset_view: () => viewResult,
+      app_confirm_changeset: () => confirmResult,
+    })
+
+    initWizard(app as never)
+    fireLaunch('inventory_platform', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    const cbA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    cbA.checked = true; cbA.onclick!()
+    const radios = wizardEl.querySelectorAll('input[type=radio][name=target]')
+    radios.find(r => r.value === 'BE2_SCM')!.checked = true
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+    findByRole(wizardEl, 'toApproveBtn').onclick!()
+    findByRole(wizardEl, 'approveBtn').onclick!()
+    await flush()
+
+    // Post-execution check happens automatically (viewCount should be 2 now)
+    expect(viewCount).toBe(2)
+    const verificationCall1 = calls[calls.length - 1]
+    expect(verificationCall1.arguments).toEqual({ action_type: 'inventory_platform', prod_oids: ['P1'] })
+
+    let rows = wizardEl.querySelectorAll('.bw-ledger-row')
+    expect(rows[0].textContent).toContain('⏳ 尚未觀察到落地（可能為讀取延遲）')
+
+    // (c) clicking 重新驗證 triggers another batch_view call
+    const reVerifyBtn = findByRole(wizardEl, 'reverifyBtn')
+    reVerifyBtn.onclick!()
+    await flush()
+
+    expect(viewCount).toBe(3)
+    rows = wizardEl.querySelectorAll('.bw-ledger-row')
+    expect(rows[0].textContent).toContain('✓ 已驗證：be2 現況與目標一致')
+    expect(rows[0].textContent).not.toContain('⏳')
+  })
+
+  it('verifies shelf_schedule: match -> ✓, mismatch -> ⏳, read error -> muted', async () => {
+    const batchViewResult1 = envelope([{
+      products: [{ prod_oid: 'P2', name: '商品2', plans: [{ pkg_oid: 'B', name: '方案B', is_bundle: false, reserve_queue: [] }] }],
+    }])
+    const createResult = envelope([{ changeset_id: 'cs-2' }])
+    const viewResult = envelope([{
+      changeset_id: 'cs-2', status: 'pending_approval', nonce: 'n2', diff_version: 'dv-2',
+      diff: { items: [{ prod_oid: 'P2', pkg_oid: 'B', pkg_name: '方案B', current_queue: [], new_queue: [{ reserve_date_utc: '2026-08-20 02:00:00', reserve_status: true }] }] },
+    }])
+    const confirmResult = envelope([{ changeset_id: 'cs-2', status: 'done', results: [{ item_key: 'P2:B', status: 'done', trace_id: 't2' }] }])
+    
+    // First verification attempt throws or returns error
+    const batchViewResultMatched = envelope([{
+      products: [{ prod_oid: 'P2', name: '商品2', plans: [{ pkg_oid: 'B', name: '方案B', is_bundle: false, reserve_queue: [{ reserve_date_utc: '2026-08-20 02:00:00', reserve_status: true }] }] }],
+    }])
+
+    let viewCount = 0
+    const { app, fireLaunch, calls } = makeFakeApp({
+      app_get_batch_view: async () => {
+        viewCount++
+        if (viewCount === 1) return batchViewResult1
+        if (viewCount === 2) throw new Error('Simulated network error') // First auto check fails
+        return batchViewResultMatched // Re-verify succeeds
+      },
+      app_create_changeset: () => createResult,
+      app_get_changeset_view: () => viewResult,
+      app_confirm_changeset: () => confirmResult,
+    })
+
+    initWizard(app as never)
+    fireLaunch('shelf_schedule', ['P2'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    const cbB = checkboxesFor(wizardEl, 'pkg-oid', 'B')[0]
+    cbB.checked = true; cbB.onclick!()
+    ;(findByRole(wizardEl, 'defDate') as FakeElement).value = '2026-08-20'
+    ;(findByRole(wizardEl, 'defHour') as FakeElement).value = '10'
+    ;(findByRole(wizardEl, 'defMinute') as FakeElement).value = '0'
+    ;(findByRole(wizardEl, 'defTz') as FakeElement).value = 'Asia/Taipei'
+    ;(findByRole(wizardEl, 'defStatus') as FakeElement).value = 'true'
+    findByRole(wizardEl, 'applyAllBtn').onclick!()
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+    findByRole(wizardEl, 'toApproveBtn').onclick!()
+    findByRole(wizardEl, 'approveBtn').onclick!()
+    await flush()
+
+    expect(viewCount).toBe(2)
+    let rows = wizardEl.querySelectorAll('.bw-ledger-row')
+    expect(rows[0].textContent).toContain('（無法自動驗證：讀取失敗，可稍後按重新驗證）')
+
+    // Click 重新驗證
+    const reVerifyBtn = findByRole(wizardEl, 'reverifyBtn')
+    reVerifyBtn.onclick!()
+    await flush()
+
+    expect(viewCount).toBe(3)
+    rows = wizardEl.querySelectorAll('.bw-ledger-row')
+    expect(rows[0].textContent).toContain('✓ 已驗證：be2 現況與目標一致')
+  })
+})

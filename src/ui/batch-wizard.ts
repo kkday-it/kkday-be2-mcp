@@ -861,6 +861,13 @@ export function initWizard(app: WizardApp): void {
     statusEl.textContent = '完成'
     const card = document.createElement('div')
     card.className = 'bw-card'
+
+    const verifyNodes: Array<{ 
+      res: Record<string, unknown>;
+      matchedDiff: Record<string, unknown> | undefined;
+      verifyDiv: HTMLElement;
+    }> = []
+
     for (const res of results) {
       const row = document.createElement('div')
       row.dataset.itemKey = String(res.item_key)
@@ -868,6 +875,7 @@ export function initWizard(app: WizardApp): void {
       const status = res.status
       const kind = status === 'done' ? 'ok' : status === 'skipped_noop' ? 'skip' : 'error'
       row.className = 'bw-ledger-row'
+      row.style.flexWrap = 'wrap'
 
       const dot = document.createElement('span')
       dot.className = `bw-dot ${kind === 'ok' ? 'bw-dot-green' : kind === 'skip' ? 'bw-dot-gray' : 'bw-dot-red'}`
@@ -921,9 +929,112 @@ export function initWizard(app: WizardApp): void {
         renderText(codeSpan, String(res.error_code ?? ''))
         row.appendChild(codeSpan)
       }
+
+      if (kind === 'ok') {
+        const verifyDiv = document.createElement('div')
+        verifyDiv.className = 'bw-noop-badge'
+        verifyDiv.style.marginTop = '0.125rem'
+        verifyDiv.style.flex = '0 0 100%'
+        verifyDiv.style.marginLeft = '1.125rem'
+        row.appendChild(verifyDiv)
+        verifyNodes.push({ res, matchedDiff, verifyDiv })
+      }
+
       card.appendChild(row)
     }
     wizardEl.appendChild(card)
+
+    const btnRow = document.createElement('div')
+    btnRow.className = 'bw-row-footer'
+    const reverifyBtn = secondaryBtn('重新驗證', 'reverifyBtn', () => { void doVerify() })
+    btnRow.appendChild(reverifyBtn)
+    wizardEl.appendChild(btnRow)
+
+    void doVerify()
+
+    async function doVerify(): Promise<void> {
+      if (verifyNodes.length === 0) return
+      reverifyBtn.disabled = true
+      for (const v of verifyNodes) {
+        v.verifyDiv.textContent = '驗證中…'
+        v.verifyDiv.style.color = 'var(--bw-muted)'
+      }
+
+      const prodOids = new Set<string>()
+      for (const d of currentDiffItems) {
+        if ('affected_pkgs' in d && Array.isArray(d.affected_pkgs)) {
+          for (const pkg of d.affected_pkgs as AffectedPkg[]) {
+            if (pkg.prod_oid) prodOids.add(pkg.prod_oid)
+          }
+        } else if ('prod_oid' in d) {
+          prodOids.add(String(d.prod_oid))
+        }
+      }
+
+      try {
+        const r = await app.callServerTool({
+          name: 'app_get_batch_view',
+          arguments: { action_type: actionType, prod_oids: Array.from(prodOids) }
+        })
+        if (r.isError) throw new Error('isError')
+        
+        const items = r.structuredContent?.items as Array<{ products?: Array<{ prod_oid: string; plans: Array<Record<string, unknown>> }> }> | undefined
+        const products = items?.[0]?.products ?? []
+        const livePlans = new Map<string, Record<string, unknown>>()
+        for (const prod of products) {
+          if (Array.isArray(prod.plans)) {
+            for (const plan of prod.plans) {
+              if (actionType === 'inventory_platform') {
+                livePlans.set(`${plan.item_oid}:${plan.supplier_oid}`, plan)
+              } else {
+                livePlans.set(`${prod.prod_oid}:${plan.pkg_oid}`, plan)
+              }
+            }
+          }
+        }
+
+        for (const v of verifyNodes) {
+          let verified = false
+          const diff = v.matchedDiff
+          if (!diff) continue
+          
+          const plan = livePlans.get(String(v.res.item_key))
+          if (actionType === 'inventory_platform') {
+            if (plan && plan.current_platform != null && plan.current_platform === diff.target) {
+              verified = true
+            }
+          } else {
+            if (plan) {
+              const liveQ = Array.isArray(plan.reserve_queue) ? plan.reserve_queue : []
+              const sanitize = (q: any[]) => q.map((e: any) => ({
+                reserve_date_utc: String(e.reserve_date_utc ?? e.reserve_date),
+                reserve_status: Boolean(e.reserve_status)
+              })).sort((a: any, b: any) => a.reserve_date_utc.localeCompare(b.reserve_date_utc))
+              
+              const diffQ = Array.isArray(diff.new_queue) ? diff.new_queue : []
+              if (JSON.stringify(sanitize(liveQ)) === JSON.stringify(sanitize(diffQ))) {
+                verified = true
+              }
+            }
+          }
+
+          if (verified) {
+            v.verifyDiv.textContent = '✓ 已驗證：be2 現況與目標一致'
+            v.verifyDiv.style.color = '#34c759'
+          } else {
+            v.verifyDiv.textContent = '⏳ 尚未觀察到落地（可能為讀取延遲）'
+            v.verifyDiv.style.color = '#ff9500'
+          }
+        }
+      } catch (e) {
+        for (const v of verifyNodes) {
+          v.verifyDiv.textContent = '（無法自動驗證：讀取失敗，可稍後按重新驗證）'
+          v.verifyDiv.style.color = 'var(--bw-muted)'
+        }
+      } finally {
+        reverifyBtn.disabled = false
+      }
+    }
   }
 
   app.ontoolresult = params => {

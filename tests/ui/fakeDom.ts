@@ -56,7 +56,9 @@ class FakeElementImpl implements FakeElement {
   // string field here would silently diverge from that semantic and leave stale children behind
   // across re-renders, which would make batchWizard.test.ts's beforeEach-reset + re-render flow
   // pass for the wrong reason (or fail confusingly). Mirror the real behavior.
-  get textContent(): string { return this._textContent }
+  // Real DOM getter returns concatenated text of ALL descendants — verification tests assert on
+  // a container row's textContent containing child line text, so mirror that too.
+  get textContent(): string { return this._textContent + this.children.map(c => c.textContent).join('') }
   set textContent(v: string) { this._textContent = v; this.children = [] }
 
   constructor(tag: string) { this.tagName = tag.toUpperCase() }
