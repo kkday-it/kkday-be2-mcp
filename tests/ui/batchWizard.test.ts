@@ -651,6 +651,55 @@ describe('batch-wizard panel: additional UI behaviors', () => {
     await flush()
     expect(fallbackEl.hidden).toBe(true)
   })
+
+  it('Fix 1: load one valid + one not_found product -> tab labels correct, warning visible, next-step items exclude not_found', async () => {
+    const batchViewResult = envelope([{
+      products: [
+        { prod_oid: 'P1', name: '商品1', plans: [{ pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', current_platform: 'BE2' }] },
+        { prod_oid: 'BAD', not_found: true, plans: [] }
+      ],
+    }], [{ key: 'BAD', code: 'PRODUCT_NOT_FOUND', message: 'PRODUCT_NOT_FOUND: 找不到商品 BAD' }])
+    
+    const { app, fireLaunch, calls } = makeFakeApp({
+      app_get_batch_view: () => batchViewResult,
+      app_create_changeset: () => envelope([{ changeset_id: 'cs-1' }])
+    })
+    initWizard(app as never)
+    fireLaunch('inventory_platform', ['P1', 'BAD'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+
+    // 1. Warning visible in fallbackEl
+    const fallbackEl = doc.getElementById('fallback') as any
+    expect(fallbackEl.hidden).toBe(false)
+    expect(fallbackEl.textContent).toContain('PRODUCT_NOT_FOUND: 找不到商品 BAD')
+
+    // 2. Tab labels correct
+    const tabs = wizardEl.querySelectorAll('.bw-tab')
+    expect(tabs.length).toBe(2)
+    expect(tabs[1].className).toContain('bw-tab-danger')
+    expect(tabs[1].querySelector('.bw-tab-name')!.textContent).toBe('找不到商品')
+    expect(tabs[1].querySelector('.bw-tab-oid')!.textContent).toBe('BAD')
+
+    // 3. P1 active, bad product hidden message? Let's check when clicking bad product tab.
+    tabs[1].onclick!()
+    const emptyMsgs = wizardEl.querySelectorAll('.bw-not-found-msg')
+    expect(emptyMsgs.length).toBe(1)
+    expect(emptyMsgs[0].hidden).toBe(false)
+    expect(emptyMsgs[0].textContent).toBe('查無此商品，請確認 prod_oid')
+
+    // 4. Next-step items exclude the not_found product.
+    tabs[0].onclick!()
+    checkboxesFor(wizardEl, 'pkg-oid', 'A')[0].checked = true
+    const radios = wizardEl.querySelectorAll('input[type=radio][name=target]')
+    radios.find(r => r.value === 'BE2_SCM')!.checked = true
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+
+    expect(calls[1].name).toBe('app_create_changeset')
+    expect(calls[1].arguments.items).toHaveLength(1)
+    expect((calls[1].arguments.items as any)[0].affected_pkgs[0].prod_oid).toBe('P1')
+  })
 })
 
 describe('batch-wizard panel: step 4 automatic read-back verification', () => {

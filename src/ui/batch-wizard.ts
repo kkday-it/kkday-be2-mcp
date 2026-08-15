@@ -93,13 +93,16 @@ body{font:100%/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-se
 .bw-note{flex:1 1 auto}
 
 /* ---- tabs ---- */
-.bw-tabbar{display:flex;gap:.5rem;margin-bottom:1rem;border-bottom:1px solid var(--bw-border);padding-bottom:.5rem;overflow-x:auto}
-.bw-tab{display:flex;flex-direction:column;gap:.125rem;padding:.375rem .75rem;border-radius:8px;cursor:pointer;border:1px solid transparent;background:transparent;text-align:left;font-family:inherit}
-.bw-tab:hover{background:#f0f0f2}
-.bw-tab-active{background:rgba(10,132,255,.1);border-color:rgba(10,132,255,.2)}
-.bw-tab-name{font-size:.875rem;font-weight:600;color:var(--bw-text)}
-.bw-tab-active .bw-tab-name{color:var(--bw-tint)}
-.bw-tab-oid{font-size:.6875rem;color:var(--bw-muted)}
+.bw-tabbar{display:inline-flex;gap:2px;margin-bottom:1rem;padding:3px;background:#e5e5ea;border-radius:10px;overflow-x:auto;max-width:100%}
+.bw-tab{display:flex;flex-direction:column;gap:.125rem;padding:.375rem 1rem;border-radius:7px;cursor:pointer;border:none;background:transparent;text-align:center;font-family:inherit;color:var(--bw-muted);transition:background-color 150ms ease-out,box-shadow 150ms ease-out,color 150ms ease-out}
+.bw-tab:hover{background:rgba(0,0,0,.04)}
+.bw-tab-active{background:#fff;color:var(--bw-tint);box-shadow:0 1px 3px rgba(0,0,0,.12),0 1px 2px rgba(0,0,0,.04)}
+.bw-tab-active:hover{background:#fff}
+.bw-tab-danger{color:var(--bw-danger)}
+.bw-tab-active.bw-tab-danger{color:var(--bw-danger)}
+.bw-tab-name{font-size:.8125rem;font-weight:600;color:inherit}
+.bw-tab-oid{font-size:.6875rem;opacity:0.8;color:inherit}
+.bw-not-found-msg{padding:1rem .5rem;color:var(--bw-danger);font-size:.875rem;text-align:center}
 
 /* ---- inputs ---- */
 .bw-input,.bw-select{height:2rem;padding:0 .625rem;border-radius:8px;border:1px solid rgba(0,0,0,.14);font:inherit;font-size:.875rem;background:#fff;color:var(--bw-text)}
@@ -352,8 +355,17 @@ export function initWizard(app: WizardApp): void {
       try {
         const r = await app.callServerTool({ name: 'app_get_batch_view', arguments: { action_type: actionType, prod_oids: prodOids } })
         if (r.isError) { showFallback(fallbackEl, '載入失敗'); return }
-        const products = (r.structuredContent?.items?.[0] as { products?: unknown[] } | undefined)?.products ?? []
-        renderPlanTable(planTableEl, products as Array<{ prod_oid: string; name?: string; plans: Array<Record<string, unknown>> }>)
+        const structuredContent = r.structuredContent as { items?: unknown[], errors?: Array<{code?: string, message?: string}> } | undefined
+        const products = (structuredContent?.items?.[0] as { products?: unknown[] } | undefined)?.products ?? []
+        
+        const nfErrors = (structuredContent?.errors ?? []).filter(e => e.code === 'PRODUCT_NOT_FOUND')
+        if (nfErrors.length > 0) {
+          showFallback(fallbackEl, nfErrors.map(e => e.message).join('\n'))
+        } else {
+          clearFallback(fallbackEl)
+        }
+        
+        renderPlanTable(planTableEl, products as Array<{ prod_oid: string; name?: string; not_found?: boolean; plans: Array<Record<string, unknown>> }>)
         statusEl.textContent = `已載入 ${products.length} 個商品`
       } catch (e) { showFallback(fallbackEl, '載入失敗：' + String(e)) }
     }
@@ -361,6 +373,7 @@ export function initWizard(app: WizardApp): void {
     let filterQuery = ''
     let hideUnchecked = false
     let activeProdOid: string | undefined
+    let notFoundDivs: Array<{ prod_oid: string; el: HTMLElement }> = []
     function applyVisibility(): void {
       const q = filterQuery.toLowerCase()
       for (const r of rows) {
@@ -368,12 +381,16 @@ export function initWizard(app: WizardApp): void {
         const inActiveTab = !activeProdOid || r.prod_oid === activeProdOid
         r.rowEl.hidden = !inActiveTab || !matchesFilter || (hideUnchecked && !r.checkbox.checked)
       }
+      for (const nf of notFoundDivs) {
+        nf.el.hidden = !activeProdOid || nf.prod_oid !== activeProdOid
+      }
     }
 
-    function renderPlanTable(container: HTMLElement, products: Array<{ prod_oid: string; name?: string; plans: Array<Record<string, unknown>> }>): void {
+    function renderPlanTable(container: HTMLElement, products: Array<{ prod_oid: string; name?: string; not_found?: boolean; plans: Array<Record<string, unknown>> }>): void {
       container.textContent = ''
       rows = []
       radioButtons = []
+      notFoundDivs = []
       filterQuery = ''
       hideUnchecked = false
       activeProdOid = products.length > 1 ? products[0]?.prod_oid : undefined
@@ -387,20 +404,24 @@ export function initWizard(app: WizardApp): void {
         const tabbar = document.createElement('div')
         tabbar.className = 'bw-tabbar'
         for (const prod of products) {
+          const isNotFound = prod.not_found === true
           const tab = document.createElement('button')
-          tab.className = `bw-tab ${prod.prod_oid === activeProdOid ? 'bw-tab-active' : ''}`
+          tab.className = `bw-tab ${prod.prod_oid === activeProdOid ? 'bw-tab-active' : ''}${isNotFound ? ' bw-tab-danger' : ''}`
           const nameSpan = document.createElement('span')
           nameSpan.className = 'bw-tab-name'
-          renderText(nameSpan, prod.name ?? prod.prod_oid)
+          renderText(nameSpan, isNotFound ? '找不到商品' : (prod.name ?? prod.prod_oid))
           const oidSpan = document.createElement('span')
           oidSpan.className = 'bw-tab-oid'
-          renderText(oidSpan, prod.prod_oid)
+          const planCount = Array.isArray(prod.plans) ? prod.plans.length : 0
+          renderText(oidSpan, isNotFound ? prod.prod_oid : `${prod.prod_oid} · ${planCount} 方案`)
           tab.appendChild(nameSpan)
           tab.appendChild(oidSpan)
           tab.onclick = () => {
             activeProdOid = prod.prod_oid
-            for (const t of tabbar.querySelectorAll('.bw-tab')) t.className = 'bw-tab'
-            tab.className = 'bw-tab bw-tab-active'
+            for (const t of tabbar.querySelectorAll('.bw-tab')) {
+              t.className = t.className.includes('bw-tab-danger') ? 'bw-tab bw-tab-danger' : 'bw-tab'
+            }
+            tab.className += ' bw-tab-active'
             applyVisibility()
           }
           tabbar.appendChild(tab)
@@ -452,6 +473,13 @@ export function initWizard(app: WizardApp): void {
       container.appendChild(headRow)
 
       for (const prod of products) {
+        if (prod.not_found) {
+          const msgDiv = document.createElement('div')
+          msgDiv.className = 'bw-not-found-msg'
+          renderText(msgDiv, '查無此商品，請確認 prod_oid')
+          container.appendChild(msgDiv)
+          notFoundDivs.push({ prod_oid: prod.prod_oid, el: msgDiv })
+        }
         for (const plan of prod.plans) {
           const row = document.createElement('div')
           const cb = document.createElement('input')

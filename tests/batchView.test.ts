@@ -118,6 +118,34 @@ describe('buildBatchView — inventory_platform 模式', () => {
     expect(out.errors[0].key).toBe('34133')
     expect(out.read_oids).toHaveLength(0)
   })
+
+  it('測試:不存在商品 (packages [] + info rejects) -> not_found true + warning', async () => {
+    const out = await buildBatchView(
+      fakeGateway({
+        '/product/api/v1/products/574779/packages': [],
+        '/product/api/v1/drafts/products/574779/info': new GatewayError('HTTP_404', 'not found', 404),
+        '/product/api/v1/products/574779/package-configs': [],
+      }),
+      'AT', 'inventory_platform', ['574779'],
+    )
+    expect(out.products).toHaveLength(1)
+    expect(out.products[0]).toEqual({ prod_oid: '574779', not_found: true, plans: [] })
+    expect(out.errors.some(e => e.code === 'PRODUCT_NOT_FOUND')).toBe(true)
+  })
+
+  it('測試:合法但0方案商品 -> 無 warning, not_found 不為 true', async () => {
+    const out = await buildBatchView(
+      fakeGateway({
+        '/product/api/v1/products/574779/packages': [],
+        '/product/api/v1/drafts/products/574779/info': { description_module: { 'zh-tw': { name: 'Empty Product' } }, master_lang: 'zh-tw' },
+        '/product/api/v1/products/574779/package-configs': [],
+      }),
+      'AT', 'inventory_platform', ['574779'],
+    )
+    expect(out.products).toHaveLength(1)
+    expect(out.products[0]).toEqual({ prod_oid: '574779', name: 'Empty Product', plans: [] })
+    expect(out.errors.some(e => e.code === 'PRODUCT_NOT_FOUND')).toBe(false)
+  })
 })
 
 describe('buildBatchView — shelf_schedule 模式', () => {

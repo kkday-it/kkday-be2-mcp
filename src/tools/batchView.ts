@@ -22,6 +22,7 @@ export interface BatchPlan {
 export interface BatchProduct {
   prod_oid: string
   name?: string
+  not_found?: boolean
   plans: BatchPlan[]
 }
 
@@ -149,7 +150,15 @@ export async function buildBatchView(
     if (cfgR.status === 'rejected') errors.push(toEnvelopeError(prodOid, cfgR.reason)) // best-effort: is_bundle/reserve_queue/is_active fall back, product still shown
 
     const plans: BatchPlan[] = []
-    for (const p of extractPackagesWithSupplier(pkgsR.value)) {
+    const extractedPkgs = extractPackagesWithSupplier(pkgsR.value)
+
+    if (extractedPkgs.length === 0 && infoR.status === 'rejected') {
+      errors.push({ key: prodOid, code: 'PRODUCT_NOT_FOUND', message: `PRODUCT_NOT_FOUND: 找不到商品 ${prodOid}` })
+      products.push({ prod_oid: prodOid, not_found: true, plans: [] })
+      continue
+    }
+
+    for (const p of extractedPkgs) {
       const cfg = configMap.get(p.pkg_oid)
       const plan: BatchPlan = {
         pkg_oid: p.pkg_oid,
