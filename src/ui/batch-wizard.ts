@@ -801,10 +801,42 @@ export function initWizard(app: WizardApp): void {
       dot.className = `bw-dot ${kind === 'ok' ? 'bw-dot-green' : kind === 'skip' ? 'bw-dot-gray' : 'bw-dot-red'}`
       row.appendChild(dot)
 
-      const keySpan = document.createElement('span')
-      keySpan.className = 'bw-ledger-key'
-      renderText(keySpan, String(res.item_key))
-      row.appendChild(keySpan)
+      let primaryText = String(res.item_key)
+      let secondaryText = ''
+
+      const matchedDiff = currentDiffItems.find(d => {
+        if ('item_oid' in d) return `${d.item_oid}:${d.supplier_oid}` === res.item_key
+        if ('prod_oid' in d && 'pkg_oid' in d) return `${d.prod_oid}:${d.pkg_oid}` === res.item_key
+        return false
+      })
+
+      if (matchedDiff) {
+        if ('item_oid' in matchedDiff) {
+          primaryText = `item ${matchedDiff.item_oid} × supplier ${matchedDiff.supplier_oid}`
+          const pkgs = Array.isArray(matchedDiff.affected_pkgs) ? (matchedDiff.affected_pkgs as AffectedPkg[]).map(p => p.pkg_name).join('、') : ''
+          secondaryText = pkgs ? `${pkgs} (${res.item_key})` : String(res.item_key)
+        } else {
+          primaryText = String(matchedDiff.pkg_name ?? res.item_key)
+          secondaryText = String(res.item_key)
+        }
+      }
+
+      const keyWrap = document.createElement('div')
+      keyWrap.className = 'bw-plan-name'
+      
+      const primarySpan = document.createElement('span')
+      primarySpan.className = 'bw-ledger-key'
+      renderText(primarySpan, primaryText)
+      keyWrap.appendChild(primarySpan)
+
+      if (secondaryText) {
+        const subSpan = document.createElement('span')
+        subSpan.className = 'bw-plan-name-oid'
+        renderText(subSpan, secondaryText)
+        keyWrap.appendChild(subSpan)
+      }
+
+      row.appendChild(keyWrap)
 
       const statusSpan = document.createElement('span')
       statusSpan.className = 'bw-ledger-status'

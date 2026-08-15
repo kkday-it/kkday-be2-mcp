@@ -355,7 +355,7 @@ describe('batch-wizard panel: shelf_schedule flow', () => {
   const wizardEl = doc.getElementById('wizard')
   beforeEach(() => { wizardEl.children.length = 0 })
 
-  it('bundle rows are disabled; "套用到所有已勾選" applies the UTC-converted time to every checked row', async () => {
+  it('bundle rows are disabled; "套用到所有已勾選" applies the UTC-converted time to every checked row, and completes to step 4', async () => {
     const batchViewResult = envelope([{
       products: [{
         prod_oid: 'P2', name: '商品2', plans: [
@@ -365,12 +365,17 @@ describe('batch-wizard panel: shelf_schedule flow', () => {
       }],
     }])
     const createResult = envelope([{ changeset_id: 'cs-2' }])
-    const viewResult = envelope([{ changeset_id: 'cs-2', status: 'pending_approval', nonce: 'n2', diff_version: 'dv-2', diff: { items: [] } }])
+    const viewResult = envelope([{
+      changeset_id: 'cs-2', status: 'pending_approval', nonce: 'n2', diff_version: 'dv-2',
+      diff: { items: [{ prod_oid: 'P2', pkg_oid: 'D', pkg_name: '方案D', current_queue: [], new_queue: [{ reserve_date_utc: '2026-08-20 02:00:00', reserve_status: true }] }] }
+    }])
+    const confirmResult = envelope([{ changeset_id: 'cs-2', status: 'done', results: [{ item_key: 'P2:D', status: 'done', trace_id: 't2' }] }])
 
     const { app, calls, fireLaunch } = makeFakeApp({
       app_get_batch_view: () => batchViewResult,
       app_create_changeset: () => createResult,
       app_get_changeset_view: () => viewResult,
+      app_confirm_changeset: () => confirmResult,
     })
 
     initWizard(app as never)
@@ -400,5 +405,23 @@ describe('batch-wizard panel: shelf_schedule flow', () => {
       prod_oid: 'P2', pkg_oid: 'D',
       queue: [{ reserve_date_utc: '2026-08-20 02:00:00', reserve_status: true }], // brief's UTC test value
     }])
+
+    // Proceed to Step 3 -> 4
+    findByRole(wizardEl, 'toApproveBtn').onclick!()
+    findByRole(wizardEl, 'approveBtn').onclick!()
+    await flush()
+
+    // Step 4: Ledger rendered with human-readable plan name as primary text, raw key as secondary
+    const resultRows = wizardEl.querySelectorAll('[data-item-key]')
+    expect(resultRows.length).toBe(1)
+    
+    const rowD = resultRows[0]
+    expect(rowD.dataset.status).toBe('done')
+    
+    const primary = rowD.querySelector('.bw-ledger-key')
+    const secondary = rowD.querySelector('.bw-plan-name-oid')
+    
+    expect(primary?.textContent).toBe('方案D')
+    expect(secondary?.textContent).toBe('P2:D')
   })
 })
