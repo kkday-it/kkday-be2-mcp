@@ -59,7 +59,7 @@ function seedSession(sid: string, userLabel: string) {
   const identityId = `ident-${sid}`
   identities.upsert({
     identityId, userLabel,
-    accessToken: fakeJwt({ authKey: userLabel }), refreshToken: 'r', businessList: [],
+    accessToken: fakeJwt({ authKey: userLabel, platformId: 'plat-uuid-test' }), refreshToken: 'r', businessList: [],
     accessExpiresAt: Date.now() + 3600_000, updatedAt: Date.now(),
   })
   credentials.insert({
