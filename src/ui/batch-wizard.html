@@ -1,12 +1,14 @@
 <!doctype html><html lang="zh-Hant"><head><meta charset="utf-8"><title>be2 批次精靈</title>
 <style>
-body{font-family:system-ui;margin:12px}
-#progress{display:flex;gap:12px;margin-bottom:12px;font-weight:bold}
-#progress span{padding:4px 8px;border-radius:12px;background:#eee}
-table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:4px}
-.banner{color:#b00;font-weight:bold}
+/* Minimal pre-JS reset only — the real design system is injected by src/ui/batch-wizard.ts
+   (a single <style> tag built from a template-string constant, appended to <head> at bootstrap)
+   so it stays self-contained in the esbuild bundle. This block intentionally avoids ID selectors
+   for #progress/#wizard internals: those would out-specificity the injected class-based rules. */
+body{font-family:system-ui;margin:0}
+.banner{color:#b8281f;background:rgba(255,59,48,.1);border-radius:10px;padding:.625rem .875rem;font-size:.875rem;font-weight:500;white-space:pre-wrap}
 </style>
 </head><body>
+<div id="header"></div>
 <div id="status">載入中…</div>
 <div id="progress"></div>
 <div id="wizard"></div>

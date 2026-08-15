@@ -133,11 +133,17 @@ export interface FakeDocument {
   createElement(tag: string): FakeElement
   querySelectorAll(sel: string): FakeElement[]
   body: FakeElement
+  // Added for Task 7 apple-design pass: src/ui/batch-wizard.ts injects a single <style> element
+  // once via `document.head.appendChild(...)` (real DOM allows <style> in <head> or <body>; head
+  // is the conventional target). Only `.appendChild` is needed by that call site — kept as narrow
+  // as the rest of this file's "hand-roll only what's used" scope.
+  head: FakeElement
 }
 
 export function createFakeDocument(): FakeDocument {
   const registry = new Map<string, FakeElement>()
   const body = new FakeElementImpl('BODY')
+  const head = new FakeElementImpl('HEAD')
   return {
     getElementById(id: string): FakeElement {
       let el = registry.get(id)
@@ -147,5 +153,6 @@ export function createFakeDocument(): FakeDocument {
     createElement(tag: string): FakeElement { return new FakeElementImpl(tag) },
     querySelectorAll(sel: string): FakeElement[] { return queryAll(body, sel) },
     body,
+    head,
   }
 }
