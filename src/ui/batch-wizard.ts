@@ -66,6 +66,9 @@ function itemKeyOf(d: Record<string, unknown>): string {
 const STYLE = `
 :root{--bw-tint:#0A84FF;--bw-danger:#FF3B30;--bw-text:#1d1d1f;--bw-muted:#6e6e73;--bw-border:rgba(0,0,0,.08);--bw-bg-page:#f5f5f7}
 *{box-sizing:border-box}
+/* 列/行元素帶 display:grid/flex 的 class 會蓋掉 UA 的 [hidden]{display:none}——tabs/篩選/隱藏未勾選
+   全靠 hidden 屬性運作，必須用 !important 奪回（fakeDom 測試只驗 .hidden 屬性，抓不到這個真瀏覽器 bug）。 */
+[hidden]{display:none!important}
 html,body{background:var(--bw-bg-page)}
 body{font:100%/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--bw-text);max-width:720px;margin:0 auto;padding:1.5rem 1.25rem 3rem}
 .bw-title{font-size:1.25rem;font-weight:600;letter-spacing:-0.02em;line-height:1.15;margin:0 0 1rem}
