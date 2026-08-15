@@ -126,3 +126,18 @@ RESULT=INVENTORY_PLATFORM_DIFF_BLOCKED_AS_EXPECTED (see docs/be2-mcp/sit-write-c
 - **結論**：
   - `GET /product/api/v1/items/{itemOid}/basic-info` 成功克服了先前 S2S 讀取的 403 授權卡點，使用 user token 即可取得 200 平台現況。
   - `inventory_platform` 與 `shelf_schedule` 兩個 action_type 均取得 100% 讀寫與可逆性驗證成功。
+
+---
+
+## Chrome 開發預覽（dev only）
+
+可以透過真實的 Chrome 開發面板，而非必須使用 Claude Desktop 進行開發迭代。
+
+1. 設定環境變數啟動專案：`BE2_MCP_DEV_PANEL=1 npm run dev`
+2. 使用瀏覽器打開：`http://127.0.0.1:8787/dev/panel/batch-wizard?action_type=shelf_schedule&prod_oids=34133`
+3. 迭代流程：修改 `src/ui/` 下的檔案後，執行 `npm run build:ui` 並重整網頁即可生效。
+
+**安全態勢（Security Posture）**：
+- **預設關閉**：未設置 flag 時相關路由與注入皆不存在（404）。
+- **僅限本機**：只支援在 local loopback（127.0.0.1）開發測試。
+- **嚴禁 Prod 啟用**：開啟此 flag 會繞過對 agent 的 nonce 安全隔離，因為 panel 將能直接存取身分授權。絕對不可在 Production 啟用。

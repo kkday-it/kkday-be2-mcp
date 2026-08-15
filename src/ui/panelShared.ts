@@ -2,6 +2,30 @@
 import { App } from '@modelcontextprotocol/ext-apps'
 
 export async function connectApp(name: string): Promise<App> {
+  if (typeof window !== 'undefined' && (window as any).__DEV_APP_SHIM__) {
+    const devApp = {
+      callServerTool: async (params: { name: string; arguments: any }) => {
+        const res = await fetch('/dev/panel-tool', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(params)
+        })
+        return res.json()
+      },
+      ontoolresult: undefined as any
+    }
+    setTimeout(() => {
+      if (devApp.ontoolresult) {
+        const p = new URLSearchParams(window.location.search)
+        const prod_oids = p.get('prod_oids')?.split(',').filter(Boolean)
+        const items: Record<string, unknown> = {}
+        if (p.has('action_type')) items.action_type = p.get('action_type')
+        if (prod_oids) items.prod_oids = prod_oids
+        devApp.ontoolresult({ structuredContent: { items: [items] } })
+      }
+    }, 0)
+    return devApp as unknown as App
+  }
   const app = new App({ name, version: '0.1.0' })
   await app.connect()
   return app

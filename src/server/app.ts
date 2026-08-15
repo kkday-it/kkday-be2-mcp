@@ -28,6 +28,7 @@ import { buildAuthorizeRouter } from '../oauth/authorizeRoutes.js'
 import { buildTokenRouter } from '../oauth/tokenRoutes.js'
 import { OAuthStore } from '../oauth/oauthStore.js'
 import { registerAppResources } from './appResources.js'
+import { buildDevPanelRouter } from './devPanelRoutes.js'
 import { findProductsTool } from '../tools/findProducts.js'
 import { productPlansTool } from '../tools/productPlans.js'
 import { inventorySettingsTool } from '../tools/inventorySettings.js'
@@ -255,6 +256,11 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     modifyUserFrom: modifyUserFromToken,
     now: Date.now,
   }))
+
+  if (process.env.BE2_MCP_DEV_PANEL === '1') {
+    console.warn('DEV PANEL HARNESS ENABLED — never enable in production (nonce isolation bypassed for local dev)')
+    app.use('/dev', buildDevPanelRouter({ db, appDeps }))
+  }
 
   app.all('/mcp', (req, res) => {
     void (async () => {
