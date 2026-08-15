@@ -465,8 +465,19 @@ describe('batch-wizard panel: shelf_schedule flow', () => {
 
     // 1. Select clear mode
     const statusSelect = findByRole(wizardEl, 'defStatus') as FakeElement
+    const defDate = findByRole(wizardEl, 'defDate') as FakeElement
+    const defHour = findByRole(wizardEl, 'defHour') as FakeElement
+    const defMinute = findByRole(wizardEl, 'defMinute') as FakeElement
+    const defTz = findByRole(wizardEl, 'defTz') as FakeElement
+
     statusSelect.value = 'clear'
+    statusSelect.onchange!()
     
+    expect(defDate.disabled).toBe(true)
+    expect(defHour.disabled).toBe(true)
+    expect(defMinute.disabled).toBe(true)
+    expect(defTz.disabled).toBe(true)
+
     findByRole(wizardEl, 'applyAllBtn').onclick!()
 
     const badgeF = cbF.parentNode!.querySelectorAll('[data-role=coBadge]')[0] as FakeElement
@@ -475,6 +486,13 @@ describe('batch-wizard panel: shelf_schedule flow', () => {
 
     // 2. Un-clear by applying normal time
     statusSelect.value = 'true'
+    statusSelect.onchange!()
+
+    expect(defDate.disabled).toBe(false)
+    expect(defHour.disabled).toBe(false)
+    expect(defMinute.disabled).toBe(false)
+    expect(defTz.disabled).toBe(false)
+
     ;(findByRole(wizardEl, 'defDate') as FakeElement).value = '2026-08-20'
     ;(findByRole(wizardEl, 'defHour') as FakeElement).value = '10'
     ;(findByRole(wizardEl, 'defMinute') as FakeElement).value = '0'
@@ -490,6 +508,7 @@ describe('batch-wizard panel: shelf_schedule flow', () => {
     // 3. Re-clear both for the final payload
     cbF.checked = true
     statusSelect.value = 'clear'
+    statusSelect.onchange!()
     findByRole(wizardEl, 'applyAllBtn').onclick!()
     
     expect(badgeG.hidden).toBe(false)
@@ -503,5 +522,133 @@ describe('batch-wizard panel: shelf_schedule flow', () => {
       { prod_oid: 'P3', pkg_oid: 'F', queue: [] },
       { prod_oid: 'P3', pkg_oid: 'G', queue: [] }
     ])
+  })
+
+  it('shows actionable validation messages for shelf_schedule', async () => {
+    const batchViewResult = envelope([{
+      products: [{
+        prod_oid: 'P1', name: '商品1', plans: [
+          { pkg_oid: 'A', name: '方案A', is_bundle: false, reserve_queue: [] }
+        ],
+      }],
+    }])
+    const { app, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => batchViewResult,
+      app_create_changeset: () => envelope([{ changeset_id: 'cs-1' }])
+    })
+    initWizard(app as never)
+    fireLaunch('shelf_schedule', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+
+    const nextBtn = findByRole(wizardEl, 'nextBtn')
+    const fallbackEl = doc.getElementById('fallback')
+    
+    // Nothing checked
+    nextBtn.onclick!()
+    await flush()
+    expect(fallbackEl.hidden).toBe(false)
+    expect(fallbackEl.textContent).toBe('請至少勾選一筆方案')
+
+    // Checked but no time applied
+    const cbA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    cbA.checked = true
+    cbA.onclick!()
+    
+    nextBtn.onclick!()
+    await flush()
+    expect(fallbackEl.textContent).toBe('已勾選 1 筆但尚未套用——請先按『套用到所有已勾選』設定時間或取消排程')
+  })
+})
+
+describe('batch-wizard panel: additional UI behaviors', () => {
+  const wizardEl = doc.getElementById('wizard')
+  beforeEach(() => { wizardEl.children.length = 0 })
+
+  it('renders tabs for multiple products and controls row visibility', async () => {
+    const batchViewResult = envelope([{
+      products: [
+        { prod_oid: 'P1', name: '商品1', plans: [{ pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', current_platform: 'BE2' }] },
+        { prod_oid: 'P2', name: '商品2', plans: [{ pkg_oid: 'B', name: '方案B', item_oid: 'I2', supplier_oid: 'S2', current_platform: 'BE2' }] },
+      ],
+    }])
+    const { app, fireLaunch } = makeFakeApp({ app_get_batch_view: () => batchViewResult })
+    initWizard(app as never)
+    fireLaunch('inventory_platform', ['P1', 'P2'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+
+    const tabs = wizardEl.querySelectorAll('.bw-tab')
+    expect(tabs.length).toBe(2)
+    
+    const rowA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0].parentNode!
+    const rowB = checkboxesFor(wizardEl, 'pkg-oid', 'B')[0].parentNode!
+
+    // P1 is active by default
+    expect(rowA.hidden).toBe(false)
+    expect(rowB.hidden).toBe(true)
+
+    // Switch to P2
+    tabs[1].onclick!()
+    expect(rowA.hidden).toBe(true)
+    expect(rowB.hidden).toBe(false)
+    expect(tabs[1].className).toContain('bw-tab-active')
+    expect(tabs[0].className).not.toContain('bw-tab-active')
+
+    // Check B in P2, switch back to P1, B is still checked
+    checkboxesFor(wizardEl, 'pkg-oid', 'B')[0].checked = true
+    checkboxesFor(wizardEl, 'pkg-oid', 'B')[0].onclick!()
+    tabs[0].onclick!()
+
+    expect(checkboxesFor(wizardEl, 'pkg-oid', 'B')[0].checked).toBe(true)
+  })
+
+  it('clears stale error banner on success or change', async () => {
+    const batchViewResult = envelope([{
+      products: [{
+        prod_oid: 'P1', name: '商品1', plans: [
+          { pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1' }
+        ],
+      }],
+    }])
+    const { app, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => batchViewResult,
+      app_create_changeset: () => envelope([{ changeset_id: 'cs-1' }]),
+      app_get_changeset_view: () => envelope([{ diff: {} }])
+    })
+    initWizard(app as never)
+    fireLaunch('inventory_platform', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+
+    const nextBtn = findByRole(wizardEl, 'nextBtn')
+    const fallbackEl = doc.getElementById('fallback')
+    const cbA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    
+    // 1. Trigger error
+    nextBtn.onclick!()
+    await flush()
+    expect(fallbackEl.hidden).toBe(false)
+    
+    // 2. Change selection -> clears error
+    cbA.checked = true
+    cbA.onclick!()
+    expect(fallbackEl.hidden).toBe(true)
+
+    // Trigger error again
+    cbA.checked = false
+    cbA.onclick!()
+    nextBtn.onclick!()
+    await flush()
+    expect(fallbackEl.hidden).toBe(false)
+    
+    // 3. Success next -> clears error
+    cbA.checked = true
+    cbA.onclick!()
+    fallbackEl.hidden = false
+    fallbackEl.textContent = 'stale error'
+    nextBtn.onclick!()
+    await flush()
+    expect(fallbackEl.hidden).toBe(true)
   })
 })

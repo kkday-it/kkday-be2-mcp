@@ -89,9 +89,19 @@ body{font:100%/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-se
 .bw-row-footer{display:flex;justify-content:flex-end;align-items:center;gap:.75rem}
 .bw-note{flex:1 1 auto}
 
+/* ---- tabs ---- */
+.bw-tabbar{display:flex;gap:.5rem;margin-bottom:1rem;border-bottom:1px solid var(--bw-border);padding-bottom:.5rem;overflow-x:auto}
+.bw-tab{display:flex;flex-direction:column;gap:.125rem;padding:.375rem .75rem;border-radius:8px;cursor:pointer;border:1px solid transparent;background:transparent;text-align:left;font-family:inherit}
+.bw-tab:hover{background:#f0f0f2}
+.bw-tab-active{background:rgba(10,132,255,.1);border-color:rgba(10,132,255,.2)}
+.bw-tab-name{font-size:.875rem;font-weight:600;color:var(--bw-text)}
+.bw-tab-active .bw-tab-name{color:var(--bw-tint)}
+.bw-tab-oid{font-size:.6875rem;color:var(--bw-muted)}
+
 /* ---- inputs ---- */
 .bw-input,.bw-select{height:2rem;padding:0 .625rem;border-radius:8px;border:1px solid rgba(0,0,0,.14);font:inherit;font-size:.875rem;background:#fff;color:var(--bw-text)}
 .bw-input:focus-visible,.bw-select:focus-visible{outline:2px solid var(--bw-tint);outline-offset:1px;border-color:var(--bw-tint)}
+.bw-input:disabled,.bw-select:disabled{opacity:.5;cursor:not-allowed;background:#f5f5f7}
 input.bw-input[type=text]{flex:1 1 auto;min-width:8rem}
 input.bw-input[type=number]{width:4.5rem}
 
@@ -204,6 +214,7 @@ interface RowState {
 }
 
 function showFallback(el: HTMLElement, m: string): void { el.hidden = false; el.textContent = m }
+function clearFallback(el: HTMLElement): void { el.hidden = true; el.textContent = '' }
 
 // Recomputes a plan row's visual state (checked tint / bundle dim) from its current
 // checkbox/is_bundle state. Presentation-only — never touches `checked` itself. Called on initial
@@ -344,17 +355,15 @@ export function initWizard(app: WizardApp): void {
       } catch (e) { showFallback(fallbackEl, '載入失敗：' + String(e)) }
     }
 
-    // 列可見性（review fix 2, spec §5.4）：filter（比對方案名/pkg_oid,即時）與「隱藏未勾選」toggle
-    // 兩個條件都成立才顯示。只影響顯示,不動 checked 狀態——buildXxxItems() 仍以 checked 為準,
-    // 被 filter 藏起來的已勾選列一樣會進批次（所以配 fix 3 的整組連動,不會出現「看不見但被送出」
-    // 的驚喜組合:被藏的列必然是使用者自己勾的或連動標示過的）。
     let filterQuery = ''
     let hideUnchecked = false
+    let activeProdOid: string | undefined
     function applyVisibility(): void {
       const q = filterQuery.toLowerCase()
       for (const r of rows) {
         const matchesFilter = q === '' || r.pkg_name.toLowerCase().includes(q) || r.pkg_oid.toLowerCase().includes(q)
-        r.rowEl.hidden = !matchesFilter || (hideUnchecked && !r.checkbox.checked)
+        const inActiveTab = !activeProdOid || r.prod_oid === activeProdOid
+        r.rowEl.hidden = !inActiveTab || !matchesFilter || (hideUnchecked && !r.checkbox.checked)
       }
     }
 
@@ -364,11 +373,37 @@ export function initWizard(app: WizardApp): void {
       radioButtons = []
       filterQuery = ''
       hideUnchecked = false
+      activeProdOid = products.length > 1 ? products[0]?.prod_oid : undefined
 
       const cardTitle = document.createElement('div')
       cardTitle.className = 'bw-card-title'
       renderText(cardTitle, '方案清單')
       container.appendChild(cardTitle)
+
+      if (products.length > 1) {
+        const tabbar = document.createElement('div')
+        tabbar.className = 'bw-tabbar'
+        for (const prod of products) {
+          const tab = document.createElement('button')
+          tab.className = `bw-tab ${prod.prod_oid === activeProdOid ? 'bw-tab-active' : ''}`
+          const nameSpan = document.createElement('span')
+          nameSpan.className = 'bw-tab-name'
+          renderText(nameSpan, prod.name ?? prod.prod_oid)
+          const oidSpan = document.createElement('span')
+          oidSpan.className = 'bw-tab-oid'
+          renderText(oidSpan, prod.prod_oid)
+          tab.appendChild(nameSpan)
+          tab.appendChild(oidSpan)
+          tab.onclick = () => {
+            activeProdOid = prod.prod_oid
+            for (const t of tabbar.querySelectorAll('.bw-tab')) t.className = 'bw-tab'
+            tab.className = 'bw-tab bw-tab-active'
+            applyVisibility()
+          }
+          tabbar.appendChild(tab)
+        }
+        container.appendChild(tabbar)
+      }
 
       const filterBar = document.createElement('div')
       filterBar.className = 'bw-table-toolbar'
@@ -394,6 +429,7 @@ export function initWizard(app: WizardApp): void {
           const label = document.createElement('label')
           const r = document.createElement('input')
           r.type = 'radio'; r.name = 'target'; r.value = target
+          r.onchange = () => { clearFallback(fallbackEl) }
           radioButtons.push(r)
           label.appendChild(r)
           const span = document.createElement('span'); renderText(span, target)
@@ -436,6 +472,7 @@ export function initWizard(app: WizardApp): void {
           rows.push(rs)
           updateRowChecked(rs)
           cb.onclick = () => {
+            clearFallback(fallbackEl)
             if (actionType === 'inventory_platform') syncSiblings(rs)
             updateRowChecked(rs)
             applyVisibility() // hideUnchecked 開啟時,勾/取消勾都可能改變本列(與連動列)的可見性
@@ -496,6 +533,9 @@ export function initWizard(app: WizardApp): void {
           container.appendChild(row)
         }
       }
+      // 初始渲染就套用一次可見性——多商品時預設只顯示第一個 tab 的方案；
+      // 少了這行,非 active 商品的列會全部可見直到第一次點 tab/filter 才被隱藏。
+      applyVisibility()
     }
 
     // 寫入單位是 (item_oid, supplier_oid)（src/changeset/types.ts InventoryPlatformItem;
@@ -541,7 +581,12 @@ export function initWizard(app: WizardApp): void {
         const opt = document.createElement('option'); opt.value = v; renderText(opt, label); status.appendChild(opt)
       }
       status.value = 'true'
+      status.onchange = () => {
+        const isClear = status.value === 'clear'
+        date.disabled = isClear; hour.disabled = isClear; minute.disabled = isClear; tz.disabled = isClear;
+      }
       const applyBtn = secondaryBtn('套用到所有已勾選', 'applyAllBtn', () => {
+        clearFallback(fallbackEl)
         lastTz = tz.value
         const isClear = status.value === 'clear'
         const utc = isClear ? '' : toReserveDateUtc(date.value, Number(hour.value), Number(minute.value), tz.value)
@@ -587,7 +632,19 @@ export function initWizard(app: WizardApp): void {
 
     async function doNext(): Promise<void> {
       const items = actionType === 'inventory_platform' ? buildInventoryPlatformItems() : buildShelfScheduleItems()
-      if (items.length === 0) { showFallback(fallbackEl, '請至少勾選一筆並填妥必要欄位'); return }
+      if (items.length === 0) {
+        const checkedNonBundleCount = rows.filter(r => r.checkbox.checked && !r.is_bundle).length
+        const totalCheckedCount = rows.filter(r => r.checkbox.checked).length
+        if (actionType === 'shelf_schedule' && checkedNonBundleCount > 0) {
+          showFallback(fallbackEl, `已勾選 ${checkedNonBundleCount} 筆但尚未套用——請先按『套用到所有已勾選』設定時間或取消排程`)
+        } else if (totalCheckedCount === 0) {
+          showFallback(fallbackEl, '請至少勾選一筆方案')
+        } else {
+          showFallback(fallbackEl, '請至少勾選一筆並填妥必要欄位')
+        }
+        return
+      }
+      clearFallback(fallbackEl)
       statusEl.textContent = '建立變更中…'
       try {
         const createR = await app.callServerTool({
