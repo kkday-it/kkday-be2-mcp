@@ -123,6 +123,14 @@ export function openDb(path: string): Database.Database {
   if (wsCols.length > 0 && !wsCols.some(c => c.name === 'identity_id')) {
     db.exec('DROP TABLE web_sessions')
   }
+  // Phase 2a 的 capability-URL 機制在 change_sets 留了 approval_token_hash NOT NULL；Phase 2b
+  // 移除該機制後 schema 不再有這欄，但既有 on-disk db 的舊欄會讓現行 INSERT（不帶該欄）撞
+  // NOT NULL constraint（live 2026-08-15：面板建立 change-set 全掛）。該欄無索引、無現行讀取者，
+  // 直接 DROP COLUMN（保留其餘歷史資料）。
+  const csCols = db.prepare("PRAGMA table_info(change_sets)").all() as Array<{ name: string }>
+  if (csCols.some(c => c.name === 'approval_token_hash')) {
+    db.exec('ALTER TABLE change_sets DROP COLUMN approval_token_hash')
+  }
   db.exec(MIGRATIONS)
   // Task 10：oauth_refresh 補一欄 access_cred_hash——記錄「這顆 refresh 核發當下同批鑄出的
   // access credential 是哪一列」，供 rotation 精準刪除舊 access（只刪這一列，不誤刪同 identity

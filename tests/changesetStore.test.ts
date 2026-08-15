@@ -1,4 +1,8 @@
 import { describe, it, expect } from 'vitest'
+import Database from 'better-sqlite3'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { openDb } from '../src/store/db.js'
 import { ChangeSetStore } from '../src/changeset/store.js'
 import type { ChangeSetRecord, DiffItem } from '../src/changeset/types.js'
@@ -13,6 +17,24 @@ function rec(over: Partial<ChangeSetRecord> = {}): ChangeSetRecord {
   }
 }
 describe('ChangeSetStore', () => {
+  // Phase 2a 時代的 on-disk db：change_sets 還有 approval_token_hash NOT NULL（capability-URL
+  // 機制殘留，Phase 2b 已從 schema 移除）。CREATE TABLE IF NOT EXISTS 不補不砍 → 現行 INSERT
+  // 不帶該欄 → SQLITE_CONSTRAINT_NOTNULL（live 2026-08-15，wizard 面板建立 change-set 全掛）。
+  it('openDb 對 legacy change_sets（含 approval_token_hash NOT NULL）自動移除該欄，create 不再炸', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'be2mcp-cs-')), 'legacy.sqlite')
+    const legacy = new Database(path)
+    legacy.exec(`CREATE TABLE change_sets (
+      id TEXT PRIMARY KEY, creator_label TEXT NOT NULL, creator_bearer_hash TEXT NOT NULL,
+      session_id TEXT NOT NULL, action_type TEXT NOT NULL, items_json TEXT NOT NULL,
+      diff_json TEXT NOT NULL, diff_version TEXT NOT NULL, note TEXT, status TEXT NOT NULL,
+      approval_token_hash TEXT NOT NULL, created_at INTEGER NOT NULL, decided_at INTEGER
+    );`)
+    legacy.close()
+
+    const s = new ChangeSetStore(openDb(path), { now: () => 1000 })
+    s.create(rec())
+    expect(s.get('cs1')!.id).toBe('cs1')
+  })
   it('round-trips a record', () => {
     const s = new ChangeSetStore(openDb(':memory:'), { now: () => 1000 })
     s.create(rec())
