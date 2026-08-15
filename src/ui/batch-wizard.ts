@@ -18,6 +18,14 @@ interface AffectedPkg { prod_oid: string; pkg_oid: string; pkg_name: string }
 // for anything beyond the wizard's local<->UTC display/input conversion.
 const TZ_OFFSET_HOURS: Record<string, number> = { 'Asia/Taipei': 8, 'Asia/Tokyo': 9, UTC: 0 }
 
+// 供應商庫存管理的人話標籤（對齊 be2/BAA 的 radio 文案；值仍是 enum 碼）
+const PLATFORM_LABELS: Record<string, string> = {
+  BE2: 'BE2 管理',
+  BE2_SCM: 'BE2 / SCM 管理',
+  EXTERNAL: '串接外部庫存（包含 rezio）',
+}
+const platformLabel = (v: string | null | undefined): string => (v == null ? '無法讀取' : (PLATFORM_LABELS[v] ?? v))
+
 const ACTION_LABELS: Record<ActionType, string> = {
   inventory_platform: '批次庫存平台調整',
   shelf_schedule: '批次上架排程設定',
@@ -502,7 +510,7 @@ export function initWizard(app: WizardApp): void {
           }
           radioButtons.push(r)
           label.appendChild(r)
-          const span = document.createElement('span'); renderText(span, target)
+          const span = document.createElement('span'); renderText(span, platformLabel(target))
           label.appendChild(span)
           radioBar.appendChild(label)
         }
@@ -647,7 +655,7 @@ export function initWizard(app: WizardApp): void {
         r.detailEl.appendChild(suppLabel)
 
         const curLabel = document.createElement('span')
-        const curPlatformText = r.current_platform != null ? r.current_platform : '無法讀取'
+        const curPlatformText = platformLabel(r.current_platform)
         const isCurNull = r.current_platform == null
         if (isCurNull) curLabel.className = 'bw-detail-muted'
         renderText(curLabel, `目前平台: ${curPlatformText}`)
@@ -657,10 +665,10 @@ export function initWizard(app: WizardApp): void {
         const target = radioButtons.find(b => b.checked)?.value ?? 'BE2'
         if (r.current_platform === target) {
           previewLabel.className = 'bw-target-preview bw-preview-noop'
-          renderText(previewLabel, ` → ${target} (相同，將略過)`)
+          renderText(previewLabel, ` → ${platformLabel(target)} (相同，將略過)`)
         } else {
           previewLabel.className = 'bw-target-preview'
-          renderText(previewLabel, ` → ${target}`)
+          renderText(previewLabel, ` → ${platformLabel(target)}`)
         }
         r.detailEl.appendChild(previewLabel)
 

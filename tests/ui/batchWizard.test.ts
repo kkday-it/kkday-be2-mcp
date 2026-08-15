@@ -209,8 +209,8 @@ describe('batch-wizard panel: inventory_platform flow', () => {
     let detailRows = wizardEl.querySelectorAll('.bw-detail-row')
     expect(detailRows.length).toBe(1)
     expect(detailRows[0].textContent).toContain('供應商: S2 供2')
-    expect(detailRows[0].textContent).toContain('目前平台: BE2_SCM')
-    expect(detailRows[0].textContent).toContain('→ BE2')
+    expect(detailRows[0].textContent).toContain('目前平台: BE2 / SCM 管理')
+    expect(detailRows[0].textContent).toContain('→ BE2 管理')
     expect(detailRows[0].textContent).toContain('庫存模式: SKU依日期')
 
     // 3. Radio change updates preview
@@ -219,7 +219,7 @@ describe('batch-wizard panel: inventory_platform flow', () => {
     extRadio.checked = true
     extRadio.onchange!()
     
-    expect(detailRows[0].textContent).toContain('→ EXTERNAL')
+    expect(detailRows[0].textContent).toContain('→ 串接外部庫存（包含 rezio）')
 
     const scmRadio = radios.find(r => r.value === 'BE2_SCM')!
     scmRadio.checked = true
