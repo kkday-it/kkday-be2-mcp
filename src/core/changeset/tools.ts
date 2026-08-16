@@ -116,7 +116,11 @@ export const createChangesetTool: L2ToolDef = {
     'yourself — report the changeset_id and the diff to the user and tell them to open the confirm page to decide. ' +
     'Only pass oids you already looked up this session. ' +
     'inventory_setting stages per-date inventory quantity changes ({item_oid, supplier_oid, op: set|adjust, quantity, dates}); ' +
-    'read the item inventory first — adjust is computed against live quantities at approval time.',
+    'read the item inventory first — adjust is computed against live quantities at approval time. ' +
+    'Before staging, you MUST confirm 3 things with the user: (1) explicit plan list (confirm each pkg_oid, no vague "all"); ' +
+    '(2) whether to apply immediately (shelf_toggle_plan) or schedule (shelf_schedule); ' +
+    '(3) if scheduling, the exact date, time, and TIMEZONE (ask if not provided, do not guess). ' +
+    'Convert local time to UTC "YYYY-MM-DD HH:mm:ss" for reserve_date_utc. If any is missing, ASK first, do NOT stage.',
   inputShape,
   uiResourceUri: 'ui://be2/changeset-panel.html',
   async handler(args, ctx: L2ToolContext) {
