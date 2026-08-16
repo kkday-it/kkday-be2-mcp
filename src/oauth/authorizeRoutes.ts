@@ -79,8 +79,55 @@ export function buildAuthorizeRouter(deps: AuthorizeDeps): express.Router {
     // Live-verified 2026-08-13 (playwright capture of real be2-web login): be2-web opens the
     // login popup with NO redirectPath; adding one makes the be2-auth SPA client-route to /404.
     const loginUrl = `${deps.authOrigin}/auth/be2/login?loginFlow=POPUP`
-    res.status(200).send(`<!doctype html><meta charset=utf-8><title>be2 登入</title>
-<body><p>需登入 be2 才能授權此 client。</p><button id="loginBtn">登入 be2</button><p id="msg"></p><script>
+    res.status(200).send(`<!doctype html>
+<html lang="zh-Hant">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>連接 Claude 與 be2 — 授權登入</title>
+<style>
+  :root { --bg:#f5f5f7; --card:#fff; --text:#1d1d1f; --muted:#6e6e73; --border:rgba(0,0,0,.08); --tint:#0A84FF; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; display:flex; justify-content:center; align-items:center; min-height:100vh; padding:16px; box-sizing:border-box; }
+  .card { background:var(--card); width:100%; max-width:400px; border-radius:14px; box-shadow:0 1px 2px rgba(0,0,0,.04), 0 4px 12px rgba(0,0,0,.04); padding:32px; box-sizing:border-box; text-align:center; }
+  @media (max-width:480px) {
+    body { padding:0; align-items:stretch; }
+    .card { border-radius:0; box-shadow:none; max-width:100%; padding:32px 24px; display:flex; flex-direction:column; justify-content:center; }
+  }
+  .signature { margin:0 auto 24px; width:200px; display:block; }
+  .signature .dash { stroke-dasharray:6; animation:dash-flow 20s linear infinite reverse; }
+  .signature.loading .dash { animation-duration:2s; }
+  @media (prefers-reduced-motion: reduce) { .signature .dash { animation:none; } }
+  @keyframes dash-flow { to { stroke-dashoffset: 100; } }
+  h1 { font-size:1.25rem; font-weight:650; letter-spacing:-0.02em; margin:0 0 12px; }
+  p { font-size:.9375rem; line-height:1.6; margin:0 0 24px; }
+  .trust-points { text-align:left; margin:0 0 24px; padding:0; list-style:none; color:var(--muted); font-size:.8125rem; line-height:1.5; }
+  .trust-points li { position:relative; padding-left:20px; margin-bottom:8px; }
+  .trust-points li::before { content:"✓"; position:absolute; left:0; top:0; }
+  button { width:100%; background:var(--tint); color:#fff; border:none; border-radius:10px; padding:12px; font-size:1rem; cursor:pointer; transition:filter .2s; }
+  button:hover { filter:brightness(1.1); }
+  button:focus-visible { outline:2px solid var(--tint); outline-offset:2px; }
+  #msg { color:var(--muted); font-size:.9375rem; min-height:1.5em; margin:16px 0 24px; }
+  .footer { font-size:.8125rem; color:var(--muted); margin:0; }
+</style>
+<div class="card">
+  <svg class="signature" id="conn" viewBox="0 0 200 60" xmlns="http://www.w3.org/2000/svg">
+    <line class="dash" x1="60" y1="30" x2="140" y2="30" stroke="var(--muted)" stroke-width="2" />
+    <circle cx="30" cy="30" r="30" fill="#D97757" />
+    <text x="30" y="34" fill="#fff" font-size="12" font-family="sans-serif" font-weight="600" text-anchor="middle">Claude</text>
+    <circle cx="170" cy="30" r="30" fill="#26BEC9" />
+    <text x="170" y="34" fill="#fff" font-size="14" font-family="sans-serif" font-weight="600" text-anchor="middle">be2</text>
+  </svg>
+  <h1>連接 Claude 與 be2</h1>
+  <p>Claude 請求以你的 be2 身分存取商品後台。登入後，agent 才能替你查詢商品與方案。</p>
+  <ul class="trust-points">
+    <li>登入視窗是 be2 官方登入頁，本頁不會經手你的密碼</li>
+    <li>所有寫入都需你在確認頁親自批准後才會執行</li>
+    <li>憑證存於公司內網，不外傳</li>
+  </ul>
+  <button id="loginBtn">使用 be2 帳號登入</button>
+  <div id="msg"></div>
+  <div class="footer">身分由 kkday-auth-service 驗證 · be2-mcp</div>
+</div>
+<script>
   var AUTH_ORIGIN = ${js(deps.authOrigin)};
   var LOGIN_URL = ${js(loginUrl)};
   var CLIENT_ID = ${js(clientId)};
@@ -90,6 +137,10 @@ export function buildAuthorizeRouter(deps: AuthorizeDeps): express.Router {
   var pop = null;
   // window.open MUST run inside a user gesture (click) — browsers block popups opened on load.
   document.getElementById('loginBtn').addEventListener('click', function () {
+    // Defensive: tests/launcherHarness.ts 的 fake DOM 元素沒有 classList——動畫加速是純裝飾，
+    // 拿不到就跳過，絕不讓裝飾行為擋住登入主流程。
+    var conn = document.getElementById('conn');
+    if (conn && conn.classList) conn.classList.add('loading');
     pop = window.open(LOGIN_URL, 'be2login', 'width=480,height=640');
     document.getElementById('msg').textContent = '請於彈出視窗登入…';
   });
@@ -118,7 +169,8 @@ export function buildAuthorizeRouter(deps: AuthorizeDeps): express.Router {
       .then(function(d){ if(pop) pop.close(); location.replace(d.redirectTo); })
       .catch(function(){ document.getElementById('msg').textContent = '登入失敗,請重試。'; });
   });
-</script></body>`)
+</script>
+</html>`)
   })
 
   // POST /oauth/authorize/complete — 這是一個公開端點（如 /confirm/session），任何人都能直接
