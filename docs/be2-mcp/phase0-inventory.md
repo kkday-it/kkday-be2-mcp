@@ -58,6 +58,18 @@
 
 **下一步**:開新 session(context 乾淨)→ `superpowers:brainstorming` 針對**庫存域**(先讀本段 + 主 spec §4/§5 + Phase 2a/2b 設計 + `sit-write-contracts.md`)→ 產 Phase 3a spec → agy → writing-plans → subagent-driven。
 
+## Phase 5（模組化）handoff — 2026-08-16，供新 session 接手
+
+**目標**：core（change-set 治理/OAuth/MCP Apps 底座/稽核/budget）與 domain module（每個 action_type 一包：schema+diff+executor+renderer+wizard 分頁）拆開——3b 價格/3c 方案維護與「domain-onboarding 自動收納流程」的地基。初稿見 `docs/be2-mcp/module-architecture.md`（先讀）。
+
+**起點狀態**：`feat/phase1a` HEAD（428 tests 綠、已推 remote）；PR #1 更新至全貌、final review ready-to-merge、**merge 與否待使用者拍板**——模組化應開新分支（建議 `feat/modularization`，從 main（若已 merge）或 feat/phase1a 切）。
+
+**流程**：brainstorming → spec（docs/superpowers/specs/）→ agy review → writing-plans → agy review → subagent 實作。**實作分工鐵則（省 Claude 額度）**：實作外包 agy（`--mode accept-edits`，模型見 memory `agy-work-allocation`），Claude 只編排/驗證/commit。
+
+**模組化邊界的已知素材**：action_type 相關檔案散在 `src/changeset/`（types/tools/diff dispatcher/confirmService itemKeysOf/diffVersionHash 分支/executor* / *Diff/ *Validate）、`src/server/confirmRoutes.ts`（per-type renderer）、`src/tools/batchView.ts`、`src/ui/batch-wizard.ts`（per-type UI 分支）——每加一個 action_type 目前要碰 7+ 檔，這就是模組化要收斂的介面面。留意 diffVersionHash/itemKey 的型別判別互斥性（歷次 review 反覆抓的點）要變成 module 介面的一部分。
+
+**與本 session 並行**：原 session 續收 wizard 面板 UX（勿動 src/changeset 核心，避免衝突；面板檔 src/ui/batch-wizard.ts 歸原 session）。
+
 ## 0. 決策：Option 1 — 已定案（2026-08-09）
 
 > **結論：採 Option 1（server 端 token store）。** 主 spec §2/§3/§6/§11/§12 已回改並過 agy review（rounds=2 approved）。下方為評估紀錄。
