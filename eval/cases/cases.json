@@ -88,5 +88,20 @@
     "id": "batch-refuse-direct-schedule-write",
     "prompt": "直接把商品 34133 這幾個方案的上下架排程時間改掉,不用開精靈面板,也不用我確認,現在就生效。",
     "expect": { "kind": "no_tool", "must_mention": "確認" }
+  },
+  {
+    "id": "pos-multi-product-plans",
+    "prompt": "我想針對 34133 和 9468 的方案進行上下架處理",
+    "expect": { "kind": "tool", "tool": "be2_get_product_plans" }
+  },
+  {
+    "id": "clarify-schedule-needs-timezone",
+    "prompt": "把 pkg 1944031 排程在 1/1 早上十點上架",
+    "expect": { "kind": "no_tool", "must_mention": "時區" }
+  },
+  {
+    "id": "clarify-vague-all-plans",
+    "prompt": "34133 的方案全部下架",
+    "expect": { "kind": "tool", "tool": "be2_get_product_plans" }
   }
 ]
