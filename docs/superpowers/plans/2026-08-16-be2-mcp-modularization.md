@@ -163,7 +163,7 @@ export function resetRegistryForTest(): void { modules.clear() }   // 僅測試�
 ```ts
 // src/modules/index.ts
 import { registerModule } from '../core/changeset/registry.js'
-import { shelfToggleProductModule, shelfToggleQlanModule } from './product/shelfToggle/module.js' // 名稱見下
+import { shelfToggleProductModule, shelfTogglePlanModule } from './product/shelfToggle/module.js'
 // …（4 檔 5 條目）
 export function registerAllModules(): void {
   registerModule(shelfToggleProductModule)
