@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { openDb } from '../src/store/db.js'
-import { ChangeSetStore } from '../src/changeset/store.js'
+import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { ReadOidStore } from '../src/store/readOidStore.js'
 import { RateBudget } from '../src/limits/rateBudget.js'
-import { createChangesetTool, INVENTORY_ACTION_CODES } from '../src/changeset/tools.js'
+import { createChangesetTool, INVENTORY_ACTION_CODES } from '../src/core/changeset/tools.js'
 import type { L2ToolContext } from '../src/server/l2Context.js'
-import { validateInventoryItems } from '../src/changeset/inventoryValidate.js'
-import type { InventoryItem } from '../src/changeset/types.js'
+import { validateInventoryItems } from '../src/modules/product/inventorySetting/validate.js'
+import type { InventoryItem } from '../src/core/changeset/types.js'
 
 const NOW = Date.parse('2026-08-10T00:00:00Z')
 const base: InventoryItem = { item_oid: 'i1', supplier_oid: 's1', op: 'adjust', quantity: 50, dates: ['2026-08-15'] }

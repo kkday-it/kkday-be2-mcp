@@ -1,12 +1,12 @@
 import { trace } from '@opentelemetry/api'
 import type { ChangeSetStore } from './store.js'
-import type { GatewayClient } from '../gateway/client.js'
-import type { AuditLog } from '../audit/auditLog.js'
+import type { GatewayClient } from '../../gateway/client.js'
+import type { AuditLog } from '../../audit/auditLog.js'
 import type { ItemResult, ChangeSetItem } from './types.js'
-import { AppError } from '../errors.js'
-import { getModule } from '../core/changeset/registry.js'
-import type { ExecCtx } from '../core/changeset/module.js'
-import '../modules/index.js'
+import { AppError } from '../../errors.js'
+import { getModule } from './registry.js'
+import type { ExecCtx } from './module.js'
+import '../../modules/index.js'
 
 export interface ExecutorDeps {
   changeSets: ChangeSetStore; gateway: GatewayClient; audit: AuditLog; now: () => number

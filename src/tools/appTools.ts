@@ -2,7 +2,7 @@ import { z } from 'zod'
 import type { AppToolDef, AppToolContext } from '../server/appPipeline.js'
 import { makeEnvelope, toEnvelopeError } from './envelope.js'
 import { buildBatchView } from './batchView.js'
-import { createChangesetCore, createChangesetInputShape } from '../changeset/tools.js'
+import { createChangesetCore, createChangesetInputShape } from '../core/changeset/tools.js'
 
 // 無 existence leak：找不到 id 與「id 存在但非自己建立」回同一種錯誤，讓外部觀察者無法用
 // error 差異探測他人 change-set 是否存在。

@@ -1,6 +1,6 @@
-import type { ChangeSetItem, ChangeSetRecord, ItemResult } from '../../../changeset/types.js'
+import type { ChangeSetItem, ChangeSetRecord, ItemResult } from '../../../core/changeset/types.js'
 import type { ExecCtx } from '../../../core/changeset/module.js'
-import { itemKey } from '../../../changeset/executor.js'
+import { itemKey } from '../../../core/changeset/executor.js'
 
 // READ-ONLY fields that the /switch write endpoint rejects (Task 1 SIT probe finding #3 confirmed).
 // market_external_edit_blocked / market_edit_block_change_reason are candidate read-only fields too;

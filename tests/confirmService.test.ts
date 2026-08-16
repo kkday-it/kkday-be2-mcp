@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import { openDb } from '../src/store/db.js'
-import { ChangeSetStore } from '../src/changeset/store.js'
+import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
-import { approveAndExecute, type ConfirmServiceDeps } from '../src/changeset/confirmService.js'
-import { computeChangesetDiff } from '../src/changeset/diff.js'
+import { approveAndExecute, type ConfirmServiceDeps } from '../src/core/changeset/confirmService.js'
+import { computeChangesetDiff } from '../src/modules/product/shelfToggle/diff.js'
 import { getModule } from '../src/core/changeset/registry.js'
 import '../src/modules/index.js'
-import type { ChangeSetRecord, InventoryItem } from '../src/changeset/types.js'
+import type { ChangeSetRecord, InventoryItem } from '../src/core/changeset/types.js'
 
 // Task 11 Finding 1: tests/appConfirm.test.ts only exercises a FAKE approveAndExecute (it stubs
 // `ctx.approveAndExecute` directly), so the REAL confirmed_keys Set-equality gate inside

@@ -1,7 +1,7 @@
-import { getModule } from '../core/changeset/registry.js'
-import '../modules/index.js'
+import { getModule } from './registry.js'
+import '../../modules/index.js'
 import { executeChangeSet, itemKey, type ExecutorDeps } from './executor.js'
-import { AppError } from '../errors.js'
+import { AppError } from '../../errors.js'
 import type { ChangeSetRecord, ChangeSetItem, InventoryItem, InventoryPlatformItem, ShelfScheduleItem, ItemResult } from './types.js'
 
 // Task 11: the change-set approval+execution sequence used to live ONLY inside

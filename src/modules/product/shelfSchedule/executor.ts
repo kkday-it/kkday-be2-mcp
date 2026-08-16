@@ -1,7 +1,7 @@
 import type { GatewayClient } from '../../../gateway/client.js'
-import { sanitizeQueue } from '../../../changeset/batchValidate.js'
-import { queuesEqual, sortQueue } from '../../../changeset/scheduleDiff.js'
-import type { ChangeSetRecord, ScheduleEntry, ShelfScheduleItem, ItemResult } from '../../../changeset/types.js'
+import { sanitizeQueue } from './validate.js'
+import { queuesEqual, sortQueue } from './diff.js'
+import type { ChangeSetRecord, ScheduleEntry, ShelfScheduleItem, ItemResult } from '../../../core/changeset/types.js'
 import type { ExecCtx } from '../../../core/changeset/module.js'
 
 // Same batch-executor shape as executorPlatform.ts's ExecutorContext (Task 3) — no per-item

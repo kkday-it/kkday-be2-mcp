@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { openDb } from '../src/store/db.js'
-import { ChangeSetStore } from '../src/changeset/store.js'
+import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
-import { executeChangeSet, type ExecutorDeps, type ExecutorIdentity } from '../src/changeset/executor.js'
-import type { InventoryItem } from '../src/changeset/types.js'
+import { executeChangeSet, type ExecutorDeps, type ExecutorIdentity } from '../src/core/changeset/executor.js'
+import type { InventoryItem } from '../src/core/changeset/types.js'
 
 const WHO: ExecutorIdentity = { accessToken: 'sess-token', userLabel: 'approver@kkday.com', modifyUser: 'UUID-1', sessionId: 'websess-1' }
 

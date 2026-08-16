@@ -1,6 +1,6 @@
 import type { z } from 'zod'
 import type { ToolContext } from '../../tools/types.js'
-import type { ChangeSetRecord, ItemResult } from '../../changeset/types.js'
+import type { ChangeSetRecord, ItemResult } from './types.js'
 
 // diff 計算的 ctx = 既有 diff 函式實際吃的 ToolContext（src/tools/types.ts:5
 // {gateway, accessToken, userLabel}）——純重構：不縮水、不重造。

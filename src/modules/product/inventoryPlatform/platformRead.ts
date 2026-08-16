@@ -1,5 +1,5 @@
-import type { GatewayClient } from '../gateway/client.js'
-import { DiffError } from './diff.js'
+import type { GatewayClient } from '../../../gateway/client.js'
+import { DiffError } from '../shelfToggle/diff.js'
 
 // Task 1 定案 (docs/be2-mcp/sit-write-contracts.md §inventory-platform read):
 // GET items/{itemOid}/basic-info -> data.item_config.supplier_configs[]

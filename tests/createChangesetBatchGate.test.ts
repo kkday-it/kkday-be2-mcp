@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { openDb } from '../src/store/db.js'
-import { ChangeSetStore } from '../src/changeset/store.js'
+import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { ReadOidStore } from '../src/store/readOidStore.js'
 import { RateBudget } from '../src/limits/rateBudget.js'
-import { createChangesetTool } from '../src/changeset/tools.js'
+import { createChangesetTool } from '../src/core/changeset/tools.js'
 import type { L2ToolContext } from '../src/server/l2Context.js'
 
 // Spec §4.3 businessList degrade gate for the two NEW action_types. Diff wiring for these
@@ -12,12 +12,12 @@ import type { L2ToolContext } from '../src/server/l2Context.js'
 // Phase 5 Task 4: modules now call computePlatformDiff/computeScheduleDiff DIRECTLY (the
 // computeChangesetDiff dispatcher is a deprecated thin wrapper), so the mock target moves to
 // the underlying per-type diff modules — same isolation semantics as before.
-vi.mock('../src/changeset/platformDiff.js', async importOriginal => {
-  const orig = await importOriginal<typeof import('../src/changeset/platformDiff.js')>()
+vi.mock('../src/modules/product/inventoryPlatform/diff.js', async importOriginal => {
+  const orig = await importOriginal<typeof import('../src/modules/product/inventoryPlatform/diff.js')>()
   return { ...orig, computePlatformDiff: vi.fn(async () => []) }
 })
-vi.mock('../src/changeset/scheduleDiff.js', async importOriginal => {
-  const orig = await importOriginal<typeof import('../src/changeset/scheduleDiff.js')>()
+vi.mock('../src/modules/product/shelfSchedule/diff.js', async importOriginal => {
+  const orig = await importOriginal<typeof import('../src/modules/product/shelfSchedule/diff.js')>()
   return { ...orig, computeScheduleDiff: vi.fn(async () => []) }
 })
 

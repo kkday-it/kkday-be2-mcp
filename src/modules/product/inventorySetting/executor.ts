@@ -1,5 +1,5 @@
 import type { GatewayClient } from '../../../gateway/client.js'
-import type { InventoryItem, ItemResult, ChangeSetRecord } from '../../../changeset/types.js'
+import type { InventoryItem, ItemResult, ChangeSetRecord } from '../../../core/changeset/types.js'
 import { DATE_KEYS, QTY_KEYS, ROWS_KEYS, findRows, groupDatesByMonth, parseQuantities, rowDate, setRowQty } from '../../../tools/inventoryShape.js'
 import type { ExecCtx } from '../../../core/changeset/module.js'
 

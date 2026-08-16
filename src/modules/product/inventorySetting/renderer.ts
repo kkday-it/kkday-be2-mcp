@@ -1,5 +1,5 @@
 import { esc } from '../../../core/changeset/html.js'
-import type { ChangeSetRecord, InventoryDiffItem } from '../../../changeset/types.js'
+import type { ChangeSetRecord, InventoryDiffItem } from '../../../core/changeset/types.js'
 import type { ConfirmView } from '../../../core/changeset/module.js'
 
 export function renderConfirm(rec: ChangeSetRecord, diff: InventoryDiffItem[], diffVersion: string, banner: string): ConfirmView {

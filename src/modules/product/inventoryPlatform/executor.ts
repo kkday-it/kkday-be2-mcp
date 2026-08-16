@@ -1,7 +1,7 @@
 import type { GatewayClient } from '../../../gateway/client.js'
-import { platformToBooleans, booleansToPlatform } from '../../../changeset/batchValidate.js'
-import { readSupplierInventorySetting } from '../../../changeset/platformDiff.js'
-import type { ChangeSetRecord, InventoryPlatformItem, ItemResult } from '../../../changeset/types.js'
+import { platformToBooleans, booleansToPlatform } from './validate.js'
+import { readSupplierInventorySetting } from './diff.js'
+import type { ChangeSetRecord, InventoryPlatformItem, ItemResult } from '../../../core/changeset/types.js'
 import type { ExecCtx } from '../../../core/changeset/module.js'
 
 // Shared executor context for the Phase 4a batch-shaped executors (inventory_platform here;

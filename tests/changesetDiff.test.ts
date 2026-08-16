@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeShelfDiff, DiffError } from '../src/changeset/diff.js'
+import { computeShelfDiff, DiffError } from '../src/modules/product/shelfToggle/diff.js'
 import { shelfToggleProductModule } from '../src/modules/product/shelfToggle/module.js'
 const diffVersionHash = shelfToggleProductModule.diffVersion as (d: unknown[]) => string
 import type { ToolContext } from '../src/tools/types.js'

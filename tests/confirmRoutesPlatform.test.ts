@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import express from 'express'
 import { openDb } from '../src/store/db.js'
-import { ChangeSetStore } from '../src/changeset/store.js'
+import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { buildConfirmRouter } from '../src/server/confirmRoutes.js'
 import type { Server } from 'node:http'
-import type { InventoryPlatformItem } from '../src/changeset/types.js'
+import type { InventoryPlatformItem } from '../src/core/changeset/types.js'
 
 // Final whole-branch review Important 1: confirmRoutes.ts's render dispatch only had
 // inventory_setting/shelf_schedule branches — an inventory_platform change-set fell through to

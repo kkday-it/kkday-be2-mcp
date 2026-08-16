@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { computeInventoryDiff } from '../src/changeset/inventoryDiff.js'
-import { computeChangesetDiff, DiffError } from '../src/changeset/diff.js'
+import { computeInventoryDiff } from '../src/modules/product/inventorySetting/diff.js'
+import { computeChangesetDiff, DiffError } from '../src/modules/product/shelfToggle/diff.js'
 import { inventorySettingModule } from '../src/modules/product/inventorySetting/module.js'
 import { shelfToggleProductModule } from '../src/modules/product/shelfToggle/module.js'
 const diffVersionHash = inventorySettingModule.diffVersion as (d: unknown[]) => string
-import type { InventoryItem } from '../src/changeset/types.js'
+import type { InventoryItem } from '../src/core/changeset/types.js'
 
 function gatewayWith(byMonth: Record<string, unknown>) {
   return {

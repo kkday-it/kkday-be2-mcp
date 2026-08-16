@@ -8,7 +8,7 @@ import { openDb } from '../src/store/db.js'
 import { ReadOidStore } from '../src/store/readOidStore.js'
 import { RateBudget } from '../src/limits/rateBudget.js'
 import { AppRateBudget } from '../src/limits/appRateBudget.js'
-import { ApprovalNonceStore } from '../src/changeset/approvalNonce.js'
+import { ApprovalNonceStore } from '../src/core/changeset/approvalNonce.js'
 import { GatewayError } from '../src/errors.js'
 
 // Fixtures per docs/be2-mcp/sit-write-contracts.md Phase 4a Task 1 §"packages?show_supplier=1

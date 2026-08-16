@@ -1,8 +1,8 @@
-import type { GatewayClient } from '../gateway/client.js'
-import type { ToolContext } from '../tools/types.js'
-import { sanitizeQueue } from './batchValidate.js'
-import { DiffError } from './diff.js'
-import type { ScheduleEntry, ShelfScheduleDiffItem, ShelfScheduleItem } from './types.js'
+import type { GatewayClient } from '../../../gateway/client.js'
+import type { ToolContext } from '../../../tools/types.js'
+import { sanitizeQueue } from './validate.js'
+import { DiffError } from '../shelfToggle/diff.js'
+import type { ScheduleEntry, ShelfScheduleDiffItem, ShelfScheduleItem } from '../../../core/changeset/types.js'
 
 // Task 4 定案 (docs/superpowers/specs/2026-08-14-be2-mcp-baa-wizard-design.md §4.1/§4.2, probe +
 // BAA 警語雙證): GET /product/api/v1/products/{prodOid}/package-configs -> array (GatewayClient.get

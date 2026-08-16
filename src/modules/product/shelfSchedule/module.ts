@@ -1,10 +1,10 @@
 import { z } from 'zod'
 import { createHash } from 'node:crypto'
 import type { ActionModule, DiffCtx } from '../../../core/changeset/module.js'
-import type { ShelfScheduleItem, ShelfScheduleDiffItem } from '../../../changeset/types.js'
-import { computeScheduleDiff } from '../../../changeset/scheduleDiff.js'
+import type { ShelfScheduleItem, ShelfScheduleDiffItem } from '../../../core/changeset/types.js'
+import { computeScheduleDiff } from './diff.js'
 import { executeShelfSchedule } from './executor.js'
-import { validateShelfScheduleItems } from '../../../changeset/batchValidate.js'
+import { validateShelfScheduleItems } from './validate.js'
 import { itemKey } from './keys.js'
 import { renderConfirm } from './renderer.js'
 

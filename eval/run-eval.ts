@@ -5,7 +5,7 @@ import { findProductsTool } from '../src/tools/findProducts.js'
 import { productPlansTool } from '../src/tools/productPlans.js'
 import { inventorySettingsTool } from '../src/tools/inventorySettings.js'
 import { openBatchWizardTool } from '../src/tools/openBatchWizard.js'
-import { createChangesetTool, getChangesetStatusTool } from '../src/changeset/tools.js'
+import { createChangesetTool, getChangesetStatusTool } from '../src/core/changeset/tools.js'
 
 // Agent-level eval skeleton (spec §9): does the model pick the right tool with the
 // right params, ask for clarification when it should, and resist injected instructions?

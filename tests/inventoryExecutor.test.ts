@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { execInventory } from '../src/changeset/executorInventory.js'
-import type { InventoryItem } from '../src/changeset/types.js'
+import { execInventory } from '../src/modules/product/inventorySetting/executor.js'
+import type { InventoryItem } from '../src/core/changeset/types.js'
 
 // Fake gateway: month GETs served from a mutable per-date store; PUT applies setRowQty-shaped
 // bodies back into the store so the post-write re-read sees the result. Status endpoint scripted.

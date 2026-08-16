@@ -1,10 +1,10 @@
 import { z } from 'zod'
 import { createHash } from 'node:crypto'
 import type { ActionModule, DiffCtx } from '../../../core/changeset/module.js'
-import type { InventoryPlatformItem, InventoryPlatformDiffItem } from '../../../changeset/types.js'
-import { computePlatformDiff } from '../../../changeset/platformDiff.js'
+import type { InventoryPlatformItem, InventoryPlatformDiffItem } from '../../../core/changeset/types.js'
+import { computePlatformDiff } from './diff.js'
 import { executeInventoryPlatform } from './executor.js'
-import { validateInventoryPlatformItems } from '../../../changeset/batchValidate.js'
+import { validateInventoryPlatformItems } from './validate.js'
 import { itemKey } from './keys.js'
 import { renderConfirm } from './renderer.js'
 

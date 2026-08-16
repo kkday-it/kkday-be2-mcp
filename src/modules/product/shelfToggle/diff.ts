@@ -1,10 +1,10 @@
-import type { ToolContext } from '../tools/types.js'
-import { findProductsTool } from '../tools/findProducts.js'
-import { productPlansTool } from '../tools/productPlans.js'
-import type { ActionType, AnyChangeSetItem, AnyDiffItem, ChangeSetItem, DiffItem } from './types.js'
+import type { ToolContext } from '../../../tools/types.js'
+import { findProductsTool } from '../../../tools/findProducts.js'
+import { productPlansTool } from '../../../tools/productPlans.js'
+import type { ActionType, AnyChangeSetItem, AnyDiffItem, ChangeSetItem, DiffItem } from '../../../core/changeset/types.js'
 
-import { getModule } from '../core/changeset/registry.js'
-import '../modules/index.js'
+import { getModule } from '../../../core/changeset/registry.js'
+import '../../index.js'
 
 // Throws DiffError if any requested oid could not be read (403/500/invalid) or resolved no
 // current state — we must NOT silently stage a change with current_is_active: undefined.

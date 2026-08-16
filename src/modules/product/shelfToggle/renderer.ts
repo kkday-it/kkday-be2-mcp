@@ -1,5 +1,5 @@
 import { esc } from '../../../core/changeset/html.js'
-import type { ChangeSetRecord, DiffItem } from '../../../changeset/types.js'
+import type { ChangeSetRecord, DiffItem } from '../../../core/changeset/types.js'
 import type { ConfirmView } from '../../../core/changeset/module.js'
 
 export function renderConfirm(rec: ChangeSetRecord, diff: DiffItem[], diffVersion: string, banner: string): ConfirmView {

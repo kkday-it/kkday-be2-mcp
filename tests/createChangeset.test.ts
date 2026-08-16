@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { openDb } from '../src/store/db.js'
-import { ChangeSetStore } from '../src/changeset/store.js'
+import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { ReadOidStore } from '../src/store/readOidStore.js'
 import { RateBudget } from '../src/limits/rateBudget.js'
-import { createChangesetTool, businessListAllowsAction } from '../src/changeset/tools.js'
+import { createChangesetTool, businessListAllowsAction } from '../src/core/changeset/tools.js'
 import type { L2ToolContext } from '../src/server/l2Context.js'
 import { z } from 'zod'
 

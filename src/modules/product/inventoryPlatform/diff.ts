@@ -1,9 +1,9 @@
-import type { GatewayClient } from '../gateway/client.js'
-import type { ToolContext } from '../tools/types.js'
-import { booleansToPlatform } from './batchValidate.js'
-import { DiffError } from './diff.js'
-import { extractPackagesWithSupplier } from '../tools/batchView.js'
-import type { InventoryPlatformDiffItem, InventoryPlatformItem } from './types.js'
+import type { GatewayClient } from '../../../gateway/client.js'
+import type { ToolContext } from '../../../tools/types.js'
+import { booleansToPlatform } from './validate.js'
+import { DiffError } from '../shelfToggle/diff.js'
+import { extractPackagesWithSupplier } from '../common.js'
+import type { InventoryPlatformDiffItem, InventoryPlatformItem } from '../../../core/changeset/types.js'
 
 type AffectedPkg = { prod_oid: string; pkg_oid: string; pkg_name: string }
 

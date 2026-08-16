@@ -1,12 +1,12 @@
-import '../modules/index.js'
+import '../../modules/index.js'
 import { z } from 'zod'
-import type { L2ToolContext, L2ToolDef } from '../server/l2Context.js'
-import { makeEnvelope, toEnvelopeError, type EnvelopeError } from '../tools/envelope.js'
+import type { L2ToolContext, L2ToolDef } from '../../server/l2Context.js'
+import { makeEnvelope, toEnvelopeError, type EnvelopeError } from '../../tools/envelope.js'
 import type { ActionType, AnyChangeSetItem, AnyDiffItem } from './types.js'
-import { getModule, listModules } from '../core/changeset/registry.js'
-import type { ActionModule } from '../core/changeset/module.js'
+import { getModule, listModules } from './registry.js'
+import type { ActionModule } from './module.js'
 
-export { INVENTORY_ACTION_CODES } from '../modules/product/inventorySetting/module.js'
+export { INVENTORY_ACTION_CODES } from '../../modules/product/inventorySetting/module.js'
 
 export function businessListAllowsAction(businessList: unknown[], actionType: ActionType): boolean {
   return businessListAllows(businessList, getModule(actionType).authz.codes)
