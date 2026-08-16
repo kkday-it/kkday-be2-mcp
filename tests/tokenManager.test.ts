@@ -10,7 +10,7 @@ function fakeJwt(expSec: number): string {
   return `${b64({ alg: 'HS256' })}.${b64({ exp: expSec })}.sig`
 }
 
-function setup(expiresInMs: number) {
+function setup(expiresInMs: number, opts: { onReauthRequired?: (identityId: string) => void } = {}) {
   const db = openDb(':memory:')
   const identities = new IdentityStore(db)
   const credentials = new CredentialStore(db)
@@ -31,7 +31,7 @@ function setup(expiresInMs: number) {
       return { accessToken: freshJwt, refreshToken: `r-${calls}`, businessList: [{ fresh: true }] }
     }),
   }
-  const mgr = new TokenManager({ identities, credentials }, auth as never, { now: () => now })
+  const mgr = new TokenManager({ identities, credentials }, auth as never, { now: () => now, ...opts })
   return { mgr, identities, identityId, auth, freshJwt }
 }
 
@@ -79,5 +79,30 @@ describe('TokenManager', () => {
     auth.refresh.mockRejectedValueOnce(new AuthError('HTTP_503', 'upstream down', 503))
     await expect(mgr.getFreshAccessToken('b1')).rejects.toSatisfy(
       (e: unknown) => e instanceof AppError && e.code === 'AUTH_SERVICE_UNAVAILABLE' && e.status === 503)
+  })
+  it('definitive 4xx -> onReauthRequired 以 identityId 被呼叫一次', async () => {
+    const onReauthRequired = vi.fn()
+    const { mgr, auth, identityId } = setup(60_000, { onReauthRequired })
+    auth.refresh.mockRejectedValueOnce(new AuthError('ENTRY_TOKEN_IS_EXPIRED', 'expired', 401))
+    await expect(mgr.getFreshAccessToken('b1')).rejects.toSatisfy(
+      (e: unknown) => e instanceof AuthError && e.code === 'REAUTH_REQUIRED')
+    expect(onReauthRequired).toHaveBeenCalledTimes(1)
+    expect(onReauthRequired).toHaveBeenCalledWith(identityId)
+  })
+  it('transient 5xx（access 已過期）-> onReauthRequired 不被呼叫', async () => {
+    const onReauthRequired = vi.fn()
+    const { mgr, auth } = setup(-1, { onReauthRequired }) // already expired
+    auth.refresh.mockRejectedValueOnce(new AuthError('HTTP_503', 'upstream down', 503))
+    await expect(mgr.getFreshAccessToken('b1')).rejects.toSatisfy(
+      (e: unknown) => e instanceof AppError && e.code === 'AUTH_SERVICE_UNAVAILABLE' && e.status === 503)
+    expect(onReauthRequired).not.toHaveBeenCalled()
+  })
+  it('onReauthRequired 自身 throw -> 原始 REAUTH_REQUIRED 仍照拋', async () => {
+    const onReauthRequired = vi.fn(() => { throw new Error('callback error') })
+    const { mgr, auth } = setup(60_000, { onReauthRequired })
+    auth.refresh.mockRejectedValueOnce(new AuthError('ENTRY_TOKEN_IS_EXPIRED', 'expired', 401))
+    await expect(mgr.getFreshAccessToken('b1')).rejects.toSatisfy(
+      (e: unknown) => e instanceof AuthError && e.code === 'REAUTH_REQUIRED')
+    expect(onReauthRequired).toHaveBeenCalledTimes(1)
   })
 })
