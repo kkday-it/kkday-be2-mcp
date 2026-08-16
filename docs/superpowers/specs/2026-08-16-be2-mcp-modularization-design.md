@@ -1,6 +1,6 @@
 # be2 MCP — Phase 5 模組化（core / domain module 拆分）設計
 
-日期：2026-08-16　狀態：待 agy review
+日期：2026-08-16　狀態：agy APPROVED（rounds=2）
 > 搭配讀：`docs/be2-mcp/module-architecture.md`（規劃草稿）、`docs/be2-mcp/be2-mcp-rd-design.md`（現有 SA/SD）。
 > 起點：`main` @ `346f5d1`（Phase 1a→4a 全功能、428 tests 綠、雙 action type live 驗證），分支 `feat/modularization`。
 
