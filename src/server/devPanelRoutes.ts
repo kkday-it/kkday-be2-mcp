@@ -63,9 +63,12 @@ export function buildDevPanelRouter(deps: DevPanelDeps): express.Router {
         return
       }
 
-      // Ensure the dev secret resolves to the newest identity
+      // Ensure the dev secret resolves to the newest identity — MUST upsert: OR IGNORE 會讓
+      // dev 憑證永遠綁第一次執行時的 identity，identity 過期重登（bootstrap-user）後 harness
+      // 仍拿舊的 → 永遠 REAUTH_REQUIRED（live 2026-08-16 踩到）。
       const credHash = CredentialStore.hash(DEV_SECRET)
-      deps.db.prepare('INSERT OR IGNORE INTO credentials (cred_hash, identity_id, kind, expires_at, updated_at) VALUES (?, ?, ?, null, ?)')
+      deps.db.prepare(`INSERT INTO credentials (cred_hash, identity_id, kind, expires_at, updated_at) VALUES (?, ?, ?, null, ?)
+        ON CONFLICT(cred_hash) DO UPDATE SET identity_id = excluded.identity_id, updated_at = excluded.updated_at`)
         .run(credHash, identity.identity_id, 'static_bearer', Date.now())
 
       const handler = wrapAppTool(tool, deps.appDeps)

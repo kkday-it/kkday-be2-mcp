@@ -3,10 +3,11 @@ import type { Server } from 'node:http'
 import { openDb } from '../src/store/db.js'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { buildApp } from '../src/server/app.js'
-import { mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Config } from '../src/config.js'
 
+let backupHtml: string | null = null
 describe('Dev Panel Harness (BE2_MCP_DEV_PANEL flag)', () => {
   let server: Server, base: string, db: ReturnType<typeof openDb>
   const originalEnv = process.env.BE2_MCP_DEV_PANEL
@@ -19,13 +20,19 @@ describe('Dev Panel Harness (BE2_MCP_DEV_PANEL flag)', () => {
     })
     const uiDir = join(process.cwd(), 'dist', 'ui')
     mkdirSync(uiDir, { recursive: true })
-    writeFileSync(join(uiDir, 'batch-wizard.html'), '<head></head><body><h1>Panel</h1></body>')
+    // 不可清掉真建置產物（panel.smoke.test 依賴它；先前 rmSync 造成跨檔順序 flaky）——
+    // 先備份真檔，afterAll 還原。
+    const real = join(uiDir, 'batch-wizard.html')
+    if (existsSync(real)) backupHtml = readFileSync(real, 'utf8')
+    writeFileSync(real, '<head></head><body><h1>Panel</h1></body>')
   })
 
   afterEach(() => {
     if (server) server.close()
     db.close()
-    rmSync(join(process.cwd(), 'dist', 'ui', 'batch-wizard.html'), { force: true })
+    const real = join(process.cwd(), 'dist', 'ui', 'batch-wizard.html')
+    if (backupHtml != null) writeFileSync(real, backupHtml)
+    else rmSync(real, { force: true })
     process.env.BE2_MCP_DEV_PANEL = originalEnv
   })
 
