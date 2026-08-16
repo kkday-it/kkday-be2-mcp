@@ -12,6 +12,7 @@ export interface TokenManagerStores { identities: IdentityStore; credentials: Cr
 export class TokenManager {
   private skewMs: number
   private now: () => number
+  private onReauthRequired?: (identityId: string) => void
   // Single-flight 現在以 identityId 為 key（而非個別 credential 的 hash）——be2 refresh
   // 只在 identity 這一層 rotate 一次；同一 identity 底下無論幾個 credential（oauth_access /
   // static_bearer / web_session）並發觸發 refresh 都必須共用同一次 in-flight refresh，
@@ -21,9 +22,10 @@ export class TokenManager {
   private inflight = new Map<string, Promise<Identity>>()
 
   constructor(private stores: TokenManagerStores, private auth: AuthServiceClient,
-    opts: { skewMs?: number; now?: () => number } = {}) {
+    opts: { skewMs?: number; now?: () => number; onReauthRequired?: (identityId: string) => void } = {}) {
     this.skewMs = opts.skewMs ?? 5 * 60_000
     this.now = opts.now ?? Date.now
+    this.onReauthRequired = opts.onReauthRequired
   }
 
   /** 呼叫端慣用入口——bearer 的 secret hash 即 credential 的 credHash。 */
@@ -37,9 +39,9 @@ export class TokenManager {
 
   async getFreshByCredHash(credHash: string): Promise<UserAuthContext> {
     const cred = this.stores.credentials.get(credHash)
-    if (!cred) throw new AuthError('UNKNOWN_BEARER', 'unknown bearer token — run bootstrap-user to enroll', 401)
+    if (!cred) throw new AuthError('UNKNOWN_BEARER', 'unknown bearer token — reconnect your MCP client (it will be prompted to re-authorize via OAuth); headless fallback: npm run bootstrap-user', 401)
     const identity = this.stores.identities.get(cred.identityId)
-    if (!identity) throw new AuthError('UNKNOWN_BEARER', 'unknown bearer token — run bootstrap-user to enroll', 401)
+    if (!identity) throw new AuthError('UNKNOWN_BEARER', 'unknown bearer token — reconnect your MCP client (it will be prompted to re-authorize via OAuth); headless fallback: npm run bootstrap-user', 401)
     return this.freshFromIdentity(identity, cred.identityId)
   }
 
@@ -63,7 +65,12 @@ export class TokenManager {
       // Definitive 4xx from auth-service = rotated-away, expired, or user_status
       // disabled — fail closed, require re-enroll.
       if (e instanceof AuthError && e.status >= 400 && e.status < 500) {
-        throw new AuthError('REAUTH_REQUIRED', `be2 session expired or revoked (${e.code}) — re-run bootstrap-user`, 401)
+        try {
+          this.onReauthRequired?.(identityId)
+        } catch (err) {
+          console.error('onReauthRequired callback failed:', err)
+        }
+        throw new AuthError('REAUTH_REQUIRED', `be2 session expired or revoked (${e.code}) — this connection has been reset; your MCP client will re-run the OAuth login on its next request (headless fallback: npm run bootstrap-user)`, 401)
       }
       // Transient (network / 5xx): the refresh was pre-emptive. If the stored access
       // token hasn't actually expired yet, keep serving it and retry refresh next call.

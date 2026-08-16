@@ -99,9 +99,19 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // exchange/refresh be2 tokens against the same auth-service client, and reusing one instance
   // avoids duplicate config parsing / connection setup.
   const authServiceClient = new AuthServiceClient({ baseUrl: config.authsvcUrl, serviceKey: config.serviceKey })
+  // Task 7：DCR client store（RFC 7591）。與 Task 6 的 OAuthStore 是同一張表，僅此處負責
+  // client 註冊；authorization_code/refresh 由 Task 8/9 接續使用同一個 OAuthStore 實例的
+  // 其他方法。
+  const oauthStore = new OAuthStore(db)
   // Task 2: TokenManager 直接操作 identity 層（be2 refresh 只在 identity 這格 rotate 一次，
   // 多個 credential 共用同一 identity 時不會互撞）。
-  const tokenManager = new TokenManager({ identities, credentials }, authServiceClient)
+  const tokenManager = new TokenManager({ identities, credentials }, authServiceClient, {
+    onReauthRequired: (identityId) => {
+      // identity 列刻意留下（oauth-purge 會清 ghost），web_session/static_bearer 一併撤銷是刻意的——同一 identity 的 be2 refresh 死了，所有面向的憑證都已無法服務。
+      credentials.deleteByIdentity(identityId)
+      oauthStore.deleteRefreshByIdentity(identityId)
+    }
+  })
   const rateBudget = new RateBudget(db)
   const audit = new AuditLog(db)
   const gateway = new GatewayClient({ baseUrl: config.gatewayUrl })
@@ -119,10 +129,6 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // survives a confirm-page logout.
   const webSessions = new WebSessionStore(db, { onDelete: sid => purgeCredential(CredentialStore.hash(sid)) })
   const authOrigin = new URL(config.authsvcUrl).origin
-  // Task 7：DCR client store（RFC 7591）。與 Task 6 的 OAuthStore 是同一張表，僅此處負責
-  // client 註冊；authorization_code/refresh 由 Task 8/9 接續使用同一個 OAuthStore 實例的
-  // 其他方法。
-  const oauthStore = new OAuthStore(db)
   // Task 10: shared by l2Deps/appDeps (confirm-page URLs) and the /mcp 401 gate's
   // WWW-Authenticate header (points the client at discovery, per RFC 9728) — one literal instead
   // of three copies of the same string.
@@ -278,7 +284,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
         res
           .status(401)
           .set('WWW-Authenticate', `Bearer resource_metadata="${baseUrl}/.well-known/oauth-protected-resource"`)
-          .json({ error: { code: 'UNAUTHORIZED', message: 'unknown or missing bearer — run bootstrap-user' } })
+          .json({ error: { code: 'UNAUTHORIZED', message: 'unknown or missing bearer — connect via OAuth (see WWW-Authenticate); headless fallback: npm run bootstrap-user' } })
         return
       }
 
