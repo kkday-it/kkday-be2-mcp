@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import type { ActionModule, DiffCtx } from '../../../core/changeset/module.js'
 import type { ShelfScheduleItem, ShelfScheduleDiffItem } from '../../../changeset/types.js'
 import { computeScheduleDiff } from '../../../changeset/scheduleDiff.js'
+import { executeShelfSchedule } from './executor.js'
 import { validateShelfScheduleItems } from '../../../changeset/batchValidate.js'
 import { itemKey } from './keys.js'
 
@@ -54,6 +55,6 @@ export const shelfScheduleModule: ActionModule<ShelfScheduleItem, ShelfScheduleD
     return createHash('sha256').update(canon).digest('hex')
   },
   itemKey,
-  execute: () => { throw new Error('not wired until Task 5/6') },
+  execute: executeShelfSchedule,
   renderConfirm: () => { throw new Error('not wired until Task 5/6') }
 }

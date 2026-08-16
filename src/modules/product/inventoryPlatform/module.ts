@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import type { ActionModule, DiffCtx } from '../../../core/changeset/module.js'
 import type { InventoryPlatformItem, InventoryPlatformDiffItem } from '../../../changeset/types.js'
 import { computePlatformDiff } from '../../../changeset/platformDiff.js'
+import { executeInventoryPlatform } from './executor.js'
 import { validateInventoryPlatformItems } from '../../../changeset/batchValidate.js'
 import { itemKey } from './keys.js'
 
@@ -56,6 +57,6 @@ export const inventoryPlatformModule: ActionModule<InventoryPlatformItem, Invent
     return createHash('sha256').update(canon).digest('hex')
   },
   itemKey,
-  execute: () => { throw new Error('not wired until Task 5/6') },
+  execute: executeInventoryPlatform,
   renderConfirm: () => { throw new Error('not wired until Task 5/6') }
 }

@@ -5,6 +5,7 @@ import type { InventoryItem, InventoryDiffItem } from '../../../changeset/types.
 import { computeInventoryDiff } from '../../../changeset/inventoryDiff.js'
 import { validateInventoryItems } from '../../../changeset/inventoryValidate.js'
 import { itemKey } from './keys.js'
+import { executeInventorySetting } from './executor.js'
 
 const invItemShape = z.object({
   item_oid: z.string().min(1),
@@ -47,6 +48,6 @@ export const inventorySettingModule: ActionModule<InventoryItem, InventoryDiffIt
     return createHash('sha256').update(canon).digest('hex')
   },
   itemKey,
-  execute: () => { throw new Error('not wired until Task 5/6') },
+  execute: executeInventorySetting,
   renderConfirm: () => { throw new Error('not wired until Task 5/6') }
 }
