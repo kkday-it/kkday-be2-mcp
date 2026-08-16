@@ -5,6 +5,7 @@ import type { ChangeSetItem, DiffItem } from '../../../changeset/types.js'
 import { computeShelfDiff } from '../../../changeset/diff.js'
 import { itemKey } from './keys.js'
 import { executeShelfToggle } from './executor.js'
+import { renderConfirm } from './renderer.js'
 
 const itemSchemaProduct = z.object({ prod_oid: z.string().min(1), target_is_active: z.boolean() })
 const itemSchemaPlan = z.object({ prod_oid: z.string().min(1), pkg_oid: z.string().min(1), target_is_active: z.boolean() })
@@ -39,7 +40,7 @@ export const shelfToggleProductModule: ActionModule<ChangeSetItem, DiffItem> = {
   },
   itemKey,
   execute: executeShelfToggle,
-  renderConfirm: () => { throw new Error('not wired until Task 5/6') }
+  renderConfirm: (rec, diff, version, banner) => renderConfirm(rec, diff as DiffItem[], version, banner)
 }
 
 export const shelfTogglePlanModule: ActionModule<ChangeSetItem, DiffItem> = {
@@ -62,5 +63,5 @@ export const shelfTogglePlanModule: ActionModule<ChangeSetItem, DiffItem> = {
   },
   itemKey,
   execute: executeShelfToggle,
-  renderConfirm: () => { throw new Error('not wired until Task 5/6') }
+  renderConfirm: (rec, diff, version, banner) => renderConfirm(rec, diff as DiffItem[], version, banner)
 }

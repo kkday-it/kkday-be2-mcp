@@ -6,6 +6,7 @@ import { computeScheduleDiff } from '../../../changeset/scheduleDiff.js'
 import { executeShelfSchedule } from './executor.js'
 import { validateShelfScheduleItems } from '../../../changeset/batchValidate.js'
 import { itemKey } from './keys.js'
+import { renderConfirm } from './renderer.js'
 
 const shelfScheduleItemShape = z.object({
   prod_oid: z.string().min(1),
@@ -56,5 +57,5 @@ export const shelfScheduleModule: ActionModule<ShelfScheduleItem, ShelfScheduleD
   },
   itemKey,
   execute: executeShelfSchedule,
-  renderConfirm: () => { throw new Error('not wired until Task 5/6') }
+  renderConfirm
 }
