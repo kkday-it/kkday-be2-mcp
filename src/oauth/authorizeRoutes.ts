@@ -95,6 +95,7 @@ export function buildAuthorizeRouter(deps: AuthorizeDeps): express.Router {
   .signature { margin:0 auto 24px; width:200px; display:block; }
   .signature .dash { stroke-dasharray:6; animation:dash-flow 20s linear infinite reverse; }
   .signature.loading .dash { animation-duration:2s; }
+  .signature.success .dash { stroke-dasharray:none; animation:none; }
   @media (prefers-reduced-motion: reduce) { .signature .dash { animation:none; } }
   @keyframes dash-flow { to { stroke-dashoffset: 100; } }
   h1 { font-size:1.25rem; font-weight:650; letter-spacing:-0.02em; margin:0 0 12px; }
@@ -107,6 +108,8 @@ export function buildAuthorizeRouter(deps: AuthorizeDeps): express.Router {
   button:focus-visible { outline:2px solid var(--tint); outline-offset:2px; }
   #msg { color:var(--muted); font-size:.9375rem; min-height:1.5em; margin:16px 0 24px; }
   .footer { font-size:.8125rem; color:var(--muted); margin:0; }
+  #msg a { color:var(--tint); text-decoration:none; }
+  #msg a:hover { text-decoration:underline; }
 </style>
 <div class="card">
   <svg class="signature" id="conn" viewBox="0 0 200 60" xmlns="http://www.w3.org/2000/svg">
@@ -135,40 +138,137 @@ export function buildAuthorizeRouter(deps: AuthorizeDeps): express.Router {
   var CODE_CHALLENGE = ${js(codeChallenge)};
   var STATE = ${js(state)};
   var pop = null;
-  // window.open MUST run inside a user gesture (click) — browsers block popups opened on load.
-  document.getElementById('loginBtn').addEventListener('click', function () {
-    // Defensive: tests/launcherHarness.ts 的 fake DOM 元素沒有 classList——動畫加速是純裝飾，
-    // 拿不到就跳過，絕不讓裝飾行為擋住登入主流程。
-    var conn = document.getElementById('conn');
-    if (conn && conn.classList) conn.classList.add('loading');
-    pop = window.open(LOGIN_URL, 'be2login', 'width=480,height=640');
-    document.getElementById('msg').textContent = '請於彈出視窗登入…';
-  });
-  window.addEventListener('message', function (e) {
-    if (e.origin !== AUTH_ORIGIN) return;            // MANDATORY origin check
-    // be2-auth LoginPage.vue (validatePopupPageSource) handshake: the popup posts
-    // AUTH_LOGIN_READY and the opener MUST reply CONFIRM_LOGIN_DOMAIN within 500ms,
-    // or the popup client-routes to /404 (root cause of the 2026-08-14 live 404s).
-    if (e.data && e.data.event === 'AUTH_LOGIN_READY') {
-      var w = e.source || pop;
-      if (w) w.postMessage({ event: 'CONFIRM_LOGIN_DOMAIN' }, AUTH_ORIGIN);
-      return;
+  var uiState = 'idle';
+  var pollTimer = null;
+  var btn = document.getElementById('loginBtn');
+  var msgEl = document.getElementById('msg');
+  var conn = document.getElementById('conn');
+
+  function setUiState(s) {
+    if (uiState === 'success') return;
+    uiState = s;
+    if (s === 'idle') {
+      if (btn) { btn.disabled = false; btn.textContent = '使用 be2 帳號登入'; }
+      if (conn && conn.classList) { conn.classList.remove('loading'); conn.classList.remove('success'); }
+    } else if (s === 'waiting_popup') {
+      if (btn) { btn.disabled = true; btn.textContent = '等待彈出視窗登入…'; }
+      if (msgEl) msgEl.textContent = '請於彈出視窗登入…';
+      if (conn && conn.classList) conn.classList.add('loading');
+    } else if (s === 'exchanging') {
+      if (msgEl) msgEl.textContent = '登入成功，正在完成授權…';
+      if (btn) btn.disabled = true;
+    } else if (s === 'success') {
+      if (conn && conn.classList) { conn.classList.remove('loading'); conn.classList.add('success'); }
+      if (msgEl) msgEl.textContent = '授權完成，正在返回 Claude…';
+    } else if (s === 'error') {
+      if (msgEl) msgEl.textContent = '登入失敗,請重試。';
+      if (btn) { btn.disabled = false; btn.textContent = '使用 be2 帳號登入'; }
+      if (conn && conn.classList) conn.classList.remove('loading');
     }
-    // Live-verified real contract: { event:'UPDATE_AUTH_TOKEN', data:{ authorizationCode, device } }.
-    var p = (e.data && e.data.data) ? e.data.data : e.data;
-    var code = (p && (p.authorizationCode || p.code)) || null;
-    if (!code) return;
-    fetch('/oauth/authorize/complete', {
-      method: 'POST', headers: {'content-type':'application/json'},
-      body: JSON.stringify({
-        code: code, client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
-        response_type: 'code', code_challenge: CODE_CHALLENGE, code_challenge_method: 'S256', state: STATE,
-      }),
-    })
-      .then(function(r){ if(!r.ok) throw new Error('authorize'); return r.json(); })
-      .then(function(d){ if(pop) pop.close(); location.replace(d.redirectTo); })
-      .catch(function(){ document.getElementById('msg').textContent = '登入失敗,請重試。'; });
-  });
+  }
+
+  function stopPoll() {
+    if (pollTimer) {
+      try {
+        if (typeof clearInterval === 'function') clearInterval(pollTimer);
+      } catch (e) {}
+      pollTimer = null;
+    }
+  }
+
+  try {
+    if (typeof window.addEventListener === 'function') {
+      window.addEventListener('storage', function (e) {
+        if (e.key === 'be2mcp_authorize_done' && uiState !== 'success') {
+          if (btn) btn.disabled = true;
+          if (msgEl) msgEl.textContent = '已在另一個分頁完成授權，此分頁可關閉';
+          stopPoll();
+        }
+      });
+    }
+  } catch (e) {}
+
+  if (btn && typeof btn.addEventListener === 'function') {
+    // window.open MUST run inside a user gesture (click) — browsers block popups opened on load.
+    btn.addEventListener('click', function () {
+      setUiState('waiting_popup');
+      pop = window.open(LOGIN_URL, 'be2login', 'width=480,height=640');
+      if (!pop) {
+        setUiState('idle');
+        if (msgEl) msgEl.textContent = '彈出視窗被瀏覽器封鎖——請允許本站彈出視窗後重試';
+        return;
+      }
+      try {
+        if (typeof setInterval === 'function') {
+          pollTimer = setInterval(function () {
+            try {
+              if (pop && pop.closed) {
+                stopPoll();
+                if (uiState === 'waiting_popup') {
+                  setUiState('idle');
+                  if (msgEl) msgEl.textContent = '登入視窗已關閉，未完成登入——可再試一次';
+                }
+              }
+            } catch (e) {}
+          }, 1000);
+        }
+      } catch (e) {}
+    });
+  }
+
+  try {
+    if (typeof window.addEventListener === 'function') {
+      window.addEventListener('message', function (e) {
+        if (e.origin !== AUTH_ORIGIN) return;            // MANDATORY origin check
+        // be2-auth LoginPage.vue (validatePopupPageSource) handshake: the popup posts
+        // AUTH_LOGIN_READY and the opener MUST reply CONFIRM_LOGIN_DOMAIN within 500ms,
+        // or the popup client-routes to /404 (root cause of the 2026-08-14 live 404s).
+        if (e.data && e.data.event === 'AUTH_LOGIN_READY') {
+          var w = e.source || pop;
+          if (w) w.postMessage({ event: 'CONFIRM_LOGIN_DOMAIN' }, AUTH_ORIGIN);
+          return;
+        }
+        // Live-verified real contract: { event:'UPDATE_AUTH_TOKEN', data:{ authorizationCode, device } }.
+        var p = (e.data && e.data.data) ? e.data.data : e.data;
+        var code = (p && (p.authorizationCode || p.code)) || null;
+        if (!code) return;
+        
+        stopPoll();
+        setUiState('exchanging');
+        
+        fetch('/oauth/authorize/complete', {
+          method: 'POST', headers: {'content-type':'application/json'},
+          body: JSON.stringify({
+            code: code, client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
+            response_type: 'code', code_challenge: CODE_CHALLENGE, code_challenge_method: 'S256', state: STATE,
+          }),
+        })
+          .then(function(r){ if(!r.ok) throw new Error('authorize'); return r.json(); })
+          .then(function(d){ 
+            if (pop) pop.close(); 
+            setUiState('success');
+            try { if (typeof localStorage !== 'undefined') localStorage.setItem('be2mcp_authorize_done', String(Date.now())); } catch(e) {}
+            location.replace(d.redirectTo); 
+            try {
+              if (typeof setTimeout === 'function') {
+                setTimeout(function () {
+                  try {
+                    if (msgEl) {
+                      msgEl.textContent = '';
+                      var a = document.createElement('a');
+                      a.textContent = '若未自動跳轉，點此完成授權';
+                      a.setAttribute('href', d.redirectTo);
+                      msgEl.appendChild(a);
+                    }
+                  } catch (e) {}
+                }, 1500);
+              }
+            } catch(e) {}
+          })
+          .catch(function(){ setUiState('error'); });
+      });
+    }
+  } catch (e) {}
 </script>
 </html>`)
   })
