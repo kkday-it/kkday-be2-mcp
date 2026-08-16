@@ -61,6 +61,14 @@ claude mcp add be2-mcp --transport http http://127.0.0.1:8787/mcp
 - 反之，若確認頁的 session 先過期（idle TTL，預設 8 小時），或你在另一顆瀏覽器/無痕視窗開確認頁，仍會被導去 `/confirm/login` 走一次 POPUP 登入——這與 OAuth 授權流程各自獨立、互不依賴，只是**同瀏覽器同 session 時共用同一顆 cookie**，體驗上感覺不到兩套系統。
 - 兩者身分驗證的授權判斷**都委派 auth-service**（`businessList` + 換碼/refresh），be2-mcp 不本地驗簽、不自建 RBAC（見 `be2-mcp-auth-design.md`）。
 
+## L2 refresh：be2 token 的自動續期（server 端、對 client 隱形）
+
+be2 token 存 server store（Option 1），續期分兩層（設計見 `be2-mcp-auth-design.md` Part 3、`be2-mcp-rd-design.md` §2.2）：L1 是 Claude 自動續它的 OAuth 參考 token；**L2 是 be2-mcp 對 auth-service 的續期**——每次 tool call 進來，`TokenManager`（`src/auth/tokenManager.ts`）檢查 store 內 be2 access token 是否近到期/已過期，是就 lazy 帶 service key 打 `PATCH /api/v1/refresh-token/{refreshToken}`；auth-service **rotate**（發新 access+refresh、作廢舊 refresh）並回**新鮮 businessList**，寫回 store 後才執行工具。同 user 並發呼叫走 in-process single-flight 鎖，避免撞 rotation。refresh 端點同時檢查 `user_status`——停權者在這關即 fail-closed。
+
+**TTL（SIT be2-220 實測，解 JWT `exp−iat`）**：access 短命（設計文件記 ~50min；lazy refresh 讓使用者無感）、**refresh = 12 小時**。含意：同一次登入的 identity 在 12 小時內任何 tool call 都能自動續活；超過 12 小時未活動則需重登（OAuth 授權或 `bootstrap-user`）。
+
+**Live 實例（2026-08-16，Phase 5 模組化網頁驗收）**：store 內 identity 為 5.9 小時前登入，access 早已過期；dev panel harness 呼叫 `app_get_batch_view` 時 TokenManager 觸發 L2 refresh，對 auth-220 換到新 token 對後，後續 gateway 讀取全部 200——「5.9 小時前的 identity 還能用」靠的是 refresh 這條路，不是 access 還活著。
+
 ## Token 生命週期治理：`oauth-purge`
 
 OAuth 外殼會持續在 SQLite 累積三類「用過即該丟」的資料：
