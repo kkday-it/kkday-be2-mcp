@@ -298,6 +298,9 @@ export function initWizard(app: WizardApp): void {
   let radioButtons: HTMLInputElement[] = []
   let noteValue = ''
   let lastTz = 'Asia/Taipei'
+  let step1Nodes: Node[] = []
+  let lastViewRec: Record<string, unknown> | undefined
+  let lastLoadedProdOids: string[] = []
 
   let changesetId: string | undefined
   let currentNonce: string | undefined
@@ -335,6 +338,7 @@ export function initWizard(app: WizardApp): void {
     wizardEl.textContent = ''
     rows = []
     radioButtons = []
+    step1Nodes = []
 
     const inputCard = document.createElement('div')
     inputCard.className = 'bw-card'
@@ -379,9 +383,12 @@ export function initWizard(app: WizardApp): void {
     footerCard.appendChild(nextBtn)
     wizardEl.appendChild(footerCard)
 
+    step1Nodes = Array.from(wizardEl.childNodes)
+
     async function doLoad(raw: string): Promise<void> {
       const prodOids = raw.split(/[\s,]+/).map(s => s.trim()).filter(Boolean)
       if (prodOids.length === 0) { showFallback(fallbackEl, '請輸入至少一個商品 oid'); return }
+      lastLoadedProdOids = prodOids
       statusEl.textContent = '載入中…'
       try {
         const r = await app.callServerTool({ name: 'app_get_batch_view', arguments: { action_type: actionType, prod_oids: prodOids } })
@@ -970,6 +977,7 @@ export function initWizard(app: WizardApp): void {
   // ---- Step 2: 檢視 ----
   function renderStep2(rec: Record<string, unknown>): void {
     setStep(2)
+    lastViewRec = rec
     wizardEl.textContent = ''
     if (actionType === 'shelf_schedule') {
       const warn = document.createElement('div')
@@ -994,6 +1002,17 @@ export function initWizard(app: WizardApp): void {
 
     const footer = document.createElement('div')
     footer.className = 'bw-row-footer'
+    footer.appendChild(secondaryBtn('← 返回選擇', 'backToStep1Btn', () => {
+      if (changesetId && currentNonce && currentDiffVersion) {
+        app.callServerTool({
+          name: 'app_confirm_changeset',
+          arguments: { changeset_id: changesetId, decision: 'reject', nonce: currentNonce, diff_version: currentDiffVersion, confirmed_keys: [] }
+        }).catch(() => {})
+      }
+      setStep(1)
+      wizardEl.textContent = ''
+      step1Nodes.forEach(n => wizardEl.appendChild(n))
+    }))
     footer.appendChild(primaryBtn('前往批准', 'toApproveBtn', () => renderStep3()))
     wizardEl.appendChild(footer)
   }
@@ -1009,6 +1028,9 @@ export function initWizard(app: WizardApp): void {
     card.appendChild(desc)
     const footer = document.createElement('div')
     footer.className = 'bw-row-footer'
+    footer.appendChild(secondaryBtn('← 回檢視', 'backToStep2Btn', () => {
+      if (lastViewRec) renderStep2(lastViewRec)
+    }))
     footer.appendChild(primaryBtn('確認執行', 'approveBtn', () => { void doApprove() }))
     card.appendChild(footer)
     wizardEl.appendChild(card)
@@ -1041,8 +1063,12 @@ export function initWizard(app: WizardApp): void {
 
   function renderStaleNotice(): void {
     showFallback(fallbackEl, '現況已變，請按下方按鈕重新載入檢視後再次批准')
-    const reloadBtn = secondaryBtn('回檢視重載', 'reloadBtn', () => { void doReload() })
-    wizardEl.appendChild(reloadBtn)
+    const backBtn = wizardEl.querySelector('[data-role=backToStep2Btn]') as HTMLButtonElement
+    if (backBtn) {
+      backBtn.textContent = '回檢視重載'
+      backBtn.dataset.role = 'reloadBtn'
+      backBtn.onclick = () => { void doReload() }
+    }
   }
 
   async function doReload(): Promise<void> {
@@ -1146,6 +1172,18 @@ export function initWizard(app: WizardApp): void {
 
     const btnRow = document.createElement('div')
     btnRow.className = 'bw-row-footer'
+    const newBatchBtn = secondaryBtn('開始新批次', 'newBatchBtn', () => {
+      changesetId = undefined
+      currentNonce = undefined
+      currentDiffVersion = undefined
+      currentDiffItems = []
+      lastViewRec = undefined
+      clearFallback(fallbackEl)
+      renderStep1(lastLoadedProdOids)
+      const loadBtn = wizardEl.querySelector('[data-role=loadBtn]') as HTMLButtonElement
+      if (loadBtn) loadBtn.click()
+    })
+    btnRow.appendChild(newBatchBtn)
     const reverifyBtn = secondaryBtn('重新驗證', 'reverifyBtn', () => { void doVerify() })
     btnRow.appendChild(reverifyBtn)
     wizardEl.appendChild(btnRow)

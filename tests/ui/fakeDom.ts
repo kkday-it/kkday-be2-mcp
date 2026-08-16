@@ -63,6 +63,10 @@ class FakeElementImpl implements FakeElement {
 
   constructor(tag: string) { this.tagName = tag.toUpperCase() }
 
+  // 真 DOM 對齊補充：childNodes 視為 children、click() 觸發 onclick（querySelector 在下方）。
+  get childNodes(): FakeElement[] { return this.children }
+  click(): void { this.onclick?.() }
+
   appendChild<T extends FakeElement>(child: T): T {
     child.parentNode = this
     this.children.push(child)

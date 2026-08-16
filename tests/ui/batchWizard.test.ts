@@ -424,6 +424,143 @@ describe('batch-wizard panel: DIFF_STALE recovery (final whole-branch review Imp
     expect(resultRows.length).toBe(1)
     expect(resultRows[0].dataset.status).toBe('done')
   })
+
+  it('Step back navigation: Step 2 back to Step 1 preserves state and rejects changeset', async () => {
+    const batchViewResult = envelope([{
+      products: [{ prod_oid: 'P1', name: '商品1', plans: [{ pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', current_platform: 'BE2' }] }],
+    }])
+    const createResult = envelope([{ changeset_id: 'cs-back' }])
+    const viewResult = envelope([{
+      changeset_id: 'cs-back', status: 'pending_approval', nonce: 'nonce-back', diff_version: 'dv-back',
+      diff: { items: [{ item_oid: 'I1', supplier_oid: 'S1', current: 'BE2', target: 'BE2_SCM', noop: false, affected_pkgs: [] }] },
+    }])
+    let rejectCalled = false
+
+    const { app, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => batchViewResult,
+      app_create_changeset: () => createResult,
+      app_get_changeset_view: () => viewResult,
+      app_confirm_changeset: (args: Record<string, unknown>) => {
+        if (args.decision === 'reject') {
+          rejectCalled = true
+          // Simulate failure to ensure panel ignores it and proceeds
+          return { __rawError: true, content: [{ type: 'text', text: 'Error' }] }
+        }
+        return envelope([])
+      }
+    })
+
+    initWizard(app as never)
+    fireLaunch('inventory_platform', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+
+    // Step 1 check and transition
+    const cbA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    cbA.checked = true
+    cbA.onclick!()
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+
+    // In Step 2, click back button
+    const backBtn = findByRole(wizardEl, 'backToStep1Btn')
+    backBtn.onclick!()
+    await flush()
+
+    expect(rejectCalled).toBe(true)
+    // Should be back at step 1 with DOM restored, checkbox still checked
+    expect(wizardEl.querySelector('[data-role=loadBtn]')).not.toBeNull()
+    const cbA_returned = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    expect(cbA_returned.checked).toBe(true)
+  })
+
+  it('Step back navigation: Step 3 back to Step 2 restores view without server call', async () => {
+    const batchViewResult = envelope([{
+      products: [{ prod_oid: 'P1', name: '商品1', plans: [{ pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', current_platform: 'BE2' }] }],
+    }])
+    const createResult = envelope([{ changeset_id: 'cs-back3' }])
+    const viewResult = envelope([{
+      changeset_id: 'cs-back3', status: 'pending_approval', nonce: 'n', diff_version: 'v',
+      diff: { items: [{ item_oid: 'I1', supplier_oid: 'S1', current: 'BE2', target: 'BE2_SCM', noop: false, affected_pkgs: [] }] },
+    }])
+    let viewCallCount = 0
+
+    const { app, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => batchViewResult,
+      app_create_changeset: () => createResult,
+      app_get_changeset_view: () => {
+        viewCallCount++
+        return viewResult
+      }
+    })
+
+    initWizard(app as never)
+    fireLaunch('inventory_platform', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+
+    checkboxesFor(wizardEl, 'pkg-oid', 'A')[0].checked = true
+    checkboxesFor(wizardEl, 'pkg-oid', 'A')[0].onclick!()
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+
+    expect(viewCallCount).toBe(1)
+
+    // Go to Step 3
+    findByRole(wizardEl, 'toApproveBtn').onclick!()
+
+    // Go back to Step 2
+    findByRole(wizardEl, 'backToStep2Btn').onclick!()
+    await flush()
+
+    expect(viewCallCount).toBe(1) // No new call
+    expect(wizardEl.querySelector('.bw-diff-card')).not.toBeNull()
+  })
+
+  it('Step 4 new batch: clears state and reloads initial view', async () => {
+    const batchViewResult = envelope([{
+      products: [{ prod_oid: 'P1', name: '商品1', plans: [{ pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', current_platform: 'BE2' }] }],
+    }])
+    const createResult = envelope([{ changeset_id: 'cs-new' }])
+    const viewResult = envelope([{
+      changeset_id: 'cs-new', status: 'pending_approval', nonce: 'n', diff_version: 'v',
+      diff: { items: [] },
+    }])
+    const confirmResult = envelope([{ changeset_id: 'cs-new', status: 'done', results: [] }])
+    let loadCallCount = 0
+
+    const { app, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => {
+        loadCallCount++
+        return batchViewResult
+      },
+      app_create_changeset: () => createResult,
+      app_get_changeset_view: () => viewResult,
+      app_confirm_changeset: () => confirmResult
+    })
+
+    initWizard(app as never)
+    fireLaunch('inventory_platform', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    expect(loadCallCount).toBe(1)
+
+    checkboxesFor(wizardEl, 'pkg-oid', 'A')[0].checked = true
+    checkboxesFor(wizardEl, 'pkg-oid', 'A')[0].onclick!()
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+    findByRole(wizardEl, 'toApproveBtn').onclick!()
+    findByRole(wizardEl, 'approveBtn').onclick!()
+    await flush()
+
+    // Step 4
+    findByRole(wizardEl, 'newBatchBtn').onclick!()
+    await flush()
+
+    expect(loadCallCount).toBe(2) // 1 initial load + 1 new batch reload（results 為空 → 自動回讀驗證合理跳過，不發呼叫）
+    expect(wizardEl.querySelector('[data-role=loadBtn]')).not.toBeNull()
+    expect(checkboxesFor(wizardEl, 'pkg-oid', 'A')[0].checked).toBe(false) // state is clean
+  })
 })
 
 function makeEnvelopeWithError(key: string, code: string, message: string) {
