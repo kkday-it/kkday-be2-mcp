@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { computeInventoryDiff } from '../src/modules/product/inventorySetting/diff.js'
-import { computeChangesetDiff, DiffError } from '../src/modules/product/shelfToggle/diff.js'
+import { computeChangesetDiff, DiffError } from '../src/core/changeset/diff.js'
 import { inventorySettingModule } from '../src/modules/product/inventorySetting/module.js'
 import { shelfToggleProductModule } from '../src/modules/product/shelfToggle/module.js'
 const diffVersionHash = inventorySettingModule.diffVersion as (d: unknown[]) => string

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { computeScheduleDiff } from '../src/modules/product/shelfSchedule/diff.js'
-import { computeChangesetDiff, DiffError } from '../src/modules/product/shelfToggle/diff.js'
+import { computeChangesetDiff, DiffError } from '../src/core/changeset/diff.js'
 import { shelfScheduleModule } from '../src/modules/product/shelfSchedule/module.js'
 const diffVersionHash = shelfScheduleModule.diffVersion as (d: unknown[]) => string
 import type { ShelfScheduleItem, ShelfScheduleDiffItem } from '../src/core/changeset/types.js'

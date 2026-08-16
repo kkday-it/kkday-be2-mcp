@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { execInventoryPlatform, type ExecutorContext } from '../src/modules/product/inventoryPlatform/executor.js'
 import { approveAndExecute, type ConfirmServiceDeps } from '../src/core/changeset/confirmService.js'
-import { computeChangesetDiff } from '../src/modules/product/shelfToggle/diff.js'
+import { computeChangesetDiff } from '../src/core/changeset/diff.js'
 import { inventoryPlatformModule } from '../src/modules/product/inventoryPlatform/module.js'
 const diffVersionHash = inventoryPlatformModule.diffVersion as (d: unknown[]) => string
 import { ChangeSetStore } from '../src/core/changeset/store.js'

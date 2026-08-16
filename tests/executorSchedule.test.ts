@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { execShelfSchedule, type ExecutorContext } from '../src/modules/product/shelfSchedule/executor.js'
 import { approveAndExecute, type ConfirmServiceDeps } from '../src/core/changeset/confirmService.js'
-import { computeChangesetDiff } from '../src/modules/product/shelfToggle/diff.js'
+import { computeChangesetDiff } from '../src/core/changeset/diff.js'
 import { shelfScheduleModule } from '../src/modules/product/shelfSchedule/module.js'
 const diffVersionHash = shelfScheduleModule.diffVersion as (d: unknown[]) => string
 import { ChangeSetStore } from '../src/core/changeset/store.js'

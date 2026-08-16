@@ -1,7 +1,7 @@
 import type { GatewayClient } from '../../../gateway/client.js'
 import type { ToolContext } from '../../../tools/types.js'
 import { booleansToPlatform } from './validate.js'
-import { DiffError } from '../shelfToggle/diff.js'
+import { DiffError } from '../../../core/changeset/diff.js'
 import { extractPackagesWithSupplier } from '../common.js'
 import type { InventoryPlatformDiffItem, InventoryPlatformItem } from '../../../core/changeset/types.js'
 

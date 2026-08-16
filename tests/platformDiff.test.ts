@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { computePlatformDiff, readSupplierInventorySetting } from '../src/modules/product/inventoryPlatform/diff.js'
-import { computeChangesetDiff, DiffError } from '../src/modules/product/shelfToggle/diff.js'
+import { computeChangesetDiff, DiffError } from '../src/core/changeset/diff.js'
 import { inventoryPlatformModule } from '../src/modules/product/inventoryPlatform/module.js'
 const diffVersionHash = inventoryPlatformModule.diffVersion as (d: unknown[]) => string
 import type { InventoryPlatformItem } from '../src/core/changeset/types.js'

@@ -1,27 +1,8 @@
 import type { ToolContext } from '../../../tools/types.js'
 import { findProductsTool } from '../../../tools/findProducts.js'
 import { productPlansTool } from '../../../tools/productPlans.js'
-import type { ActionType, AnyChangeSetItem, AnyDiffItem, ChangeSetItem, DiffItem } from '../../../core/changeset/types.js'
-
-import { getModule } from '../../../core/changeset/registry.js'
-import '../../index.js'
-
-// Throws DiffError if any requested oid could not be read (403/500/invalid) or resolved no
-// current state — we must NOT silently stage a change with current_is_active: undefined.
-export class DiffError extends Error {
-  // Machine-readable code so toEnvelopeError (src/tools/envelope.ts) surfaces something other
-  // than `undefined` for `code` on the resulting envelope error.
-  public code = 'DIFF_READ_FAILED'
-  constructor(public keys: string[], message: string) {
-    super(message)
-  }
-}
-
-/** @deprecated Use getModule(actionType).computeDiff instead */
-export async function computeChangesetDiff(actionType: ActionType, items: AnyChangeSetItem[], ctx: ToolContext): Promise<AnyDiffItem[]> {
-  const mod = getModule(actionType)
-  return mod.computeDiff(ctx, items as any) as Promise<AnyDiffItem[]>
-}
+import type { ActionType, ChangeSetItem, DiffItem } from '../../../core/changeset/types.js'
+import { DiffError } from '../../../core/changeset/diff.js'
 
 export async function computeShelfDiff(actionType: Exclude<ActionType, 'inventory_setting'>, items: ChangeSetItem[], ctx: ToolContext): Promise<DiffItem[]> {
   if (actionType === 'shelf_toggle_product') {

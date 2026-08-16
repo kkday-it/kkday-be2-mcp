@@ -1,6 +1,6 @@
 import type { ToolContext } from '../../../tools/types.js'
 import { parseQuantities, groupDatesByMonth } from '../../../tools/inventoryShape.js'
-import { DiffError } from '../shelfToggle/diff.js'
+import { DiffError } from '../../../core/changeset/diff.js'
 import type { InventoryDateDiff, InventoryDiffItem, InventoryItem } from '../../../core/changeset/types.js'
 
 // Per-date live diff (spec §4). One GET per (item, supplier, month) — the quantities endpoint

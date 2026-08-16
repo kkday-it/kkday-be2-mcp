@@ -1,7 +1,7 @@
 import type { GatewayClient } from '../../../gateway/client.js'
 import type { ToolContext } from '../../../tools/types.js'
 import { sanitizeQueue } from './validate.js'
-import { DiffError } from '../shelfToggle/diff.js'
+import { DiffError } from '../../../core/changeset/diff.js'
 import type { ScheduleEntry, ShelfScheduleDiffItem, ShelfScheduleItem } from '../../../core/changeset/types.js'
 
 // Task 4 定案 (docs/superpowers/specs/2026-08-14-be2-mcp-baa-wizard-design.md §4.1/§4.2, probe +
