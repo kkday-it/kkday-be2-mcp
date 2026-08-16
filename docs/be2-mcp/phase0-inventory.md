@@ -17,6 +17,59 @@
 
 **下一步**：開新 session → `superpowers:writing-plans` 規劃 **Phase 1a**（MCP server skeleton + 3 個 L0 read tools + OTel + 稽核 + eval 骨架；Claude Code static bearer；**無外部依賴、不等 C 盤完**）→ agy-peer-review → subagent-driven-development + TDD。
 
+**Phase 1a 進度（2026-08-09，Task 16）**：**已實作完成 + Live SIT be2-220 e2e 驗收通過**——MCP server（Streamable HTTP）+ 3 個 L0 read tools（`be2_find_products`／`be2_get_product_plans`／`be2_get_inventory_settings`）+ OTel + 稽核（append-only audit_log）+ rate budget + eval 骨架,全走 TDD,測試 **70 passed / 0 skipped**（fixture-gated 測試已用真實 be2-220 資料實跑）,plan 已 agy-approved。Pilot 文件見 `docs/be2-mcp/phase1a-runbook.md`。
+
+**Live 驗收（2026-08-09,對 SIT be2-220）**：先前 `AU9010` 是 `.env` 誤指 stage,改回 `auth-220.sit`/`api-gateway-220.sit` 後 `.env` 帳密正常（`AU0000`）。以真實 bearer 透過 MCP 協定跑通 3 個工具(拿到真實商品名稱/方案/庫存狀態)、壞 bearer 拒絕、audit 無 token 明文、session_read_oids(§6.2 substrate)寫入、注入字串優雅處理。Live 揪出並修掉 3 個真實契約缺陷: fixture 需存 unwrapped、方案名是 `pkg_name`、inventory 端點須走 product-service-direct(`/product/api/v1/items/{itemOid}/inventories/...`,原 `/be2/api/v1/...` 系統性 500)。**未竟(非 Phase 1a read 阻擋項)**: inventory 依 supplier 的數量因測試帳號對該 marketplace 商品無 supplier 權限(403)未實測、需用帳號自管商品+supplier_oid 驗;trace_id 需 `OTEL_MODE=console|otlp` 才有值。
+
+**Phase 2a 進度（2026-08-09,Task 1–10）**：**已實作完成**——2 個 L2 change-set 工具（`be2_create_changeset`／`be2_get_changeset_status`）+ change-set service（§6.2 scope 讀取閘門、businessList action-only fail-fast、per-user 每日 change-set budget）+ capability-URL 確認頁（`GET/POST /confirm/:id`，一次性 token 只存 hash、creator-bound、`Referrer-Policy: no-referrer`、approve 時 live-diff 重算 + stale 409 + compare-and-swap 防重複執行）+ executor（read-merge-write 經 gateway PUT、no-op 略過、`Promise.allSettled`、before/after + per-item audit）+ eval（draft-only 拒絕、scope-gate、注入抵抗，10 案例）。`npm run ci` **108 passed / 0 skipped**、`tsc` clean；`npm run eval` 因無 `ANTHROPIC_API_KEY` 為文件化 SKIP（非失敗）。Plan 已 agy-approved（rounds=2）。Pilot 文件見 `docs/be2-mcp/phase2a-runbook.md`。
+**Live WRITE e2e — 契約已雙證,僅差「用我們程式跑一次真 200」（更新 2026-08-09,playwright + stage 實測後）**:
+- **寫入契約已驗證,非阻擋項**:用 playwright 驅動 be2-web 自身的上下架,攔到真實請求 = `PUT /product/api/v1/product-configs/{oid}/switch` body `{is_active, modify_user}` —— 與我們 executor 完全相同。**`modify_user` = JWT `platformId`**(已解;Phase 2a 的 `modifyUserFromPlaceholder` 回 platformId,其實是正解、非 placeholder)。使用者另在 **stage** 以同帳號/同商品/同 contract 實測 **200 成功**。
+- **be2-220 的 403 = per-環境 + per-oid 授權差異,不是程式/路徑/S2S 問題**:be2-web 自己(真瀏覽器、真 session、正確 contract)對 546965 也回同一個 403(546965 屬 lance.liu);此帳號在 220 對他人商品無寫權。stage 上同帳號同商品則可寫。→ 「換帳號/換機制」皆非必要;要真 200 只需一個此帳號有寫權的商品/環境。
+- **唯一未竟(非阻擋)**:用我們自己的 `GatewayClient.put` 跑一次真 200。stage 嘗試卡在 `.env` `STAGE_AUTHSVC_SERVICE_KEY` 為空(login 過、換碼 AU9997)。補齊 stage service key、或給 220 一個可寫商品即可收尾。詳見 `docs/be2-mcp/sit-write-contracts.md`。
+- Task 10 exit gate:local-gate（ci/eval 108 passed）已完成;live-write 標 PENDING(契約已雙證,僅差最後一次我方程式的真 200)。
+
+**Phase 2b 進度（2026-08-09,Task 1–7）**：**已實作完成**——SSO 確認頁 web app 取代 Phase 2a 的一次性 capability-URL:`web_sessions` 表 + `WebSessionStore`(idle TTL)、be2-auth POPUP 登入(`/confirm/login` 點擊手勢開彈窗 → postMessage 驗 origin → `/confirm/session` 換碼建 session、設 `be2mcp_sid` HttpOnly cookie)、`/confirm/logout`、confirm routes(`GET/POST /confirm/:id`、`/approve`、`/reject`)全面改成只認 session cookie(**不再讀任何 URL query/body 憑證**)。**自我批准漏洞已關閉**:agent 沒有 be2-auth session、無法批准自己建立的 change-set,即使帶上舊版 `?token=` 參數也一樣(`tests/phase2bSecurity.test.ts` 有回歸測試)。IDOR 由「登入使用者 == change-set 建立者」把關(不同人一律 404,無 existence leak)。executor/live-diff/audit 全部改用**批准當下的 web session** 身分(而非 change-set 原始建立者的身分),CAS 防重複執行、modify_user 解析失敗不 strand change-set 等 Phase 2a 既有保護全數保留。`npm run ci` **137 passed / 0 skipped**、`tsc` clean；`npm run eval` 因無 `ANTHROPIC_API_KEY` 為文件化 SKIP(非失敗)。Plan 已 agy-approved(rounds=3)。Pilot 文件見 `docs/be2-mcp/phase2b-runbook.md`。
+**Live WRITE e2e 仍 DEFERRED**:沿用 Phase 2a 的 403 卡點(SIT `.env` 帳號無 shelf-write 權限,契約已雙證,見上與 `docs/be2-mcp/sit-write-contracts.md`),Phase 2b 沒有新增寫入路徑,只換了「誰能按批准」的認證層,故此阻擋項不變、不重新驗證。
+**Carry-forward(待對真實 be2-auth 確認,非阻擋)**:be2-auth POPUP 的 `postMessage` 訊息契約(型別 `UPDATE_AUTH_TOKEN`、payload 的 code 欄位鍵名)以及登入 URL 的 `redirectPath` 實際語意/allowlist 行為,目前只在單元測試用 mock `authServiceClient.exchangeCode` 驗證流程骨架,尚未對真實 be2-auth 環境跑過一次真的 POPUP 登入。對應 Phase 0 B2 的延伸小確認,見 `docs/be2-mcp/phase2b-runbook.md`「已知限制」與「Live SIT WRITE e2e — PENDING」兩節。
+
+**Phase 3a 進度（2026-08-10,Task 1–8）**：**已實作完成**——3 個庫存領域切片（`inventory_setting`）的完整鏈路，經 Task 1–8 於 `feat/phase1a` 分支落地：types + zod schema + 語義驗證（op/quantity 耦合、過去日期擋、(item,supplier,date) 唯一性）、共用 quantities parser（`src/tools/inventoryShape.ts`，候選欄位容錯解析）、L0 讀取（`be2_get_inventory_settings`）改接共用 parser、per-date inventory diff + dispatcher + op-aware `diff_version` hash（`set` 綁現況、`adjust` 綁操作本身以免 live drift 誤判 stale）、`be2_create_changeset` 接上 `inventory_setting`（scope 讀取閘門、businessList action-only fail-fast，action code 為 SIT 已查證的 `product.product-inventory.update`、非佔位、每日 change-set budget 沿用 Phase 2a 機制）、inventory executor（忙碌保護輪詢 5×2s、跨月讀-改-寫分組、per-date 結果、`would_go_negative` 排除而非硬寫負值、partial 整體狀態不 collapse 成 failed 以免 adjust 重試時雙重疊加）、確認頁 per-date renderer + 高風險紅字 banner（庫存寫入立即影響前台可售並清 cache）。Final whole-branch review（fable）抓到 2 個 Important 已修（`2f34a1f`）:(1) 跨 change-set 同 item×supplier 併發 lost-update → execInventory 加 in-process per-key mutex（多 instance 部署需分散式鎖,見 runbook 已知限制）;(2) `partial` item 稽核誤記 `ok` → 非 done/skipped_noop 一律記 `error`。`npm run ci` **195 passed / 0 skipped**、`tsc` clean；`npm run eval` 因無 `ANTHROPIC_API_KEY` 為文件化 SKIP（非失敗）；新增 4 個庫存 eval case（先讀後寫、拒絕直接寫、拒絕工具輸出注入、拒絕未經批准即宣稱已完成）。Pilot 文件見 `docs/be2-mcp/phase3a-runbook.md`。
+**Task 1 probe 結論（比 Phase 2a/2b 更早卡關）**：對 SIT be2-220、帳號自己名下商品（`item_oid 1713281`）的庫存讀取 BLOCKED——`.../inventories/status` 回 200，但帶 `supplier_oid`（0/1/2 皆試過）的逐日數量 GET 全部 403。**非缺 action code**：`businessList` 確實含 `product.product-inventory.query`/`.update`；判定為 per-supplier 授權範圍拒絕（帳號未被對映為任何 supplier），非商品所有權問題。Q1–Q6（GET 真實形狀、merge-vs-replace、跨月批次、quantity 欄位名、sync/async、是否分 SKU 維度）全數 **OPEN**；Q7（`modify_user=platformId`）沿用通則重確認；Q8（403 fail-closed）**CONFIRMED**。因 Q1–Q6 OPEN，Task 2–9 全走**容錯解析路徑**（候選欄位清單、保守批次上限 62 天/20 items、busy-guard 無條件輪詢、async 延伸判斷跳過）完成，非等 probe 解答才動工。解卡路徑同 Phase 2a/2b 的形狀：(1) be2-220 supplier 對映，或 (2) 補齊 `.env` 的 `STAGE_pwd`/`STAGE_AUTHSVC_SERVICE_KEY` 改打 stage。細節見 `docs/be2-mcp/sit-write-contracts.md` §inventory。
+**Live SIT WRITE e2e：PENDING，且比 Phase 2a/2b 的 PENDING 更早一步**——那兩份的寫入契約已用 be2-web/Playwright 實測 + stage 200 雙證，只差我方程式跑出的最後一次真 200；庫存這裡連 GET 都尚未成功過一次，讀取契約本身仍是猜測（容錯解析），尚未雙證。跑法見 `docs/be2-mcp/phase3a-runbook.md`「Live SIT WRITE e2e — PENDING」節。
+
+**Phase 4a 進度（2026-08-14/15,Task 1–8）**：**已實作完成 + Live SIT be2-220 e2e 驗收（`shelf_schedule` 與 `inventory_platform` 雙端皆由真人於精靈面板 verified 通過）**——BAA（BE2 Action Assistant）批次精靈搬進 MCP Apps 互動面板（24h POC，spec/plan 皆已 agy approved），兩個新 change-set `action_type`：`inventory_platform`（庫存管理平台三態切換 BE2/BE2_SCM/EXTERNAL，變更單位 `item_oid×supplier_oid`、面板自動連動共用 item 的兄弟方案）、`shelf_schedule`（be2 原生排程上下架，`reserve_queue` 整組取代、依 `prod_oid` 分組單 PUT 帶多 pkg 原生批次）；2 個 app-only tools（`app_get_batch_view` 三層 read-oids 登記、`app_create_changeset` 復用 `createChangesetCore`）+ 1 個 model-visible 入口（`be2_open_batch_wizard`）；四步驟批次精靈面板（`ui://be2/batch-wizard.html`：選擇→檢視→批准→結果，含多商品頁籤、取消排程、執行後自動讀回驗證、顯示下架方案開關、細節展開展示列、EXTERNAL 確認防線與結果 ledger 狀態藥丸）。Task 1 probe 發現 `inventory_platform` 現況讀取已改走 `basic-info` 端點，繞過原本的 configs 403 阻擋。`npm run ci` **421 passed / 0 skipped**、`tsc` clean；`npm run eval` 因無 `ANTHROPIC_API_KEY` 為文件化 SKIP（非失敗），新增 2 個批次精靈 eval case（拒絕未經批准即宣稱完成、拒絕直接寫 reserve-active 引導走精靈）。Pilot 文件見 `docs/be2-mcp/phase4a-runbook.md`。
+**Live 驗收結果（2026-08-15，真人透過 Claude Desktop 批次精靈面板，對 34133）**：`shelf_schedule` **全鏈路 live 驗收通過**（排程設定、執行後 ✓ 狀態讀回、啟用 clear queue 模式成功取消佇列）；`inventory_platform` **讀寫與可逆全鏈路亦 live 驗收通過**（改走 `basic-info` 取代 configs 順利取得 200 現況，連動勾選、切換 `BE2_SCM` 及還原皆驗證成功）。原 S2S configs 403 宣告為歷史卡點，目前 pending 的 auth-service verify 申請僅影響逐日數量 PUT。細節見 `docs/be2-mcp/phase4a-runbook.md`「Live 驗收結果」節、`docs/be2-mcp/sit-write-contracts.md`「inventory-platform read」節。
+
+## Phase 3 執行決策 + handoff（2026-08-10,待新 session 接手 brainstorm）
+
+**決策**:Phase 3 不做成一份 spec,**拆 3 個逐領域切片**(3a/3b/3c),每片各自 brainstorm→spec→(agy)→plan→(agy)→subagent-driven,重用 Phase 2a/2b 的 change-set + SSO 確認頁機制**不動**。**首片 = `inventory_setting`(庫存)**(使用者拍板,2026-08-10)。順序:庫存 → 價格 → 方案維護(package rename/sort/delete;phase0 已判為低價值,擺最後;`schedule_setting`/日期場次真寫入近 0,視需求再開)。理由:phase0 分析「真價值在庫存+價格」;庫存真寫入量最高(~11.8k/月)、power-user ROI 最突出。
+
+**每個 action_type 切片的固定結構**(仿 Phase 2a):
+1. **live SIT 寫入契約 probe**(仿 Phase 2a Task 1):該域寫入 endpoint、必填欄位、read-merge-write 語義(merge vs replace)、`modify_user`(已知=JWT `platformId`)、可逆性(先 read→改→還原)。**庫存/價格域 endpoint 尚未盤(Phase 0 C 待盤)**,此 probe 是第一步。
+2. **現況讀取**(spec §4 硬性:嚴禁盲寫):擴充既有 L0 讀取工具的回傳 schema、或加一支對應讀取工具,讓 agent 看得到該域現況才能算 diff / 做相對編輯(如「漲價 10%」「庫存 +50」)。
+3. **change-set action_type**:在 `createChangesetTool` 的 `ACTION_CODES` + item schema + `computeShelfDiff`(改名/泛化)+ executor 的 read-merge-write 分支各加該域邏輯;businessList 動作碼查真實 businessList(仿 Phase 2a 用 `product.*` 實查)。
+4. **eval + 安全測試**:draft-only、scope-gate、注入;該域的 diff/相對編輯正確性。
+
+**庫存域已知線索**(來自 Phase 1a inventory 讀取 + trellis-poc memory,待 probe 證實):讀取走 product-service-direct `/product/api/v1/items/{itemOid}/inventories/...`;寫入候選 `PUT items/{itemOid}/inventories`、`PUT item-configs/{itemOid}/inventory-setting`(mode)、`PUT items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting`;粒度 = item × supplier × 日期。**高風險**:寫庫存立即影響前台可售 + 清 cache。
+
+**共同前提/卡點(接手前需知)**:
+- 寫入 live 驗證仍卡 **per-環境/per-oid 授權**(SIT `.env` 帳號對他人商品 403;stage 同帳號同商品可寫但 `.env` 缺 `STAGE_AUTHSVC_SERVICE_KEY`)。庫存/價格 probe 同樣需要一個「此帳號在目標環境可寫」的 item。
+- be2-web 導航除錯原則(memory `be2-web-navigation-debug`):先到 `/v2/product/search-draft` 搜商品→點按鈕,別猜 SPA route(是 `v2` 不是 `v3`)。
+- 現有分支 `feat/phase1a` 已推私有 repo,PR #1(→main)已開;Phase 1a/2a/2b 完成、147 tests 綠。
+
+**下一步**:開新 session(context 乾淨)→ `superpowers:brainstorming` 針對**庫存域**(先讀本段 + 主 spec §4/§5 + Phase 2a/2b 設計 + `sit-write-contracts.md`)→ 產 Phase 3a spec → agy → writing-plans → subagent-driven。
+
+## Phase 5（模組化）handoff — 2026-08-16，供新 session 接手
+
+**目標**：core（change-set 治理/OAuth/MCP Apps 底座/稽核/budget）與 domain module（每個 action_type 一包：schema+diff+executor+renderer+wizard 分頁）拆開——3b 價格/3c 方案維護與「domain-onboarding 自動收納流程」的地基。初稿見 `docs/be2-mcp/module-architecture.md`（先讀）。
+
+**起點狀態**：`feat/phase1a` HEAD（428 tests 綠、已推 remote）；PR #1 更新至全貌、final review ready-to-merge、**merge 與否待使用者拍板**——模組化應開新分支（建議 `feat/modularization`，從 main（若已 merge）或 feat/phase1a 切）。
+
+**流程**：brainstorming → spec（docs/superpowers/specs/）→ agy review → writing-plans → agy review → subagent 實作。**實作分工鐵則（省 Claude 額度）**：實作外包 agy（`--mode accept-edits`，模型見 memory `agy-work-allocation`），Claude 只編排/驗證/commit。
+
+**模組化邊界的已知素材**：action_type 相關檔案散在 `src/changeset/`（types/tools/diff dispatcher/confirmService itemKeysOf/diffVersionHash 分支/executor* / *Diff/ *Validate）、`src/server/confirmRoutes.ts`（per-type renderer）、`src/tools/batchView.ts`、`src/ui/batch-wizard.ts`（per-type UI 分支）——每加一個 action_type 目前要碰 7+ 檔，這就是模組化要收斂的介面面。留意 diffVersionHash/itemKey 的型別判別互斥性（歷次 review 反覆抓的點）要變成 module 介面的一部分。
+
+**與本 session 並行**：原 session 續收 wizard 面板 UX（勿動 src/changeset 核心，避免衝突；面板檔 src/ui/batch-wizard.ts 歸原 session）。
+
 ## 0. 決策：Option 1 — 已定案（2026-08-09）
 
 > **結論：採 Option 1（server 端 token store）。** 主 spec §2/§3/§6/§11/§12 已回改並過 agy review（rounds=2 approved）。下方為評估紀錄。
@@ -55,7 +108,7 @@
 | # | 項目 | 狀態 | 對象 |
 |---|---|---|---|
 | B1 | service key 申請 + scope | 🟢 SIT 已取得（`.env` `SIT_AUTHSVC_SERVICE_KEY`）；prod 版待另申請 | auth-service team |
-| B2 | be2-auth redirect/callback（機制已內建 A7，SIT 實測跑通 A8）| 🟢 基本收 | be2-auth team（只剩小確認）|
+| B2 | be2-auth redirect/callback（機制已內建 A7，SIT 實測跑通 A8）| ✅ **全收（2026-08-14 live 驗收）** | SIT 零外部依賴；prod 上線前需 BE2_DOMAIN 白名單 |
 | B3 | 公網 HTTPS ingress | 🟢 **本情境不需要**（Code+Desktop 走內網；只有 claude.ai 網頁才需公網）|
 | B4 | Option 2 ciphertext 離境核可 | ⬜ **若改 Option 1 則歸零**（見 §0）| 資安 |
 
@@ -68,8 +121,9 @@
 - **原本擔心**：be2-auth 不見得支援讓第三方 redirect 進來登入、帶 token 回去。
 - **原始碼查證結果（A7）**：**機制已內建**。`GET auth/{userType}/login?redirectPath=<callback>&loginFlow=REDIRECT|POPUP`，`LoginPage.vue` 登入成功後把 token POST 到 `redirectPath`（REDIRECT）或發 `UPDATE_AUTH_TOKEN` 給 opener（POPUP）；`validateRedirectPath` 幾乎不設限。be2-web 自己就是這樣登入。
 - **SIT live 實測（A8）**：be2-web 就是用 `auth-220/auth/be2/login?loginFlow=POPUP`（popup + postMessage）跑通。換碼在 be2-web **後端**做（`/v2/api/v1/auth/login-authorization-code/{uuid}`）= be2-mcp 要照抄的模式。
-- **剩下小確認**：(1) be2-mcp 若用 REDIRECT flow（非 POPUP），`redirectPath` 跨網域是否被 `validateOrigin`/allowlist 擋——POPUP 模式已證可用、可直接沿用；(2) POPUP 的 postMessage origin 檢查。**不是要對方開發新功能。**
+- **✅ 全收（2026-08-14）**：小確認 (1)(2) 都有了定論——讀 kkday-auth-service 原始碼 + live 驗收：POPUP guard = `AUTH_LOGIN_READY`→opener 500ms 內回 `CONFIRM_LOGIN_DOMAIN` 握手 + opener origin 對 `login.be2.domain`（env `BE2_DOMAIN`）白名單；**SIT/local 環境 `ALLOW_LOCAL_LOGIN=true` 跳過 origin 檢查（auth-220 已開）→ SIT 零外部依賴**；REDIRECT flow 驗 `document.referrer` 同一份白名單（直開 404 已實測），不採用。OAuth 登入腿完整 live e2e + 真人 Claude Code 接入皆通過（`oauth-runbook.md` Live 驗收）。**唯一殘項移到 prod**：上線前請 auth-service 把 be2-mcp 部署 origin 納 `BE2_DOMAIN`（prod `isDevEnv` 硬編 false）。
 - **不解會怎樣**：退回 fallback（be2-mcp 自架登入頁打 REST），能動但 Claude 與確認頁各自登一次、失去 SSO 無縫。
+- **登入腿定案（2026-08-13，OAuth `/oauth/authorize` Task 8 spike + Task 9 落地）：選 POPUP，REDIRECT 延後不做。** POPUP 已 SIT 實測跑通（A8）、可直接復用確認頁 `ssoRoutes.ts` 的 `exchangeCodeToIdentity` + postMessage + origin 檢查機制，實作面零未知；REDIRECT 的跨網域 `redirectPath` allowlist 行為仍未實證，賭它可行會引入一個 live 阻擋點，故不採用。功能等價、對 Claude Code/Desktop 的 OAuth 客戶端無影響（它只在意拿到 authz code 回 redirect_uri）。決策記錄與取捨見 `docs/be2-mcp/spike-oauth-login-leg.md`；接入步驟見 `docs/be2-mcp/oauth-runbook.md`。REDIRECT 若日後想換取更教科書的體驗，留待獨立 live spike，非本波阻擋項。
 
 ### B3 — ingress（誰能連進來）→ 本情境🟢不需要公網（2026-08-09 釐清）
 - **「ingress」= 誰能對 be2-mcp 發起連線**。分 client 看：

@@ -1,0 +1,21 @@
+{
+  "is_active": true,
+  "is_global_search": true,
+  "instant_order_flag": 1,
+  "is_recommend_mail": true,
+  "promo_tag": null,
+  "payment_invoice_type": 1,
+  "modify_user": "24c66807-352e-41da-8a28-53b482ba7f4e",
+  "allow_modify_platform": "be2",
+  "is_locked_for_active": false,
+  "allow_sale_channel": [
+    "web",
+    "ios",
+    "android",
+    "b2d",
+    "affiliate",
+    "b2d-internal"
+  ],
+  "market_external_edit_blocked": false,
+  "market_edit_block_change_reason": null
+}

@@ -1,0 +1,17 @@
+[
+  {
+    "pkg_oid": 1967504,
+    "name": "普通商品_2026-08-04 18:20:24.280523",
+    "is_active": true,
+    "is_bundle": false,
+    "is_standalone": true,
+    "reserve_date": null,
+    "reserve_status": null,
+    "reserve_queue": [],
+    "pay_on_site_marketings": [],
+    "has_activity_label": false,
+    "user_promotion_label": null,
+    "updated_by": "24c66807-352e-41da-8a28-53b482ba7f4e",
+    "updated_at": "2026-08-04 10:20:24"
+  }
+]
