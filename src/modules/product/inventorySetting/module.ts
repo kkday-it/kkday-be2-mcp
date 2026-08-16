@@ -1,7 +1,8 @@
 import { z } from 'zod'
+import { createHash } from 'node:crypto'
 import type { ActionModule, DiffCtx } from '../../../core/changeset/module.js'
-import type { InventoryItem } from '../../../changeset/types.js'
-import { computeChangesetDiff, diffVersionHash } from '../../../changeset/diff.js'
+import type { InventoryItem, InventoryDiffItem } from '../../../changeset/types.js'
+import { computeInventoryDiff } from '../../../changeset/inventoryDiff.js'
 import { validateInventoryItems } from '../../../changeset/inventoryValidate.js'
 import { itemKey } from './keys.js'
 
@@ -19,7 +20,7 @@ function isInventoryItem(i: unknown): i is InventoryItem {
 
 export const INVENTORY_ACTION_CODES = ['product.product-inventory.update']
 
-export const inventorySettingModule: ActionModule<InventoryItem, unknown> = {
+export const inventorySettingModule: ActionModule<InventoryItem, InventoryDiffItem> = {
   actionType: 'inventory_setting',
   itemSchema: invItemShape,
   authz: {
@@ -35,8 +36,16 @@ export const inventorySettingModule: ActionModule<InventoryItem, unknown> = {
     const bad = validateInventoryItems(items, nowMs)
     return bad || null
   },
-  computeDiff: (ctx: DiffCtx, items: InventoryItem[]) => computeChangesetDiff('inventory_setting', items, ctx),
-  diffVersion: diffVersionHash,
+  computeDiff: (ctx: DiffCtx, items: InventoryItem[]) => computeInventoryDiff(items, ctx),
+  diffVersion: (diff: InventoryDiffItem[]) => {
+    const canon = diff.map(inv => {
+      if (inv.op === 'adjust') {
+        return `invadj:${inv.item_oid}:${inv.supplier_oid}:${inv.dates.map(x => x.date).sort().join(',')}=${inv.quantity}`
+      }
+      return inv.dates.map(x => `inv:${inv.item_oid}:${inv.supplier_oid}:${x.date}=${x.current ?? 'null'}`).sort().join('|')
+    }).sort().join('|')
+    return createHash('sha256').update(canon).digest('hex')
+  },
   itemKey,
   execute: () => { throw new Error('not wired until Task 5/6') },
   renderConfirm: () => { throw new Error('not wired until Task 5/6') }

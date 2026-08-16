@@ -1,7 +1,8 @@
 import { z } from 'zod'
+import { createHash } from 'node:crypto'
 import type { ActionModule, DiffCtx } from '../../../core/changeset/module.js'
-import type { ShelfScheduleItem } from '../../../changeset/types.js'
-import { computeChangesetDiff, diffVersionHash } from '../../../changeset/diff.js'
+import type { ShelfScheduleItem, ShelfScheduleDiffItem } from '../../../changeset/types.js'
+import { computeScheduleDiff } from '../../../changeset/scheduleDiff.js'
 import { validateShelfScheduleItems } from '../../../changeset/batchValidate.js'
 import { itemKey } from './keys.js'
 
@@ -17,7 +18,7 @@ function isShelfScheduleItem(i: unknown): i is ShelfScheduleItem {
     Array.isArray((i as ShelfScheduleItem).queue)
 }
 
-export const shelfScheduleModule: ActionModule<ShelfScheduleItem, unknown> = {
+export const shelfScheduleModule: ActionModule<ShelfScheduleItem, ShelfScheduleDiffItem> = {
   actionType: 'shelf_schedule',
   itemSchema: shelfScheduleItemShape,
   authz: {
@@ -38,8 +39,20 @@ export const shelfScheduleModule: ActionModule<ShelfScheduleItem, unknown> = {
     const bad = validateShelfScheduleItems(items, () => nowMs)
     return bad ? { key: 'shelf_schedule', message: bad } : null
   },
-  computeDiff: (ctx: DiffCtx, items: ShelfScheduleItem[]) => computeChangesetDiff('shelf_schedule', items, ctx),
-  diffVersion: diffVersionHash,
+  computeDiff: (ctx: DiffCtx, items: ShelfScheduleItem[]) => computeScheduleDiff(items, ctx),
+  diffVersion: (diff: ShelfScheduleDiffItem[]) => {
+    // Task 4 explicit branch: a ShelfScheduleDiffItem also has prod_oid/pkg_oid (same field names
+    // as DiffItem) but NO current_is_active — falling through to the DiffItem branch below would
+    // read `.current_is_active` as undefined for every item, producing a constant hash regardless
+    // of queue content and silently disabling the stale-drift guard entirely. `current_queue` is
+    // unique to this shape. Only current_queue (the live-read state) is hashed — new_queue is
+    // invariant per the change-set's own items, same rule as the other branches here.
+    const canon = diff.map(sc => {
+      const q = sc.current_queue.map(e => `${e.reserve_date_utc}:${e.reserve_status}`).sort().join(',')
+      return `sched:${sc.prod_oid}:${sc.pkg_oid}=${q}`
+    }).sort().join('|')
+    return createHash('sha256').update(canon).digest('hex')
+  },
   itemKey,
   execute: () => { throw new Error('not wired until Task 5/6') },
   renderConfirm: () => { throw new Error('not wired until Task 5/6') }

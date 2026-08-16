@@ -1,7 +1,8 @@
 import { z } from 'zod'
+import { createHash } from 'node:crypto'
 import type { ActionModule, DiffCtx } from '../../../core/changeset/module.js'
-import type { ChangeSetItem } from '../../../changeset/types.js'
-import { computeChangesetDiff, diffVersionHash } from '../../../changeset/diff.js'
+import type { ChangeSetItem, DiffItem } from '../../../changeset/types.js'
+import { computeShelfDiff } from '../../../changeset/diff.js'
 import { itemKey } from './keys.js'
 
 const itemSchemaProduct = z.object({ prod_oid: z.string().min(1), target_is_active: z.boolean() })
@@ -15,7 +16,7 @@ function isShelfTogglePlanItem(i: unknown): i is ChangeSetItem {
   return typeof (i as ChangeSetItem).prod_oid === 'string' && typeof (i as ChangeSetItem).pkg_oid === 'string' && typeof (i as ChangeSetItem).target_is_active === 'boolean'
 }
 
-export const shelfToggleProductModule: ActionModule<ChangeSetItem, unknown> = {
+export const shelfToggleProductModule: ActionModule<ChangeSetItem, DiffItem> = {
   actionType: 'shelf_toggle_product',
   itemSchema: itemSchemaProduct,
   authz: {
@@ -30,14 +31,17 @@ export const shelfToggleProductModule: ActionModule<ChangeSetItem, unknown> = {
   scopeOids: (item: ChangeSetItem) => [item.prod_oid, ...(item.pkg_oid ? [item.pkg_oid] : [])],
   scopeErrorKey: (item: ChangeSetItem) => item.pkg_oid ?? item.prod_oid,
   validate: () => null,
-  computeDiff: (ctx: DiffCtx, items: ChangeSetItem[]) => computeChangesetDiff('shelf_toggle_product', items, ctx),
-  diffVersion: diffVersionHash,
+  computeDiff: (ctx: DiffCtx, items: ChangeSetItem[]) => computeShelfDiff('shelf_toggle_product', items, ctx),
+  diffVersion: (diff: DiffItem[]) => {
+    const canon = diff.map(s => `${s.prod_oid}:${s.pkg_oid ?? ''}=${s.current_is_active ?? 'null'}`).sort().join('|')
+    return createHash('sha256').update(canon).digest('hex')
+  },
   itemKey,
   execute: () => { throw new Error('not wired until Task 5/6') },
   renderConfirm: () => { throw new Error('not wired until Task 5/6') }
 }
 
-export const shelfTogglePlanModule: ActionModule<ChangeSetItem, unknown> = {
+export const shelfTogglePlanModule: ActionModule<ChangeSetItem, DiffItem> = {
   actionType: 'shelf_toggle_plan',
   itemSchema: itemSchemaPlan,
   authz: {
@@ -50,8 +54,11 @@ export const shelfTogglePlanModule: ActionModule<ChangeSetItem, unknown> = {
   scopeOids: (item: ChangeSetItem) => [item.prod_oid, ...(item.pkg_oid ? [item.pkg_oid] : [])],
   scopeErrorKey: (item: ChangeSetItem) => item.pkg_oid ?? item.prod_oid,
   validate: () => null,
-  computeDiff: (ctx: DiffCtx, items: ChangeSetItem[]) => computeChangesetDiff('shelf_toggle_plan', items, ctx),
-  diffVersion: diffVersionHash,
+  computeDiff: (ctx: DiffCtx, items: ChangeSetItem[]) => computeShelfDiff('shelf_toggle_plan', items, ctx),
+  diffVersion: (diff: DiffItem[]) => {
+    const canon = diff.map(s => `${s.prod_oid}:${s.pkg_oid ?? ''}=${s.current_is_active ?? 'null'}`).sort().join('|')
+    return createHash('sha256').update(canon).digest('hex')
+  },
   itemKey,
   execute: () => { throw new Error('not wired until Task 5/6') },
   renderConfirm: () => { throw new Error('not wired until Task 5/6') }

@@ -1,7 +1,8 @@
 import { z } from 'zod'
+import { createHash } from 'node:crypto'
 import type { ActionModule, DiffCtx } from '../../../core/changeset/module.js'
-import type { InventoryPlatformItem } from '../../../changeset/types.js'
-import { computeChangesetDiff, diffVersionHash } from '../../../changeset/diff.js'
+import type { InventoryPlatformItem, InventoryPlatformDiffItem } from '../../../changeset/types.js'
+import { computePlatformDiff } from '../../../changeset/platformDiff.js'
 import { validateInventoryPlatformItems } from '../../../changeset/batchValidate.js'
 import { itemKey } from './keys.js'
 
@@ -24,7 +25,7 @@ function isInventoryPlatformItem(i: unknown): i is InventoryPlatformItem {
     Array.isArray((i as InventoryPlatformItem).affected_pkgs)
 }
 
-export const inventoryPlatformModule: ActionModule<InventoryPlatformItem, unknown> = {
+export const inventoryPlatformModule: ActionModule<InventoryPlatformItem, InventoryPlatformDiffItem> = {
   actionType: 'inventory_platform',
   itemSchema: invPlatformItemShape,
   authz: {
@@ -42,8 +43,18 @@ export const inventoryPlatformModule: ActionModule<InventoryPlatformItem, unknow
     const bad = validateInventoryPlatformItems(items)
     return bad ? { key: 'inventory_platform', message: bad } : null
   },
-  computeDiff: (ctx: DiffCtx, items: InventoryPlatformItem[]) => computeChangesetDiff('inventory_platform', items, ctx),
-  diffVersion: diffVersionHash,
+  computeDiff: (ctx: DiffCtx, items: InventoryPlatformItem[]) => computePlatformDiff(items, ctx),
+  diffVersion: (diff: InventoryPlatformDiffItem[]) => {
+    // Explicit branch (Task 3 review): InventoryPlatformDiffItem also has `item_oid`, so it MUST
+    // be distinguished from InventoryDiffItem BEFORE the duck-typed `'item_oid' in d` check below
+    // — reading `.dates` off a platform diff item would crash. `target`/`affected_pkgs` are
+    // unique to this shape (DiffItem has `target_is_active`, InventoryDiffItem has no top-level
+    // `target`). Only `current` (the live-read state) is hashed — `target` is invariant per the
+    // change-set's own items and drift there is not what staleness is guarding against (same
+    // rule as the shelf/`set` branches below).
+    const canon = diff.map(p => `invplat:${p.item_oid}:${p.supplier_oid}=${p.current}`).sort().join('|')
+    return createHash('sha256').update(canon).digest('hex')
+  },
   itemKey,
   execute: () => { throw new Error('not wired until Task 5/6') },
   renderConfirm: () => { throw new Error('not wired until Task 5/6') }

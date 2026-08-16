@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { computeInventoryDiff } from '../src/changeset/inventoryDiff.js'
-import { computeChangesetDiff, diffVersionHash, DiffError } from '../src/changeset/diff.js'
+import { computeChangesetDiff, DiffError } from '../src/changeset/diff.js'
+import { inventorySettingModule } from '../src/modules/product/inventorySetting/module.js'
+import { shelfToggleProductModule } from '../src/modules/product/shelfToggle/module.js'
+const diffVersionHash = inventorySettingModule.diffVersion as (d: unknown[]) => string
 import type { InventoryItem } from '../src/changeset/types.js'
 
 function gatewayWith(byMonth: Record<string, unknown>) {
@@ -70,7 +73,7 @@ describe('diffVersionHash op split (spec §4)', () => {
   })
   it('shelf diff hashing is unchanged', () => {
     const shelf = [{ prod_oid: 'p1', target_is_active: false, current_is_active: true, no_op: false }]
-    expect(diffVersionHash(shelf)).toBe(diffVersionHash([...shelf]))
+    expect(shelfToggleProductModule.diffVersion(shelf)).toBe(shelfToggleProductModule.diffVersion([...shelf]))
   })
 })
 

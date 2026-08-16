@@ -1,5 +1,6 @@
 import express from 'express'
-import { computeChangesetDiff, diffVersionHash } from '../changeset/diff.js'
+import { getModule } from '../core/changeset/registry.js'
+import '../modules/index.js'
 import type { ExecutorDeps } from '../changeset/executor.js'
 import { approveAndExecute } from '../changeset/confirmService.js'
 import type { TokenManager } from '../auth/tokenManager.js'
@@ -175,8 +176,9 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
   function loginRedirect(res: express.Response, next: string) { res.redirect(302, `/confirm/login?next=${encodeURIComponent(next)}`) }
 
   async function liveDiff(rec: NonNullable<ReturnType<typeof deps.changeSets.get>>, accessToken: string) {
-    const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: deps.gateway, accessToken, userLabel: rec.creatorLabel })
-    return { diff, version: diffVersionHash(diff) }
+    const mod = getModule(rec.actionType)
+    const diff = await mod.computeDiff({ gateway: deps.gateway, accessToken, userLabel: rec.creatorLabel }, rec.items) as AnyDiffItem[]
+    return { diff, version: mod.diffVersion(diff) }
   }
 
   r.get('/confirm/:id', h(async (req, res) => {

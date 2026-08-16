@@ -3,7 +3,9 @@ import { openDb } from '../src/store/db.js'
 import { ChangeSetStore } from '../src/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { approveAndExecute, type ConfirmServiceDeps } from '../src/changeset/confirmService.js'
-import { computeChangesetDiff, diffVersionHash } from '../src/changeset/diff.js'
+import { computeChangesetDiff } from '../src/changeset/diff.js'
+import { getModule } from '../src/core/changeset/registry.js'
+import '../src/modules/index.js'
 import type { ChangeSetRecord, InventoryItem } from '../src/changeset/types.js'
 
 // Task 11 Finding 1: tests/appConfirm.test.ts only exercises a FAKE approveAndExecute (it stubs
@@ -54,7 +56,7 @@ function shelfGateway(live: { is_active: boolean } = { is_active: true }) {
 
 async function realShelfDiffVersion(rec: ChangeSetRecord, gw: ReturnType<typeof shelfGateway>): Promise<string> {
   const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel })
-  return diffVersionHash(diff)
+  return getModule(rec.actionType).diffVersion(diff)
 }
 
 // --- inventory fixtures ----------------------------------------------------------------------
@@ -100,7 +102,7 @@ function invGateway(qty: Record<string, Record<string, number>>) {
 
 async function realInventoryDiffVersion(rec: ChangeSetRecord, gw: ReturnType<typeof invGateway>): Promise<string> {
   const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel })
-  return diffVersionHash(diff)
+  return getModule(rec.actionType).diffVersion(diff)
 }
 
 describe('approveAndExecute — real confirmed_keys validation (Task 11 Finding 1)', () => {

@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { execInventoryPlatform, type ExecutorContext } from '../src/changeset/executorPlatform.js'
 import { approveAndExecute, type ConfirmServiceDeps } from '../src/changeset/confirmService.js'
-import { computeChangesetDiff, diffVersionHash } from '../src/changeset/diff.js'
+import { computeChangesetDiff } from '../src/changeset/diff.js'
+import { inventoryPlatformModule } from '../src/modules/product/inventoryPlatform/module.js'
+const diffVersionHash = inventoryPlatformModule.diffVersion as (d: unknown[]) => string
 import { ChangeSetStore } from '../src/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { openDb } from '../src/store/db.js'
