@@ -97,7 +97,9 @@ export interface ActionModule<Item = unknown, DiffI = unknown> {
   diffVersion(diff: DiffI[]): string
   itemKey(d: Item | DiffI): string
   execute(ctx: ExecCtx, rec: ChangeSetRecord): Promise<ItemResult[]>
-  renderConfirm(rec: ChangeSetRecord, diff: DiffI[], diffVersion: string): ConfirmView
+  renderConfirm(rec: ChangeSetRecord, diff: DiffI[], diffVersion: string, banner: string): ConfirmView
+                                       // banner = route 層動態紅字（stale/CAS），module 當不透明字串
+                                       // 放在自己現行頁面的精確位置（Task 6 說明）
   wizard?: unknown                     // 佔位型別；Task 8 定為 WizardDescriptor（僅 batch 型）
 }
 ```
@@ -152,7 +154,7 @@ export function resetRegistryForTest(): void { modules.clear() }   // 僅測試�
 | `authz.codes` | `ACTION_CODES` 對應列（`tools.ts:17-30`，含註解） | 同左 | 同左 | 同左 |
 | `authz.onMissing` | `'block'` | `'block'` | `'warn'` | `'warn'` |
 | `isItem` | `!isInventoryItem`（shelf 反向檢查，`tools.ts:152`）→ 改寫成正向 guard：`typeof prod_oid==='string' && typeof target_is_active==='boolean'`（plan 另要求 pkg_oid）——**行為以既有 createChangeset 測試 pin** | `isInventoryItem`（`:78-79`） | `isInventoryPlatformItem`（`:81-85`） | `isShelfScheduleItem`（`:87-90`） |
-| `scopeOids` | `[prod_oid]` / `[prod_oid, pkg_oid]`（`tools.ts:156`） | `[item_oid]`（`:111`） | `[item_oid]`（`:127`） | `[prod_oid, pkg_oid]`（`:143`） |
+| `scopeOids` | **product 與 plan 皆為** `[prod_oid, ...(pkg_oid ? [pkg_oid] : [])]`（`tools.ts:156` 對兩型一體適用——product 帶了多餘 pkg_oid 時現行也會檢查並可 SCOPE_NOT_READ 擋下，行為逐字保留、勿「邏輯上更乾淨」地丟掉 pkg_oid） | `[item_oid]`（`:111`） | `[item_oid]`（`:127`） | `[prod_oid, pkg_oid]`（`:143`） |
 | `scopeErrorKey` | `pkg_oid ?? prod_oid`（`:159`） | `item_oid`（`:114`） | `item_oid`（`:130`） | `pkg_oid`（`:146`） |
 | `validate` | 無語義驗證 → `() => null` | `validateInventoryItems(items, nowMs)`（inventoryValidate.ts:8） | `validateInventoryPlatformItems(items)`（batchValidate.ts:37；忽略 nowMs） | `validateShelfScheduleItems(items, () => nowMs)`（batchValidate.ts:66 原簽名吃 `() => number`，wrapper 包一層） |
 | `itemKey`（keys.ts） | `pkg_oid ? \`${prod_oid}:${pkg_oid}\` : prod_oid`（executor.ts:184-186） | `\`${item_oid}:${supplier_oid}\``（confirmService.ts:57） | 同 inventorySetting（confirmService.ts:57） | `\`${prod_oid}:${pkg_oid}\``（confirmService.ts:66） |
@@ -218,7 +220,9 @@ describe('module conformance', () => {
 
 **Files:**
 - Modify: `src/changeset/tools.ts`（`createChangesetCore` `:100-220`、`itemShape` `:61-67`、`businessListAllowsAction` `:32-36`、`ACTION_CODES` `:17-30`）
-- Modify: `src/server/app.ts`（啟動時呼叫 `registerAllModules()`；若 tests 直接建 app，確認測試路徑也會註冊——建議 `registerAllModules()` 具冪等保護：已註冊同名即 return，僅 `NODE_ENV=test` 下允許）
+- Modify: `src/modules/index.ts`（註冊時機修正，見下）
+
+**註冊時機（agy plan-review round 1 issue 1——不修會 import 時 crash）**：ESM import 求值先於 `app.ts` 的啟動碼；若 `tools.ts` 在模組頂層用 `listModules()` 組 zod union，當下 registry 是空的（`z.union` 至少要兩元素，直接 throw）。修法：**註冊改為 `src/modules/index.ts` 的 import 副作用**——該檔頂層直接執行 `registerAllModules()`（函式內冪等：已註冊同名即 skip），`tools.ts` 檔頭 `import '../modules/index.js'` 觸發註冊後才求值 union；`app.ts` 與測試 harness 照樣 import（冪等、無害）。**循環依賴守則**：`src/modules/**` 永不 import `tools.ts`/`createChangesetCore`（方向恆為 core→module 的 registry lookup 與 tools→modules/index 的註冊觸發；`INVENTORY_ACTION_CODES` 的 re-export 是 tools→module 方向，合規）。`action_type` 的 `z.enum` 同樣改由 registry 生成：`z.enum(listModules().map(m => m.actionType) as [string, ...string[]])`——否則加新 module 仍要碰 core，違反目標。
 
 **Interfaces:**
 - Consumes: Task 2 的 registry（`getModule`）與各 module metadata。
@@ -246,7 +250,10 @@ export async function createChangesetCore(args: Record<string, unknown>, ctx: L2
       message: mod.scopeNotReadMessage,
     }])
   }
-  // businessList fail-fast：block/warn 由 module.authz.onMissing 決定，文案逐字沿用 tools.ts:175-181
+  // businessList fail-fast：block/warn 由 module.authz.onMissing 決定，文案逐字沿用 tools.ts:175-181。
+  // businessListAllows = 既有 businessListAllowsAction（tools.ts:32-36）重構版：第二參數改吃
+  // codes: string[]（不再內部查 ACTION_CODES 表），其餘逐字保留；留在 tools.ts 並維持 export
+  // （既有測試若引用 businessListAllowsAction 名稱，保留同名 thin wrapper 委派之）。
   const warnings: EnvelopeError[] = []
   if (!businessListAllows(ctx.businessList, mod.authz.codes)) {
     if (mod.authz.onMissing === 'warn') warnings.push({ key: actionType, code: 'ACTION_CODE_UNVERIFIED', message: /* :178 逐字 */ })
@@ -371,13 +378,13 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
 - Consumes: Task 1 `ConfirmView`。
 - Produces: `renderShell(id, view: ConfirmView, diffVersion, banner)` in confirmRoutes.ts。
 
-core 頁殼（完整——四頁共通部分逐字合一）：
+core 頁殼（完整——四頁共通部分逐字合一；**banner 傳入 module**，見下）：
 
 ```ts
-function renderShell(id: string, view: ConfirmView, diffVersion: string, banner = ''): string {
+function renderShell(id: string, view: ConfirmView, diffVersion: string): string {
   return `<!doctype html><meta charset=utf-8><title>確認變更 ${esc(id)}</title>
 <style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}button{padding:8px 16px;font-size:1rem}</style>
-<h1>確認 change-set ${esc(id)}</h1>${view.intro}${banner}
+<h1>確認 change-set ${esc(id)}</h1>${view.intro}
 ${view.tableHtml}
 <form method=post action="/confirm/${esc(id)}/approve" style="margin-top:1rem">
   <input type=hidden name=diff_version value="${esc(diffVersion)}">
@@ -386,7 +393,9 @@ ${view.tableHtml}
 }
 ```
 
-module 拆分規則：`intro` = 各頁 `<h1>` 之後、`<table>` 之前的說明段（shelf=`:40`、inventory=`:62` 的紅字警語、platform=`:86`、schedule=`:108` 的紅字警語——**逐字**）；`tableHtml` = `<table data-diff-version=…>…</table>` 整段（rows 邏輯逐字搬）。**banner 位置統一為 intro 之後**：現行 shelf/platform banner 在 h1 後、inventory/schedule 在警語後——此為呈現統一（spec §5 允許），以 `confirmRoutes*.test.ts` 4 檔為準：若測試 pin 到相對位置則調整 shell 保綠，**不改測試**。`esc()` 從 confirmRoutes.ts export 供 module renderer import（或搬到 `src/core/changeset/html.ts`）。
+**banner 傳遞（agy plan-review round 1 issue 2——spec §3「core 保留注入點」的落地修正）**：現行四頁的 banner 相對位置不一致（shelf/platform 在 h1 後、inventory/schedule 在警語後），單一固定注入點無法在「不改測試」約束下滿足全部既有斷言。落地改為：`renderConfirm(rec, diff, diffVersion, banner: string)`——core 把 banner 當**不透明字串**傳入，module 把它放在**自己現行頁面的精確位置**（intro 內嵌），`ConfirmView.intro` 已含 banner。banner 語義（stale/CAS 紅字）仍由 route 層產生、module 不解讀——spec 的安全意圖（route 層狀態不外洩給 module 邏輯）不變，僅注入位置的所有權下放。Task 1 的 `ActionModule.renderConfirm` 簽名同步定為四參數版（實作 Task 1 時即用此簽名，本 plan 為準）。
+
+module 拆分規則：`intro` = 各頁 `<h1>` 之後、`<table>` 之前的說明段 + banner（shelf=`confirmRoutes.ts:39-40`、inventory=`:61-62`、platform=`:85-86`、schedule=`:107-108`——**逐字，含 banner 的現行相對位置**）；`tableHtml` = `<table data-diff-version=…>…</table>` 整段（rows 邏輯逐字搬）。`esc()` 搬到 `src/core/changeset/html.ts` export，confirmRoutes 與各 module renderer 共用。
 
 - [ ] **Step 1:** agy 實作。
 - [ ] **Step 2: 驗證** `npm run ci` 全綠——特別看 `confirmRoutes/confirmRoutesInventory/confirmRoutesPlatform/confirmRoutesSchedule` 4 檔。
@@ -495,4 +504,5 @@ it(`${type}: itemKey(item) === itemKey(對應 diff item)`, () => { /* 同一筆�
 
 1. **Spec coverage**：§3 介面（Task 1/8）、§4 五熱點（Task 3/4/5/6 + UI Task 8）、§5 目錄與 UI（Task 7/8）、§6 遷移步驟（任務順序即之；adapter 期壓縮為 Task 2 的 thin wrapper、同 PR 內收斂）、§7 conformance（Task 2/9）、§8 文件（Task 9）、§9 風險對策（每 task 驗證步驟 + Task 9 全量）。無缺。
 2. **Placeholder 掃描**：無 TBD/TODO；「搬移」步驟皆附來源 file:line 與行為 pin 測試清單（refactor 的 code 真身在 repo，plan 指明出處與零差異檢查點）。
-3. **型別一致性**：`ActionModule` 簽名 Task 1 定稿、Task 2-8 全部引用同名欄位；`ExecCtx.span` 簽名 Task 1 與 Task 5 一致（`(name, fn(traceId))`——spec 的 `attrs` 參數在落地時省略，現行 code 未用 span attrs，YAGNI）；`ConfirmView` Task 1/6 一致（spec 的 `tableHtml`+`moduleWarning` 落地為 `intro`+`tableHtml`，`intro` 涵蓋警語——語義同、命名以四頁實際結構為準）。
+3. **型別一致性**：`ActionModule` 簽名 Task 1 定稿、Task 2-8 全部引用同名欄位；`ExecCtx.span` 簽名 Task 1 與 Task 5 一致（`(name, fn(traceId))`——spec 的 `attrs` 參數在落地時省略，現行 code 未用 span attrs，YAGNI）；`ConfirmView` Task 1/6 一致（spec 的 `tableHtml`+`moduleWarning` 落地為 `intro`+`tableHtml`，`intro` 涵蓋警語與 banner——語義同、命名以四頁實際結構為準）。
+4. **對 approved spec 的落地偏差（agy plan-review 修正後彙整）**：(a) `ExecCtx` 增 `accessToken`（executor 打 gateway 必需）；(b) `span` 省略 attrs 參數；(c) `ConfirmView` 欄位改名 + **banner 改為傳入 `renderConfirm`、由 module 決定精確位置**（spec「core 保留注入點」在四頁 banner 位置不一致 + 不改測試的雙約束下不可行——banner 仍為 route 層產生的不透明字串，安全語義不變）；(d) zod union 與 `action_type` enum 由 registry 生成、註冊為 `modules/index.ts` import 副作用（避免 ESM 求值時序 crash）。
