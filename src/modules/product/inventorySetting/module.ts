@@ -17,11 +17,13 @@ function isInventoryItem(i: unknown): i is InventoryItem {
   return typeof (i as InventoryItem).item_oid === 'string' && Array.isArray((i as InventoryItem).dates)
 }
 
+export const INVENTORY_ACTION_CODES = ['product.product-inventory.update']
+
 export const inventorySettingModule: ActionModule<InventoryItem, unknown> = {
   actionType: 'inventory_setting',
   itemSchema: invItemShape,
   authz: {
-    codes: ['product.product-inventory.update'],
+    codes: INVENTORY_ACTION_CODES,
     onMissing: 'block'
   },
   invalidItemsMessage: 'inventory_setting items need {item_oid, supplier_oid, op, quantity, dates}.',
