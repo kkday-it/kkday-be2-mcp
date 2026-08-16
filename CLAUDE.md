@@ -49,3 +49,8 @@
 - `oauth-purge` — 硬刪過期 `oauth_auth_codes`/`oauth_refresh` + 無 credential 引用的 ghost `be2_identities`（見 `docs/be2-mcp/oauth-runbook.md`「Token 生命週期治理」）。建議排程每日跑一次。
 - `probe-sit` — 手動打 SIT `be2-220` 抓真實 endpoint 回應形狀，寫成 sanitized fixtures（絕不寫入 token）。
 - `probe-sit-write` — 手動、可逆地打 SIT `be2-220` 的 write endpoint（`scripts/probe-sit-write.ts`），解 `modify_user` 來源、merge-vs-replace、必填欄位；結果見 `docs/be2-mcp/sit-write-contracts.md`。**永不進 CI**，且需可寫帳號才能跑到底（目前 `.env` 帳號在寫入端點回 403，見該文件 blocker）。
+
+## Module 結構與擴展指引
+
+- **Core vs Modules 邊界**：治理層（Authn/Authz、ChangeSet 狀態機、分級批准、稽核）統一定義於 `src/core/`，且不依賴特定業務邏輯。業務邏輯（讀寫狀態、Diff、驗證）由 `src/modules/` 實作。
+- **新增 Action Type**：若需接入新 domain 或 action，**嚴禁修改 core**。請參考 `docs/be2-mcp/module-onboarding.md`，實作一包新的 module 註冊即可。

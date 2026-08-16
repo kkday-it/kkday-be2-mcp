@@ -58,6 +58,8 @@
 
 **下一步**:開新 session(context 乾淨)→ `superpowers:brainstorming` 針對**庫存域**(先讀本段 + 主 spec §4/§5 + Phase 2a/2b 設計 + `sit-write-contracts.md`)→ 產 Phase 3a spec → agy → writing-plans → subagent-driven。
 
+**Phase 5 進度（2026-08-16，Task 1–9）**：**已實作完成**——core/module 拆分落地於 `feat/modularization`（自 main `346f5d1` 切出）。`ActionModule` 介面 + registry（`src/core/changeset/{module,registry}.ts`）、每 action_type 一包（`src/modules/product/{shelfToggle,inventorySetting,inventoryPlatform,shelfSchedule}/`：keys/module/validate/diff/executor/renderer/(ui)）、core 五熱點全部改 registry lookup（create if 鏈、diffVersionHash order-sensitive duck-typing、itemKeysOf、executeChangeSet 四段樣板、confirmRoutes.render + UI itemKeyOf 手工對齊——fall-through 風險結構性消滅）、UI itemKey 與 server 同一份函式（單一事實來源）、conformance harness（union⇔registry、schema 互斥、itemKey 非空且 item≡diff、diffVersion 穩定/敏感/op-aware pin——新 module 註冊即自動繼承）。`npm run ci` **470 passed / 0 skipped**、`tsc` clean、build-ui 三面板綠、dev `/healthz` 冒煙過。spec/plan 皆 agy APPROVED（各 rounds=2）；final whole-branch review（opus）ready-to-merge、0 Critical/0 Important、Minor 已收（DiffError+deprecated dispatcher 歸位 core）。分工照 memory `agy-work-allocation`：agy（gemini-3.1-pro-high, accept-edits）實作 Task 1-6/8/9、Claude 編排/review/驗證/commit（Task 7 搬檔由 Claude 腳本化執行）。產出文件：`docs/be2-mcp/module-catalog.md`（5 條目型錄）、`docs/be2-mcp/module-onboarding.md`（新 action_type 上車 checklist，驗收標準=不碰 core）。**下一步**：merge 待使用者拍板；3b 價格照 onboarding checklist 上車即為介面通用性的第一次實戰驗證。
+
 ## Phase 5（模組化）handoff — 2026-08-16，供新 session 接手
 
 **目標**：core（change-set 治理/OAuth/MCP Apps 底座/稽核/budget）與 domain module（每個 action_type 一包：schema+diff+executor+renderer+wizard 分頁）拆開——3b 價格/3c 方案維護與「domain-onboarding 自動收納流程」的地基。初稿見 `docs/be2-mcp/module-architecture.md`（先讀）。

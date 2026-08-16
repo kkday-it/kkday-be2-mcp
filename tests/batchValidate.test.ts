@@ -1,14 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import { z } from 'zod'
-import { createChangesetTool } from '../src/changeset/tools.js'
+import { createChangesetTool } from '../src/core/changeset/tools.js'
 import {
   platformToBooleans,
   booleansToPlatform,
   validateInventoryPlatformItems,
+} from '../src/modules/product/inventoryPlatform/validate.js'
+import {
   validateShelfScheduleItems,
   sanitizeQueue,
-} from '../src/changeset/batchValidate.js'
-import type { InventoryPlatform, InventoryPlatformItem, ShelfScheduleItem } from '../src/changeset/types.js'
+} from '../src/modules/product/shelfSchedule/validate.js'
+import type { InventoryPlatform, InventoryPlatformItem, ShelfScheduleItem } from '../src/core/changeset/types.js'
 
 const NOW = Date.parse('2026-08-14T00:00:00Z')
 

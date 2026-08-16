@@ -1,4 +1,6 @@
 import { connectApp, renderText, backoffPoll } from './panelShared.js'
+import { itemKey as invKey } from '../modules/product/inventorySetting/keys.js'
+import { itemKey as shelfKey } from '../modules/product/shelfToggle/keys.js'
 
 // 終態清單：抽成單一常數，refresh() 與 ontoolresult 都用它，避免兩處漏加同一狀態而導致無限輪詢。
 const TERMINAL_STATUSES = ['done', 'partial', 'failed', 'rejected', 'expired']
@@ -20,8 +22,8 @@ function hideBanner() { bannerEl.hidden = true; bannerEl.textContent = '' }
 //   - inventory：src/changeset/confirmService.ts#itemKeysOf → `${item_oid}:${supplier_oid}`
 // 用 diff item 是否帶 item_oid 欄位來分辨兩種形狀（跟 diff.ts 的 diffVersionHash 判斷方式一致）。
 function itemKeyOf(d: any): string {
-  if (d && typeof d === 'object' && 'item_oid' in d) return `${d.item_oid}:${d.supplier_oid}`
-  return d?.pkg_oid ? `${d.prod_oid}:${d.pkg_oid}` : d?.prod_oid
+  if (d && typeof d === 'object' && 'item_oid' in d) return invKey(d)
+  return shelfKey(d)
 }
 
 let currentDiffItems: any[] = []

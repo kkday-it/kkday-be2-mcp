@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { execInventoryPlatform, type ExecutorContext } from '../src/changeset/executorPlatform.js'
-import { approveAndExecute, type ConfirmServiceDeps } from '../src/changeset/confirmService.js'
-import { computeChangesetDiff, diffVersionHash } from '../src/changeset/diff.js'
-import { ChangeSetStore } from '../src/changeset/store.js'
+import { execInventoryPlatform, type ExecutorContext } from '../src/modules/product/inventoryPlatform/executor.js'
+import { approveAndExecute, type ConfirmServiceDeps } from '../src/core/changeset/confirmService.js'
+import { computeChangesetDiff } from '../src/core/changeset/diff.js'
+import { inventoryPlatformModule } from '../src/modules/product/inventoryPlatform/module.js'
+const diffVersionHash = inventoryPlatformModule.diffVersion as (d: unknown[]) => string
+import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { openDb } from '../src/store/db.js'
-import type { ChangeSetRecord, InventoryPlatformItem } from '../src/changeset/types.js'
+import type { ChangeSetRecord, InventoryPlatformItem } from '../src/core/changeset/types.js'
 
 const pkgs = [{ prod_oid: 'p1', pkg_oid: 'k1', pkg_name: 'A' }]
 const configs = (rows: Array<{ supplier_oid: string; is_external_inventory?: boolean; is_inventory_mgmt?: boolean }>) =>

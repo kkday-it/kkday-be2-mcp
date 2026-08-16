@@ -4,8 +4,8 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDb } from '../src/store/db.js'
-import { ChangeSetStore } from '../src/changeset/store.js'
-import type { ChangeSetRecord, DiffItem } from '../src/changeset/types.js'
+import { ChangeSetStore } from '../src/core/changeset/store.js'
+import type { ChangeSetRecord, DiffItem } from '../src/core/changeset/types.js'
 
 function rec(over: Partial<ChangeSetRecord> = {}): ChangeSetRecord {
   return {

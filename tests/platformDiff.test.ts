@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { computePlatformDiff, readSupplierInventorySetting } from '../src/changeset/platformDiff.js'
-import { computeChangesetDiff, diffVersionHash, DiffError } from '../src/changeset/diff.js'
-import type { InventoryPlatformItem } from '../src/changeset/types.js'
+import { computePlatformDiff, readSupplierInventorySetting } from '../src/modules/product/inventoryPlatform/diff.js'
+import { computeChangesetDiff, DiffError } from '../src/core/changeset/diff.js'
+import { inventoryPlatformModule } from '../src/modules/product/inventoryPlatform/module.js'
+const diffVersionHash = inventoryPlatformModule.diffVersion as (d: unknown[]) => string
+import type { InventoryPlatformItem } from '../src/core/changeset/types.js'
 
 // Task 1 定案: GET /product/api/v1/items/{itemOid}/basic-info -> { data: { item_config: { supplier_configs: [{ supplier_oid, is_external_inventory, is_inventory_mgmt }] } } }
 function gatewayWith(configsByItem: Record<string, unknown>) {

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import express from 'express'
 import { openDb } from '../src/store/db.js'
-import { ChangeSetStore } from '../src/changeset/store.js'
+import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'

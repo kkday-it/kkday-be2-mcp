@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { execShelfSchedule, type ExecutorContext } from '../src/changeset/executorSchedule.js'
-import { approveAndExecute, type ConfirmServiceDeps } from '../src/changeset/confirmService.js'
-import { computeChangesetDiff, diffVersionHash } from '../src/changeset/diff.js'
-import { ChangeSetStore } from '../src/changeset/store.js'
+import { execShelfSchedule, type ExecutorContext } from '../src/modules/product/shelfSchedule/executor.js'
+import { approveAndExecute, type ConfirmServiceDeps } from '../src/core/changeset/confirmService.js'
+import { computeChangesetDiff } from '../src/core/changeset/diff.js'
+import { shelfScheduleModule } from '../src/modules/product/shelfSchedule/module.js'
+const diffVersionHash = shelfScheduleModule.diffVersion as (d: unknown[]) => string
+import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { openDb } from '../src/store/db.js'
-import type { ChangeSetRecord, ShelfScheduleItem } from '../src/changeset/types.js'
+import type { ChangeSetRecord, ShelfScheduleItem } from '../src/core/changeset/types.js'
 
 // Task 4 定案 read/write endpoints (design doc §4.1):
 // GET /product/api/v1/products/{prodOid}/package-configs -> array of pkg rows

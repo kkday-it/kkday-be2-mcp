@@ -1,6 +1,7 @@
-import { computeChangesetDiff, diffVersionHash } from './diff.js'
+import { getModule } from './registry.js'
+import '../../modules/index.js'
 import { executeChangeSet, itemKey, type ExecutorDeps } from './executor.js'
-import { AppError } from '../errors.js'
+import { AppError } from '../../errors.js'
 import type { ChangeSetRecord, ChangeSetItem, InventoryItem, InventoryPlatformItem, ShelfScheduleItem, ItemResult } from './types.js'
 
 // Task 11: the change-set approval+execution sequence used to live ONLY inside
@@ -46,30 +47,11 @@ export interface ConfirmServiceDeps extends ExecutorDeps {
   modifyUserFrom: (accessToken: string) => string
 }
 
-// Explicit per-actionType branch (Task 3 review): inventory_platform's item key is
-// `${item_oid}:${supplier_oid}`, the SAME shape as inventory_setting — but before this branch
-// existed, any actionType other than 'inventory_setting' fell through to the shelf `itemKey()`
-// cast, which reads `.prod_oid`/`.pkg_oid` (both undefined on InventoryPlatformItem) and returns
-// undefined for every item. That would permanently mismatch any real confirmedKeys sent by the
-// panel and lock the approval path shut (CONFIRMED_KEYS_MISMATCH on every attempt).
-function itemKeysOf(rec: ChangeSetRecord): string[] {
-  if (rec.actionType === 'inventory_setting' || rec.actionType === 'inventory_platform') {
-    return (rec.items as Array<InventoryItem | InventoryPlatformItem>).map(it => `${it.item_oid}:${it.supplier_oid}`)
-  }
-  // Task 4 explicit branch: ShelfScheduleItem's key happens to coincide with the generic shelf
-  // itemKey() cast (same {prod_oid, pkg_oid} field names, pkg_oid always present) — but that is a
-  // coincidence, not a guarantee, and the inventory_platform branch above exists precisely
-  // because relying on such a coincidence silently broke panel approval once already (Task 3
-  // review). Locking this in its own branch (with its own test pin) prevents a future refactor
-  // of ChangeSetItem/itemKey() from silently changing this shape out from under shelf_schedule.
-  if (rec.actionType === 'shelf_schedule') {
-    return (rec.items as ShelfScheduleItem[]).map(it => `${it.prod_oid}:${it.pkg_oid}`)
-  }
-  return (rec.items as ChangeSetItem[]).map(itemKey)
-}
+
 
 export async function approveAndExecute(deps: ConfirmServiceDeps, params: ApproveParams): Promise<ApproveResult> {
   const { rec, who, expectedDiffVersion, confirmedKeys, channel, audit } = params
+  const mod = getModule(rec.actionType)
 
   // (1) confirmed_keys 校驗（面板專用；確認頁不傳此欄位、跳過本步）——見 spec §4.3:面板取消勾選
   // 某個項目後,後端不得仍全量執行整批。集合須完全一致(無多、無缺)。
@@ -82,7 +64,7 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
   // 的 multiset」:重複次數必須相同,長度不同或排序後任一位置不同即視為不符。唯一 key 的情境下
   // 與舊 Set 邏輯行為一致(既有測試不受影響)。
   if (confirmedKeys) {
-    const expected = [...itemKeysOf(rec)].sort()
+    const expected = rec.items.map(i => mod.itemKey(i)).sort()
     const got = [...confirmedKeys].sort()
     const same = expected.length === got.length && expected.every((k, i) => k === got[i])
     if (!same) {
@@ -92,8 +74,8 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
 
   // (2) 即時重算 diff + staleness 比對——批准的必須是「此刻仍為真」的 diff,不是使用者打開頁面/
   // 面板當下的舊 diff。
-  const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: deps.gateway, accessToken: who.accessToken, userLabel: rec.creatorLabel })
-  const version = diffVersionHash(diff)
+  const diff = await mod.computeDiff({ gateway: deps.gateway, accessToken: who.accessToken, userLabel: rec.creatorLabel }, rec.items) as import('./types.js').AnyDiffItem[]
+  const version = mod.diffVersion(diff)
   if (version !== expectedDiffVersion) {
     // Final whole-branch review Important 2: without this write-back, app_get_changeset_view
     // (which reads rec.diff/rec.diffVersion straight off the store, unlike the confirm page's GET

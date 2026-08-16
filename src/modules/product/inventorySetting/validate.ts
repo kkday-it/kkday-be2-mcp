@@ -1,4 +1,4 @@
-import type { InventoryItem } from './types.js'
+import type { InventoryItem } from '../../../core/changeset/types.js'
 
 // Semantic rules zod can't express per-field (spec §3): op/quantity coupling, past dates,
 // and (item, supplier, date) uniqueness across the WHOLE change-set — two ops on the same

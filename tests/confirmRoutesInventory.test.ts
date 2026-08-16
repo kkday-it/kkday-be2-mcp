@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import express from 'express'
 import { openDb } from '../src/store/db.js'
-import { ChangeSetStore } from '../src/changeset/store.js'
+import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { buildConfirmRouter } from '../src/server/confirmRoutes.js'
 import type { Server } from 'node:http'
-import type { InventoryItem } from '../src/changeset/types.js'
+import type { InventoryItem } from '../src/core/changeset/types.js'
 
 // Phase 3a Task 7: mirrors the harness in tests/confirmRoutes.test.ts (buildConfirmRouter in
 // isolation, plain fetch against a listening express app, redirect:'manual') — but seeds

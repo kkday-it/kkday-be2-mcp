@@ -1,7 +1,8 @@
-import type { GatewayClient } from '../gateway/client.js'
-import { sanitizeQueue } from './batchValidate.js'
-import { queuesEqual, sortQueue } from './scheduleDiff.js'
-import type { ChangeSetRecord, ScheduleEntry, ShelfScheduleItem, ItemResult } from './types.js'
+import type { GatewayClient } from '../../../gateway/client.js'
+import { sanitizeQueue } from './validate.js'
+import { queuesEqual, sortQueue } from './diff.js'
+import type { ChangeSetRecord, ScheduleEntry, ShelfScheduleItem, ItemResult } from '../../../core/changeset/types.js'
+import type { ExecCtx } from '../../../core/changeset/module.js'
 
 // Same batch-executor shape as executorPlatform.ts's ExecutorContext (Task 3) — no per-item
 // busy-guard/serialization concern for a package-config reserve-queue write, so prod_oid groups
@@ -110,4 +111,18 @@ export async function execShelfSchedule(rec: ChangeSetRecord, ctx: ExecutorConte
     }
   })
   return results
+}
+
+export async function executeShelfSchedule(ctx: ExecCtx, rec: ChangeSetRecord): Promise<ItemResult[]> {
+  return await ctx.span('changeset.execute/shelf_schedule', async (traceId) => {
+    return await execShelfSchedule(rec, {
+      gateway: ctx.gateway,
+      accessToken: ctx.accessToken,
+      modifyUser: ctx.modifyUser,
+      traceId
+    })
+  }).catch(e => (rec.items as ShelfScheduleItem[]).map(it => ({
+    item_key: `${it.prod_oid}:${it.pkg_oid}`, status: 'failed' as const,
+    error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: 'n/a',
+  })))
 }

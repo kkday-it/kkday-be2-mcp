@@ -1,6 +1,6 @@
 # be2 MCP — 模組化架構規劃（handoff 草稿）
 
-日期：2026-08-13　狀態：**規劃草稿**（新 session 接手 → brainstorming → spec → agy）
+日期：2026-08-13　狀態：**已落地，見 spec/catalog**
 > 目的：讓 be2 MCP 從「product 單一 domain」走向可擴展的**多模組**（訂單、商品公告、折扣券、兌換券…），使「加一個 domain」= 寫一個 module 註冊進去，**不重寫治理層**。
 > 搭配讀：`be2-mcp-rd-design.md`（現有 SA/SD）、`mcp-ui-exploration.md`（分級批准）、`phase0-inventory.md`（逐 domain 盤點史）。
 

@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
 import { openDb } from '../src/store/db.js'
-import { ChangeSetStore } from '../src/changeset/store.js'
+import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { ReadOidStore } from '../src/store/readOidStore.js'
 import { RateBudget } from '../src/limits/rateBudget.js'
-import { ApprovalNonceStore } from '../src/changeset/approvalNonce.js'
+import { ApprovalNonceStore } from '../src/core/changeset/approvalNonce.js'
 import { appCreateChangesetTool } from '../src/tools/appTools.js'
 import type { AppToolContext } from '../src/server/appPipeline.js'
 

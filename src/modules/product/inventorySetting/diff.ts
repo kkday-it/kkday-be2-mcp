@@ -1,7 +1,7 @@
-import type { ToolContext } from '../tools/types.js'
-import { parseQuantities, groupDatesByMonth } from '../tools/inventoryShape.js'
-import { DiffError } from './diff.js'
-import type { InventoryDateDiff, InventoryDiffItem, InventoryItem } from './types.js'
+import type { ToolContext } from '../../../tools/types.js'
+import { parseQuantities, groupDatesByMonth } from '../../../tools/inventoryShape.js'
+import { DiffError } from '../../../core/changeset/diff.js'
+import type { InventoryDateDiff, InventoryDiffItem, InventoryItem } from '../../../core/changeset/types.js'
 
 // Per-date live diff (spec §4). One GET per (item, supplier, month) — the quantities endpoint
 // is month-scoped. adjust needs a numeric base for every date (嚴禁盲寫: a delta on an unknown

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ApprovalNonceStore } from '../src/changeset/approvalNonce.js'
+import { ApprovalNonceStore } from '../src/core/changeset/approvalNonce.js'
 
 const bind = { changesetId: 'cs1', diffVersion: 'v1', sessionId: 's1' }
 

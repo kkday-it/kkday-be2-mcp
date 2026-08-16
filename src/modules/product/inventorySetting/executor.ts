@@ -1,6 +1,7 @@
-import type { GatewayClient } from '../gateway/client.js'
-import type { InventoryItem, ItemResult } from './types.js'
-import { DATE_KEYS, QTY_KEYS, ROWS_KEYS, findRows, groupDatesByMonth, parseQuantities, rowDate, setRowQty } from '../tools/inventoryShape.js'
+import type { GatewayClient } from '../../../gateway/client.js'
+import type { InventoryItem, ItemResult, ChangeSetRecord } from '../../../core/changeset/types.js'
+import { DATE_KEYS, QTY_KEYS, ROWS_KEYS, findRows, groupDatesByMonth, parseQuantities, rowDate, setRowQty } from '../../../tools/inventoryShape.js'
+import type { ExecCtx } from '../../../core/changeset/module.js'
 
 export interface InventoryExecDeps {
   gateway: GatewayClient
@@ -149,4 +150,21 @@ async function doExecInventory(deps: InventoryExecDeps, at: string, modifyUser: 
     after: { quantities: afterQty, date_status: dateStatus },
     error_code: firstError?.code, error_message: firstError?.message, trace_id: traceId,
   }
+}
+
+export async function executeInventorySetting(ctx: ExecCtx, rec: ChangeSetRecord): Promise<ItemResult[]> {
+  const results: ItemResult[] = []
+  for (const it of rec.items as InventoryItem[]) {
+    const r = await ctx.span('changeset.execute/inventory_setting', tid => 
+      execInventory({ gateway: ctx.gateway }, ctx.accessToken, ctx.modifyUser, it, tid)
+    ).catch(e => ({
+      item_key: `${it.item_oid}:${it.supplier_oid}`,
+      status: 'failed' as const,
+      error_code: 'EXEC_ERROR',
+      error_message: (e as Error).message,
+      trace_id: 'n/a'
+    }))
+    results.push(r)
+  }
+  return results
 }

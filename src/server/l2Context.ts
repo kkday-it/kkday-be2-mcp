@@ -1,7 +1,7 @@
 import type { z } from 'zod'
 import type { GatewayClient } from '../gateway/client.js'
 import type { ReadOidStore } from '../store/readOidStore.js'
-import type { ChangeSetStore } from '../changeset/store.js'
+import type { ChangeSetStore } from '../core/changeset/store.js'
 import type { RateBudget } from '../limits/rateBudget.js'
 import type { Envelope } from '../tools/envelope.js'
 

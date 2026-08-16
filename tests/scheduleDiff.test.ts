@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { computeScheduleDiff } from '../src/changeset/scheduleDiff.js'
-import { computeChangesetDiff, diffVersionHash, DiffError } from '../src/changeset/diff.js'
-import type { ShelfScheduleItem, ShelfScheduleDiffItem } from '../src/changeset/types.js'
+import { computeScheduleDiff } from '../src/modules/product/shelfSchedule/diff.js'
+import { computeChangesetDiff, DiffError } from '../src/core/changeset/diff.js'
+import { shelfScheduleModule } from '../src/modules/product/shelfSchedule/module.js'
+const diffVersionHash = shelfScheduleModule.diffVersion as (d: unknown[]) => string
+import type { ShelfScheduleItem, ShelfScheduleDiffItem } from '../src/core/changeset/types.js'
 
 // Task 4 定案 (docs/superpowers/specs/2026-08-14-be2-mcp-baa-wizard-design.md §4.1/§4.2):
 // GET /product/api/v1/products/{prodOid}/package-configs -> array, elements carry

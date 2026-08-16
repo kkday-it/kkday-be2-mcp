@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { openDb } from '../src/store/db.js'
-import { ChangeSetStore } from '../src/changeset/store.js'
+import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { ReadOidStore } from '../src/store/readOidStore.js'
-import { getChangesetStatusTool } from '../src/changeset/tools.js'
+import { getChangesetStatusTool } from '../src/core/changeset/tools.js'
 import type { L2ToolContext } from '../src/server/l2Context.js'
 
 function ctxFor(store: ChangeSetStore, userLabel: string): L2ToolContext {

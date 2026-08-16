@@ -5,13 +5,13 @@ import type { AuditLog } from '../audit/auditLog.js'
 import type { GatewayClient } from '../gateway/client.js'
 import type { ReadOidStore } from '../store/readOidStore.js'
 import type { RateBudget } from '../limits/rateBudget.js'
-import type { ChangeSetStore } from '../changeset/store.js'
-import type { ApprovalNonceStore } from '../changeset/approvalNonce.js'
+import type { ChangeSetStore } from '../core/changeset/store.js'
+import type { ApprovalNonceStore } from '../core/changeset/approvalNonce.js'
 import type { AppRateBudget } from '../limits/appRateBudget.js'
 import { CredentialStore } from '../store/credentialStore.js'
 import type { Envelope } from '../tools/envelope.js'
 import { AppError, AuthError, RateError } from '../errors.js'
-import { approveAndExecute as approveAndExecuteService, type ApproveParams, type ApproveResult } from '../changeset/confirmService.js'
+import { approveAndExecute as approveAndExecuteService, type ApproveParams, type ApproveResult } from '../core/changeset/confirmService.js'
 
 // app-only（面板專用）工具的執行環境：與 L2ToolContext 同源身分資訊（sessionId/bearerHash/
 // businessList 皆由 token 推導、絕不接受 input 自報身分），但服務對象是面板輪詢而非 LLM 對話。

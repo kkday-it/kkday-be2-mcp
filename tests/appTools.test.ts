@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { appGetChangesetViewTool, appGetConfirmLinkTool } from '../src/tools/appTools.js'
-import { ApprovalNonceStore } from '../src/changeset/approvalNonce.js'
+import { ApprovalNonceStore } from '../src/core/changeset/approvalNonce.js'
 
 function ctx(over: Partial<any> = {}) {
   return {

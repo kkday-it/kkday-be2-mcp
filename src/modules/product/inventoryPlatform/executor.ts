@@ -1,7 +1,8 @@
-import type { GatewayClient } from '../gateway/client.js'
-import { platformToBooleans, booleansToPlatform } from './batchValidate.js'
-import { readSupplierInventorySetting } from './platformDiff.js'
-import type { ChangeSetRecord, InventoryPlatformItem, ItemResult } from './types.js'
+import type { GatewayClient } from '../../../gateway/client.js'
+import { platformToBooleans, booleansToPlatform } from './validate.js'
+import { readSupplierInventorySetting } from './diff.js'
+import type { ChangeSetRecord, InventoryPlatformItem, ItemResult } from '../../../core/changeset/types.js'
+import type { ExecCtx } from '../../../core/changeset/module.js'
 
 // Shared executor context for the Phase 4a batch-shaped executors (inventory_platform here;
 // shelf_schedule in Task 4 reuses this same shape). Unlike execInventory (per-item, invoked in a
@@ -57,4 +58,18 @@ export async function execInventoryPlatform(rec: ChangeSetRecord, ctx: ExecutorC
       error_code: 'EXEC_ERROR', error_message: (s.reason as Error)?.message ?? String(s.reason), trace_id: ctx.traceId,
     }
   })
+}
+
+export async function executeInventoryPlatform(ctx: ExecCtx, rec: ChangeSetRecord): Promise<ItemResult[]> {
+  return await ctx.span('changeset.execute/inventory_platform', async (traceId) => {
+    return await execInventoryPlatform(rec, {
+      gateway: ctx.gateway,
+      accessToken: ctx.accessToken,
+      modifyUser: ctx.modifyUser,
+      traceId
+    })
+  }).catch(e => (rec.items as InventoryPlatformItem[]).map(it => ({
+    item_key: `${it.item_oid}:${it.supplier_oid}`, status: 'failed' as const,
+    error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: 'n/a',
+  })))
 }

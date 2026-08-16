@@ -1,12 +1,15 @@
 import express from 'express'
-import { computeChangesetDiff, diffVersionHash } from '../changeset/diff.js'
-import type { ExecutorDeps } from '../changeset/executor.js'
-import { approveAndExecute } from '../changeset/confirmService.js'
+import { getModule } from '../core/changeset/registry.js'
+import '../modules/index.js'
+import type { ExecutorDeps } from '../core/changeset/executor.js'
+import { approveAndExecute } from '../core/changeset/confirmService.js'
 import type { TokenManager } from '../auth/tokenManager.js'
 import type { WebSessionStore } from './webSessionStore.js'
 import type { CredentialStore } from '../store/credentialStore.js'
 import { parseCookies } from './cookies.js'
-import type { AnyDiffItem, InventoryDiffItem, DiffItem, ShelfScheduleDiffItem, ScheduleEntry, InventoryPlatformDiffItem } from '../changeset/types.js'
+import type { AnyDiffItem } from '../core/changeset/types.js'
+import { esc } from '../core/changeset/html.js'
+import type { ConfirmView } from '../core/changeset/module.js'
 
 // Task 5: the confirm-page's auth model switches from a per-change-set capability token
 // (`?token=`) to the be2-auth SSO web session (Task 4's `be2mcp_sid` cookie + WebSessionStore).
@@ -30,97 +33,16 @@ export interface ConfirmDeps extends ExecutorDeps {
 // otherwise 404 a change-set's own creator on their own approval page). Normalize defensively.
 const sameUser = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase()
 
-function esc(s: unknown): string { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!)) }
-
-function renderPage(id: string, diff: DiffItem[], diffVersion: string, banner = ''): string {
-  const rows = diff.map(d => `<tr><td>${esc(d.name ?? d.pkg_oid ?? d.prod_oid)}</td><td>${esc(d.prod_oid)}${d.pkg_oid ? '/' + esc(d.pkg_oid) : ''}</td><td>${d.current_is_active === undefined ? '?' : d.current_is_active ? '上架' : '下架'}</td><td>→ ${d.target_is_active ? '上架' : '下架'}</td><td>${d.no_op ? '(無變更)' : ''}</td></tr>`).join('')
+function renderShell(id: string, view: ConfirmView, diffVersion: string): string {
   return `<!doctype html><meta charset=utf-8><title>確認變更 ${esc(id)}</title>
 <style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}button{padding:8px 16px;font-size:1rem}</style>
-<h1>確認 change-set ${esc(id)}</h1>${banner}
-<p>名稱為 be2 內容(untrusted),請以 oid 為準核對。</p>
-<table data-diff-version="${esc(diffVersion)}"><tr><th>名稱</th><th>oid</th><th>現況</th><th>目標</th><th></th></tr>${rows}</table>
+<h1>確認 change-set ${esc(id)}</h1>${view.intro}
+${view.tableHtml}
 <form method=post action="/confirm/${esc(id)}/approve" style="margin-top:1rem">
   <input type=hidden name=diff_version value="${esc(diffVersion)}">
   <button type=submit>批准並執行</button></form>
 <form method=post action="/confirm/${esc(id)}/reject"><button type=submit>拒絕</button></form>`
 }
-
-// Phase 3a Task 7: inventory writes are high-risk (immediately affect front-end sellability +
-// clear cache — spec §4), so the confirm page needs its own per-date renderer instead of the
-// shelf renderer's single before/after-boolean row. `would_go_negative` dates are surfaced with
-// an explicit warning: they will be EXCLUDED from the write (never clamped, never silently
-// dropped) — the resulting item outcome is 'partial', and the approver must see that up front.
-function renderInventoryPage(id: string, diff: InventoryDiffItem[], diffVersion: string, banner = ''): string {
-  const rows = diff.flatMap(item => item.dates.map(d =>
-    `<tr><td>${esc(item.item_oid)}/${esc(item.supplier_oid)}</td><td>${esc(d.date)}</td>` +
-    `<td>${d.current ?? '?'}</td><td>${item.op === 'adjust' ? (item.quantity > 0 ? '+' : '') + item.quantity : '=' + item.quantity}</td>` +
-    `<td>→ ${d.target}</td>` +
-    `<td>${d.would_go_negative ? '<strong style="color:#b00">would_go_negative:將被排除,該項結果為 partial</strong>' : d.no_op ? '(無變更)' : ''}</td></tr>`)).join('')
-  return `<!doctype html><meta charset=utf-8><title>確認變更 ${esc(id)}</title>
-<style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}button{padding:8px 16px;font-size:1rem}</style>
-<h1>確認 change-set ${esc(id)}</h1>
-<p><strong style="color:#b00">庫存寫入立即影響前台可售並清 cache</strong>;adjust 的目標值以批准當下的即時庫存重算。</p>${banner}
-<table data-diff-version="${esc(diffVersion)}"><tr><th>item/supplier</th><th>日期</th><th>現量</th><th>op</th><th>目標</th><th></th></tr>${rows}</table>
-<form method=post action="/confirm/${esc(id)}/approve" style="margin-top:1rem">
-  <input type=hidden name=diff_version value="${esc(diffVersion)}">
-  <button type=submit>批准並執行</button></form>
-<form method=post action="/confirm/${esc(id)}/reject"><button type=submit>拒絕</button></form>`
-}
-
-// Final whole-branch review Important 1: inventory_platform change-sets used to fall through to
-// the shelf renderPage above, which reads fields (`.name`/`.current_is_active`/
-// `.target_is_active`) that do not exist on InventoryPlatformDiffItem — every row rendered with a
-// blank name and a hardcoded "→ 下架", regardless of the real target platform. The write unit here
-// is (item_oid, supplier_oid), not a package, so the page shows that pair plus the affected
-// package names as a display annotation (server-recomputed, see platformDiff.ts) rather than
-// treating a package as the row identity.
-function renderPlatformPage(id: string, diff: InventoryPlatformDiffItem[], diffVersion: string, banner = ''): string {
-  const rows = diff.map(d => {
-    const pkgNames = d.affected_pkgs.map(p => esc(p.pkg_name)).join(', ') || '(無)'
-    const unverified = d.affected_pkgs_unverified ? ' <em>(未經伺服器驗證)</em>' : ''
-    return `<tr><td>${esc(d.item_oid)}/${esc(d.supplier_oid)}</td><td>${esc(d.current)}</td><td>→ ${esc(d.target)}</td><td>${esc(pkgNames)}${unverified}</td><td>${d.noop ? '(無變更)' : ''}</td></tr>`
-  }).join('')
-  return `<!doctype html><meta charset=utf-8><title>確認變更 ${esc(id)}</title>
-<style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}button{padding:8px 16px;font-size:1rem}</style>
-<h1>確認 change-set ${esc(id)}</h1>${banner}
-<p>方案名稱為 be2 內容(untrusted),請以 oid 為準核對。寫入單位是 item_oid×supplier_oid,方案清單僅為受影響範圍展示。</p>
-<table data-diff-version="${esc(diffVersion)}"><tr><th>item/supplier</th><th>現況</th><th>目標</th><th>受影響方案</th><th></th></tr>${rows}</table>
-<form method=post action="/confirm/${esc(id)}/approve" style="margin-top:1rem">
-  <input type=hidden name=diff_version value="${esc(diffVersion)}">
-  <button type=submit>批准並執行</button></form>
-<form method=post action="/confirm/${esc(id)}/reject"><button type=submit>拒絕</button></form>`
-}
-
-// Task 4: shelf_schedule is a full-replace write on the package's reserve queue — the confirm
-// page must make that explicit (red-text "原排程將被整組取代", never a merge) and disclose UTC
-// explicitly, same risk-disclosure discipline as renderInventoryPage above (Phase 3a Task 7).
-function renderSchedulePage(id: string, diff: ShelfScheduleDiffItem[], diffVersion: string, banner = ''): string {
-  const fmtQueue = (q: ScheduleEntry[]) => q.length
-    ? q.map(e => `${esc(e.reserve_date_utc)} UTC → ${e.reserve_status ? '上架' : '下架'}`).join('<br>')
-    : '(空,將清除排程)'
-  const rows = diff.map(item =>
-    `<tr><td>${esc(item.pkg_name)}</td><td>${esc(item.prod_oid)}/${esc(item.pkg_oid)}</td>` +
-    `<td>${fmtQueue(item.current_queue)}</td><td>${fmtQueue(item.new_queue)}</td>` +
-    `<td>${item.noop ? '(無變更)' : ''}</td></tr>`).join('')
-  return `<!doctype html><meta charset=utf-8><title>確認變更 ${esc(id)}</title>
-<style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}button{padding:8px 16px;font-size:1rem}</style>
-<h1>確認 change-set ${esc(id)}</h1>
-<p><strong style="color:#b00">原排程將被整組取代(reserve_queue 為整組替換、非合併);以下時間皆為 UTC</strong>,由 be2 原生排程到點自動執行(我方不建 scheduler)。</p>${banner}
-<table data-diff-version="${esc(diffVersion)}"><tr><th>方案</th><th>oid</th><th>現有排程</th><th>新排程</th><th></th></tr>${rows}</table>
-<form method=post action="/confirm/${esc(id)}/approve" style="margin-top:1rem">
-  <input type=hidden name=diff_version value="${esc(diffVersion)}">
-  <button type=submit>批准並執行</button></form>
-<form method=post action="/confirm/${esc(id)}/reject"><button type=submit>拒絕</button></form>`
-}
-
-const render = (actionType: string, id: string, diff: AnyDiffItem[], version: string, banner = '') =>
-  actionType === 'inventory_setting'
-    ? renderInventoryPage(id, diff as InventoryDiffItem[], version, banner)
-    : actionType === 'inventory_platform'
-      ? renderPlatformPage(id, diff as InventoryPlatformDiffItem[], version, banner)
-      : actionType === 'shelf_schedule'
-        ? renderSchedulePage(id, diff as ShelfScheduleDiffItem[], version, banner)
-        : renderPage(id, diff as DiffItem[], version, banner)
 
 export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
   const r = express.Router()
@@ -175,8 +97,9 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
   function loginRedirect(res: express.Response, next: string) { res.redirect(302, `/confirm/login?next=${encodeURIComponent(next)}`) }
 
   async function liveDiff(rec: NonNullable<ReturnType<typeof deps.changeSets.get>>, accessToken: string) {
-    const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: deps.gateway, accessToken, userLabel: rec.creatorLabel })
-    return { diff, version: diffVersionHash(diff) }
+    const mod = getModule(rec.actionType)
+    const diff = await mod.computeDiff({ gateway: deps.gateway, accessToken, userLabel: rec.creatorLabel }, rec.items) as AnyDiffItem[]
+    return { diff, version: mod.diffVersion(diff) }
   }
 
   r.get('/confirm/:id', h(async (req, res) => {
@@ -188,7 +111,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     // for a different user's change-set id.
     if (!rec || !sameUser(rec.creatorLabel, who.userLabel) || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
     const { diff, version } = await liveDiff(rec, who.accessToken)
-    res.status(200).send(render(rec.actionType, rec.id, diff, version))
+    res.status(200).send(renderShell(rec.id, getModule(rec.actionType).renderConfirm(rec, diff, version, ''), version))
   }))
 
   r.post('/confirm/:id/approve', h(async (req, res) => {
@@ -211,7 +134,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     })
     if (out.stale) {
       const { diff, version } = await liveDiff(rec, who.accessToken)
-      res.status(409).send(render(rec.actionType, rec.id, diff, version, '<p style="color:#b00">目標欄位已被改動,請重新確認。</p>'))
+      res.status(409).send(renderShell(rec.id, getModule(rec.actionType).renderConfirm(rec, diff, version, '<p style="color:#b00">目標欄位已被改動,請重新確認。</p>'), version))
       return
     }
     if (out.casFailed) { res.status(409).send('已被處理或已過期'); return }
