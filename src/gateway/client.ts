@@ -1,5 +1,17 @@
 import { GatewayError } from '../errors.js'
 
+// be2 錯誤回應有兩種 envelope（2026-08-16 彩排實測 + sit-contracts）：
+// `{data:null, meta:{status,desc}}`（product-service 直達）與 `{metadata:{status,desc}, data}`
+// （部分 be2-api 端點）。原本只認 `.error/.code/.message`，這兩種形狀會退化成
+// HTTP_xxx/"gateway error"、丟失 be2 錯誤碼（如 131105）與中文訊息。
+function gatewayErrorParts(body: Record<string, unknown>, status: number): { code: string; message: string } {
+  const err = (body?.error ?? body) as Record<string, unknown>
+  const meta = (body?.meta ?? body?.metadata) as Record<string, unknown> | undefined
+  const code = err?.code ?? meta?.status
+  const message = err?.message ?? meta?.desc
+  return { code: String(code ?? `HTTP_${status}`), message: String(message ?? 'gateway error') }
+}
+
 export class GatewayClient {
   private baseUrl: string
   private fetchImpl: typeof fetch
@@ -24,9 +36,8 @@ export class GatewayClient {
     }
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
     if (!res.ok) {
-      const err = (body?.error ?? body) as Record<string, unknown>
-      throw new GatewayError(String(err?.code ?? `HTTP_${res.status}`),
-        `GET ${path} -> ${res.status}: ${String(err?.message ?? 'gateway error')}`, res.status)
+      const { code, message } = gatewayErrorParts(body, res.status)
+      throw new GatewayError(code, `GET ${path} -> ${res.status}: ${message}`, res.status)
     }
     return (body as { data?: unknown }).data ?? body
   }
@@ -45,9 +56,8 @@ export class GatewayClient {
     }
     const b = (await res.json().catch(() => ({}))) as Record<string, unknown>
     if (!res.ok) {
-      const err = (b?.error ?? b) as Record<string, unknown>
-      throw new GatewayError(String(err?.code ?? `HTTP_${res.status}`),
-        `PUT ${path} -> ${res.status}: ${String(err?.message ?? 'gateway error')}`, res.status)
+      const { code, message } = gatewayErrorParts(b, res.status)
+      throw new GatewayError(code, `PUT ${path} -> ${res.status}: ${message}`, res.status)
     }
     return (b as { data?: unknown }).data ?? b
   }

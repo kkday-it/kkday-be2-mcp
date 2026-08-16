@@ -53,6 +53,14 @@ export async function computeScheduleDiff(items: ShelfScheduleItem[], ctx: ToolC
       }
       const currentQueue = sanitizeQueue((row.reserve_queue as Array<{ reserve_date?: unknown; reserve_status?: unknown }>) ?? [])
       const newQueue = sortQueue(it.queue)
+      // be2 規則 131105（2026-08-16 彩排 SIT 實測）：reserve_queue 排序後第一筆的 reserve_status
+      // 必須與方案當前 is_active 不同（對已上架方案排「上架」= 無意義排程，be2 執行時 422）。
+      // 在 diff 就 fail-fast——create 與批准前 live-diff 都走本函式，擋得早也擋得住 stale。
+      // row.is_active 非 boolean（容錯路徑）時跳過檢查；清空排程（queue=[]）不受影響。
+      if (newQueue.length > 0 && typeof row.is_active === 'boolean' && newQueue[0].reserve_status === row.is_active) {
+        throw new DiffError([`${it.prod_oid}:${it.pkg_oid}`],
+          `pkg_oid=${it.pkg_oid} 第一筆排程狀態（${newQueue[0].reserve_status ? '上架' : '下架'}）與方案現況相同，be2 會拒絕（131105）——請改排相反狀態或先確認現況`)
+      }
       out.push({
         prod_oid: it.prod_oid,
         pkg_oid: it.pkg_oid,

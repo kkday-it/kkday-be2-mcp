@@ -61,6 +61,18 @@ describe('GatewayClient', () => {
       await expect(client.put('/x', 'secret-jwt', {})).rejects.toSatisfy(
         (e: unknown) => !(String((e as Error).message).includes('secret-jwt')))
     })
+    // 2026-08-16 彩排實測：be2 的 422 走 {data:null, meta:{status,desc}} envelope——原本退化成
+    // HTTP_422/"gateway error"，丟失 131105 與中文訊息。
+    it('parses be2 meta.status/meta.desc error envelope', async () => {
+      const { client } = make(422, { data: null, meta: { status: '131105', desc: '套餐預約狀態錯誤' } })
+      await expect(client.put('/x', 't', {})).rejects.toSatisfy((e: unknown) =>
+        e instanceof GatewayError && e.code === '131105' && e.message.includes('套餐預約狀態錯誤'))
+    })
+    it('parses be2 metadata.status/metadata.desc error envelope', async () => {
+      const { client } = make(400, { metadata: { status: 'AU9301', desc: 'session revoked' }, data: null })
+      await expect(client.put('/x', 't', {})).rejects.toSatisfy((e: unknown) =>
+        e instanceof GatewayError && e.code === 'AU9301' && e.message.includes('session revoked'))
+    })
     it('maps network failure to GATEWAY_UNREACHABLE', async () => {
       const fetchImpl = vi.fn(async () => { throw new DOMException('aborted', 'AbortError') })
       const client = new (await import('../src/gateway/client.js')).GatewayClient({ baseUrl: 'https://gw.test', fetchImpl: fetchImpl as unknown as typeof fetch })
