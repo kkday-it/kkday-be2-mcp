@@ -45,8 +45,9 @@ function makeFakeApp(handlers: Record<string, (args: Record<string, unknown>) =>
       calls.push({ name, arguments: args })
       const h = handlers[name]
       if (!h) throw new Error(`no handler stubbed for tool ${name}`)
-      const structuredContent = await h(args)
-      return { structuredContent }
+      const res = await h(args) as any
+      if (res && res.__rawError) return { isError: true, content: res.content }
+      return { structuredContent: res }
     },
   }
   return {
@@ -651,6 +652,125 @@ describe('batch-wizard panel: shelf_schedule flow', () => {
     nextBtn.onclick!()
     await flush()
     expect(fallbackEl.textContent).toBe('已勾選 1 筆但尚未套用——請先按『套用到所有已勾選』設定時間或取消排程')
+  })
+
+  it('Fix 1 & 2: client-side validation in applyAll and toReserveDateUtc defense', async () => {
+    const batchViewResult = envelope([{
+      products: [{
+        prod_oid: 'P1', name: '商品1', plans: [
+          { pkg_oid: 'A', name: '方案A', is_bundle: false, reserve_queue: [] }
+        ],
+      }],
+    }])
+    const { app, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => batchViewResult
+    })
+    initWizard(app as never)
+    fireLaunch('shelf_schedule', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+
+    const cbA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    cbA.checked = true; cbA.onclick!()
+
+    const defDate = findByRole(wizardEl, 'defDate') as FakeElement
+    const defHour = findByRole(wizardEl, 'defHour') as FakeElement
+    const defMinute = findByRole(wizardEl, 'defMinute') as FakeElement
+    const fallbackEl = doc.getElementById('fallback') as FakeElement
+    const applyAllBtn = findByRole(wizardEl, 'applyAllBtn')
+    const badgeA = cbA.parentNode!.querySelectorAll('[data-role=coBadge]')[0] as FakeElement
+
+    // (a) apply with empty date
+    defDate.value = ''
+    defHour.value = '10'
+    defMinute.value = '0'
+    applyAllBtn.onclick!()
+    expect(fallbackEl.hidden).toBe(false)
+    expect(fallbackEl.textContent).toBe('請先選擇日期並確認時間（時 0–23、分 0–59）')
+    expect(badgeA.hidden).toBe(true) // badge state unchanged
+    
+    // clear fallback for next check
+    fallbackEl.hidden = true
+    
+    // (b) apply with hour=25
+    defDate.value = '2026-08-20'
+    defHour.value = '25'
+    defMinute.value = '0'
+    applyAllBtn.onclick!()
+    expect(fallbackEl.hidden).toBe(false)
+    expect(fallbackEl.textContent).toBe('請先選擇日期並確認時間（時 0–23、分 0–59）')
+    expect(badgeA.hidden).toBe(true)
+    
+    // apply with invalid date -> throws INVALID_DATE, caught and shows same message
+    fallbackEl.hidden = true
+    defDate.value = 'invalid-date'
+    defHour.value = '10'
+    defMinute.value = '0'
+    applyAllBtn.onclick!()
+    expect(fallbackEl.hidden).toBe(false)
+    expect(fallbackEl.textContent).toBe('請先選擇日期並確認時間（時 0–23、分 0–59）')
+    expect(badgeA.hidden).toBe(true)
+
+    // (c) valid apply still works
+    fallbackEl.hidden = true
+    defDate.value = '2026-08-20'
+    defHour.value = '10'
+    defMinute.value = '0'
+    applyAllBtn.onclick!()
+    expect(fallbackEl.hidden).toBe(true)
+    // 正常套用時間不顯示 badge（badge 專屬「將一併變更/將清除排程」）——合法套用的行為由
+    // 既有 shelf_schedule 全流程測試驗證（queue 進 create payload），這裡只確認驗證不誤攔。
+    expect(badgeA.hidden).toBe(true)
+  })
+
+  it('Fix 3: surfaces server error on create failure', async () => {
+    const batchViewResult = envelope([{
+      products: [{
+        prod_oid: 'P1', name: '商品1', plans: [
+          { pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', current_platform: 'BE2' }
+        ],
+      }],
+    }])
+    
+    let errorResponse: any = { __rawError: true, content: [{ type: 'text', text: '{"errors":[{"code":"INVALID_ITEMS","message":"Invalid items selected"}]}' }] }
+    
+    const { app, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => batchViewResult,
+      app_create_changeset: () => errorResponse
+    })
+    
+    initWizard(app as never)
+    fireLaunch('inventory_platform', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+
+    const cbA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    cbA.checked = true; cbA.onclick!()
+    const radios = wizardEl.querySelectorAll('input[type=radio][name=target]')
+    radios.find(r => r.value === 'BE2_SCM')!.checked = true
+
+    const nextBtn = findByRole(wizardEl, 'nextBtn')
+    const fallbackEl = doc.getElementById('fallback') as FakeElement
+
+    // (d) parseable body
+    nextBtn.onclick!()
+    await flush()
+    expect(fallbackEl.hidden).toBe(false)
+    expect(fallbackEl.textContent).toBe('建立變更失敗：INVALID_ITEMS — Invalid items selected')
+
+    // stub without parseable body -> generic fallback message
+    errorResponse = { __rawError: true, content: [{ type: 'text', text: 'not json' }] }
+    nextBtn.onclick!()
+    await flush()
+    expect(fallbackEl.hidden).toBe(false)
+    expect(fallbackEl.textContent).toBe('建立變更失敗')
+    
+    // json but no envelope
+    errorResponse = { __rawError: true, content: [{ type: 'text', text: '{"something":1}' }] }
+    nextBtn.onclick!()
+    await flush()
+    expect(fallbackEl.hidden).toBe(false)
+    expect(fallbackEl.textContent).toBe('建立變更失敗')
   })
 })
 

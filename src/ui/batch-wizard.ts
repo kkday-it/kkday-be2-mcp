@@ -41,7 +41,9 @@ export function toReserveDateUtc(dateStr: string, hh: number, mm: number, tz: st
   const offset = TZ_OFFSET_HOURS[tz] ?? 0
   const [y, mo, d] = dateStr.split('-').map(Number)
   const dt = new Date(Date.UTC(y, mo - 1, d, hh - offset, mm, 0))
-  return `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}-${pad2(dt.getUTCDate())} ${pad2(dt.getUTCHours())}:${pad2(dt.getUTCMinutes())}:00`
+  const res = `${dt.getUTCFullYear()}-${pad2(dt.getUTCMonth() + 1)}-${pad2(dt.getUTCDate())} ${pad2(dt.getUTCHours())}:${pad2(dt.getUTCMinutes())}:00`
+  if (res.includes('NaN')) throw new Error('INVALID_DATE')
+  return res
 }
 
 // Step-2 review dual display (spec: GMT+X alongside UTC — the confirm-page renderer
@@ -220,6 +222,7 @@ function injectStyles(): void {
 export interface WizardApp {
   callServerTool(params: { name: string; arguments: Record<string, unknown> }): Promise<{
     isError?: boolean
+    content?: Array<{ type: string; text: string }>
     structuredContent?: { items?: unknown[]; errors?: Array<{ code?: string; message?: string }> }
   }>
   ontoolresult: ((params: { structuredContent?: { items?: unknown[] } }) => void) | undefined
@@ -735,7 +738,26 @@ export function initWizard(app: WizardApp): void {
         clearFallback(fallbackEl)
         lastTz = tz.value
         const isClear = status.value === 'clear'
-        const utc = isClear ? '' : toReserveDateUtc(date.value, Number(hour.value), Number(minute.value), tz.value)
+        
+        let utc = ''
+        if (!isClear) {
+          const hh = Number(hour.value)
+          const mm = Number(minute.value)
+          if (!date.value || !Number.isInteger(hh) || hh < 0 || hh > 23 || !Number.isInteger(mm) || mm < 0 || mm > 59) {
+            showFallback(fallbackEl, '請先選擇日期並確認時間（時 0–23、分 0–59）')
+            return
+          }
+          try {
+            utc = toReserveDateUtc(date.value, hh, mm, tz.value)
+          } catch (e) {
+            if (e instanceof Error && e.message === 'INVALID_DATE') {
+              showFallback(fallbackEl, '請先選擇日期並確認時間（時 0–23、分 0–59）')
+              return
+            }
+            throw e
+          }
+        }
+        
         for (const r of rows) {
           if (r.checkbox.checked && !r.is_bundle) {
             if (isClear) {
@@ -797,9 +819,40 @@ export function initWizard(app: WizardApp): void {
           name: 'app_create_changeset',
           arguments: { action_type: actionType, items, ...(noteValue ? { note: noteValue } : {}) },
         })
-        if (createR.isError) { showFallback(fallbackEl, '建立變更失敗'); return }
+        
+        let parsedErrCode: string | undefined
+        let parsedErrMessage: string | undefined
+        try {
+          const raw = createR.content?.[0]?.text
+          if (raw) {
+            const parsed = JSON.parse(raw)
+            const errs = parsed.errors
+            if (Array.isArray(errs) && errs.length > 0 && errs[0]?.code && errs[0]?.message) {
+              parsedErrCode = errs[0].code
+              parsedErrMessage = errs[0].message
+            }
+          }
+        } catch (e) {}
+
+        if (createR.isError) {
+          if (parsedErrCode && parsedErrMessage) {
+            showFallback(fallbackEl, `建立變更失敗：${parsedErrCode} — ${parsedErrMessage}`)
+          } else {
+            showFallback(fallbackEl, '建立變更失敗')
+          }
+          return
+        }
+        
         const created = createR.structuredContent?.items?.[0] as { changeset_id?: string } | undefined
-        if (!created?.changeset_id) { showFallback(fallbackEl, '建立變更失敗：未取得 changeset_id'); return }
+        if (!created?.changeset_id) {
+          if (parsedErrCode && parsedErrMessage) {
+            showFallback(fallbackEl, `建立變更失敗：${parsedErrCode} — ${parsedErrMessage}`)
+          } else {
+            showFallback(fallbackEl, '建立變更失敗：未取得 changeset_id')
+          }
+          return
+        }
+        
         changesetId = created.changeset_id
         const rec = await loadView()
         if (!rec) return
@@ -1201,7 +1254,7 @@ export function initWizard(app: WizardApp): void {
 // this module under a document-only stub (no `window`) must not throw at import time — it must
 // stay import-safe so tests can call initWizard() directly with an injected stub app.
 if (typeof window !== 'undefined') {
-  connectApp('be2-batch-wizard').then(initWizard).catch(e => {
+  connectApp('be2-batch-wizard').then(a => initWizard(a as unknown as WizardApp)).catch(e => {
     const fallback = document.getElementById('fallback') as HTMLPreElement
     showFallback(fallback, '無法連上 host：' + String(e))
   })
