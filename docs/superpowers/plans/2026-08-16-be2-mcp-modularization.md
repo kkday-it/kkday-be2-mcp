@@ -506,3 +506,5 @@ it(`${type}: itemKey(item) === itemKey(對應 diff item)`, () => { /* 同一筆�
 2. **Placeholder 掃描**：無 TBD/TODO；「搬移」步驟皆附來源 file:line 與行為 pin 測試清單（refactor 的 code 真身在 repo，plan 指明出處與零差異檢查點）。
 3. **型別一致性**：`ActionModule` 簽名 Task 1 定稿、Task 2-8 全部引用同名欄位；`ExecCtx.span` 簽名 Task 1 與 Task 5 一致（`(name, fn(traceId))`——spec 的 `attrs` 參數在落地時省略，現行 code 未用 span attrs，YAGNI）；`ConfirmView` Task 1/6 一致（spec 的 `tableHtml`+`moduleWarning` 落地為 `intro`+`tableHtml`，`intro` 涵蓋警語與 banner——語義同、命名以四頁實際結構為準）。
 4. **對 approved spec 的落地偏差（agy plan-review 修正後彙整）**：(a) `ExecCtx` 增 `accessToken`（executor 打 gateway 必需）；(b) `span` 省略 attrs 參數；(c) `ConfirmView` 欄位改名 + **banner 改為傳入 `renderConfirm`、由 module 決定精確位置**（spec「core 保留注入點」在四頁 banner 位置不一致 + 不改測試的雙約束下不可行——banner 仍為 route 層產生的不透明字串，安全語義不變）；(d) zod union 與 `action_type` enum 由 registry 生成、註冊為 `modules/index.ts` import 副作用（避免 ESM 求值時序 crash）。
+
+<!-- agy-peer-reviewed: 2026-08-16T12:06:45Z rounds=2 verdict=approved -->
