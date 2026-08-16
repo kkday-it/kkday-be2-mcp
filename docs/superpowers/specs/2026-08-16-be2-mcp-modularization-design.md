@@ -47,32 +47,60 @@ export interface ActionModule<Item, DiffI> {
   itemSchema: z.ZodType<Item>                 // strict zod shape；create 入口以各 module schema 組 union
   authz: { codes: string[]; onMissing: 'block' | 'warn' }
                                               // businessList action codes + 缺碼時策略
-                                              // （現況：platform/schedule 為 warn，其餘 block——語義照搬）
+                                              // （現況：platform/schedule 為 warn，其餘 block——語義照搬；
+                                              //   core 端 'warn' 必須映射為既有的 warning 欄位/錯誤碼行為，
+                                              //   'block' 必須沿用既有 EnvelopeError code，degrade 語義逐碼保留）
   scopeOids(item: Item): string[]             // §6.2 scope-binding 要查的 oids；同時是 readOidsOut 來源
-  validate(items: Item[]): ValidationResult   // 語義驗證（op/quantity 耦合、過去日期、唯一性…）
-  computeDiff(ctx: ModuleCtx, items: Item[]): Promise<DiffI[]>
+  validate(items: Item[], nowMs: number): ValidationResult
+                                              // 語義驗證（op/quantity 耦合、過去日期、唯一性…）
+                                              // ★ 時間一律注入（現有 inventory/schedule validate 皆吃注入時間，
+                                              //   禁止 module 內呼叫 Date.now()——測試可 mock 性不變）
+  computeDiff(ctx: DiffCtx, items: Item[]): Promise<DiffI[]>
   diffVersion(diff: DiffI[]): string          // ★ hash 貢獻由 module 算；core 不再對 diff 做欄位判別
   itemKey(d: Item | DiffI): string            // ★ 單一事實來源；server 與 UI bundle 同 import
-  execute(ctx: ModuleCtx, items: Item[], diff: DiffI[]): Promise<ItemResult[]>
-                                              // read-merge-write；core 負責 span/audit/status 聚合
-  renderConfirm(rec: ChangeSetRecord, diff: DiffI[]): string
-                                              // 確認頁 HTML 片段；高風險 banner 屬 module
+  execute(ctx: ExecCtx, items: Item[], diff: DiffI[]): Promise<ItemResult[]>
+                                              // read-merge-write；core 負責 audit 記錄與 status 聚合
+  renderConfirm(rec: ChangeSetRecord, diff: DiffI[]): ConfirmView
+                                              // 確認頁「內容片段」，非完整 HTML 文件（見下）
   wizard?: WizardDescriptor                   // 批次精靈分頁描述（僅 batch 型：platform/schedule）
 }
 
-// core 注入；module 不自己碰 token / raw db / audit 原生
-export interface ModuleCtx {
-  identity: Identity          // 由 token 推導（input 永不接身分，鐵則 2 不變）
-  gateway: GatewayClient      // 已帶身分的下游呼叫
-  scope: ScopeChecker         // readOidStore 查詢（core 執行 gate，module 只宣告 scopeOids）
+// ★ 兩個 ctx 分開——diff 與 execute 發生在不同生命週期、持不同身分：
+//   computeDiff 在 create（agent bearer）與確認頁 live-diff（web session）時跑；
+//   execute 只在批准當下跑，需要批准者身分推導的 modify_user 等執行期欄位。
+//   共用單一 ctx 會逼 modifyUser 變 optional、丟失型別安全（agy round 1 issue 1）。
+export interface DiffCtx {
+  // = 現有 diff 函式實際吃的 context（computeShelfDiff 會呼叫 findProductsTool.handler，
+  //   需要完整 L2ToolContext）。純重構原則：不縮水、不重造——DiffCtx 就是既有
+  //   L2ToolContext 的別名/子集，各 module 的 computeDiff 簽名照現有函式搬。
+  tool: L2ToolContext
+  nowMs: number
+}
+export interface ExecCtx {
+  gateway: GatewayClient      // 已綁批准者身分的下游呼叫
+  modifyUser: string          // 批准當下由 web session token 解出（沿用現行 confirmService 流程）
+  channel: string
   traceId: string
+  span<T>(name: string, attrs: Record<string, unknown>, fn: () => Promise<T>): Promise<T>
+                              // ★ core 提供的 span helper：module 用它維持現有 per-item/per-group
+                              //   span 粒度（inventory 逐 item、shelf/schedule 逐 prod group），
+                              //   OTel 依賴留在 core，粒度語義零改動（agy round 1 issue 5）
+  nowMs: number
+}
+
+// renderConfirm 回內容物件而非整頁：core 組頁殼（layout/CSS/CSRF/按鈕），
+// 並保有注入動態 banner 的位置（stale/CAS 失敗的紅字提示是 route 層狀態，
+// module 看不到）——高風險警語（如庫存）屬 module，放 moduleWarning。
+export interface ConfirmView {
+  tableHtml: string           // diff 呈現主體
+  moduleWarning?: string      // module 自帶的靜態高風險警語
 }
 ```
 
 設計原則：
 - **core 對 items/diff 一律 opaque**（store 現況即以 JSON blob 存，`store.ts:20-22`）。不設計萬用 `ChangeItem`/`Diff` shape——這是對「訂單形狀不同（狀態機、不可逆）」的保險，module-architecture.md §8 Q1 的答案。
 - **判別權下放**：core 只用 `rec.actionType` 查 registry，永不對 item/diff 欄位做 duck-typing。熱點 1/2/4 的 fall-through 風險**結構性消滅**。
-- **audit 由 core 記**：module 的 `execute` 回 `ItemResult[]`（含 before/after），core 統一做 per-item audit、span、status 聚合（done/partial/failed 規則收成一份，含 Phase 3a 修過的「partial 不 collapse 成 failed」「非 done/skipped_noop 一律記 error」語義）。
+- **audit 由 core 記**：module 的 `execute` 回 `ItemResult[]`（含 before/after），core 統一做 per-item audit 與 status 聚合（done/partial/failed 規則收成一份，含 Phase 3a 修過的「partial 不 collapse 成 failed」「非 done/skipped_noop 一律記 error」語義）。**span 粒度不變**：core 包 changeset 級 span，module 內部用 `ExecCtx.span` helper 維持現行 per-item / per-prod-group span（OTel 依賴不進 module）。
 - `wizard` 為選配：僅 `inventory_platform`/`shelf_schedule` 有；單筆確認頁型（shelf/inventory_setting）不提供。
 
 ### Registry
@@ -93,8 +121,8 @@ export function getModule(actionType: string): ActionModule<any, any>  // miss =
 | `createChangesetCore` if 鏈（`tools.ts:100-220`） | registry lookup：`getModule(action_type)` → `itemSchema` 驗形 → `validate` → `scopeOids` 逐 oid 過 scope gate → `authz` fail-fast（`onMissing` 決定 block/warn）。`readOidsOut` 同源自 `scopeOids` |
 | `diffVersionHash`（`diff.ts:16-51`） | 刪除；`module.diffVersion(diff)`。各 module 保留現有 hash 語義（inventory 的 op-aware：`set` 綁現況、`adjust` 綁操作，防 live drift 誤判 stale——測試 pin 不動） |
 | `itemKeysOf`（`confirmService.ts:55-69`） | `module.itemKey`。各 type 的 key 形狀不變（platform=`item_oid:supplier_oid`、schedule=`prod_oid:pkg_oid`…），既有 pin 測試照跑 |
-| `executeChangeSet`（`executor.ts:43-179`） | core 外殼：取 module → `execute` → 統一 span/audit/status 聚合。`executorInventory/Platform/Schedule` 與 shelf 的 `execProduct`/`execPlan` 內容**原樣搬**進各 module 的 `execute`（含 inventory in-process per-key mutex、schedule 逐 prod 分組、busy-guard 輪詢——語義零改動） |
-| `confirmRoutes.render()`（`confirmRoutes.ts:116-123`） | `module.renderConfirm`。四個 renderer 原樣搬進各 module |
+| `executeChangeSet`（`executor.ts:43-179`） | core 外殼：取 module → `execute(ExecCtx, ...)` → 統一 audit/status 聚合。`executorInventory/Platform/Schedule` 與 shelf 的 `execProduct`/`execPlan` 內容**原樣搬**進各 module 的 `execute`（含 inventory in-process per-key mutex、schedule 逐 prod 分組、busy-guard 輪詢——語義零改動）；per-item/per-group span 改經 `ExecCtx.span` helper，粒度不變 |
+| `confirmRoutes.render()`（`confirmRoutes.ts:116-123`） | `module.renderConfirm` 回 `ConfirmView` 內容物件；core 組頁殼並保留動態 banner 注入點（stale/CAS 失敗紅字是 route 層狀態）。四個 renderer 的 diff 呈現邏輯原樣搬進各 module |
 
 `computeChangesetDiff`（`diff.ts:64-71`）同理改 `module.computeDiff`。approve/reject 流程（CAS、nonce、stale 409、live-diff 重算）**一行治理邏輯都不動**，只把其中的 per-type 呼叫換成 module 方法。
 
@@ -149,3 +177,5 @@ src/modules/product/
 | UI bundle 把 server-only code 拉進面板 | `ui.ts` 限 isomorphic 純函式；build-ui 後跑既有 panel smoke test；esbuild 對 node built-in 的引用會直接 build fail（天然守門） |
 | adapter 期（步驟 1-2）新舊兩套並存造成混淆 | adapter 生命週期只跨兩步、同一 PR 內收斂；不留長期兼容層 |
 | `shelf_toggle` 拆兩條目後 create 入口的 union 行為漂移 | zod union 改由 registry 組裝時，以既有 createChangeset 測試 + 注入測試 pin 現行為 |
+
+<!-- agy-peer-reviewed: 2026-08-16T11:50:07Z rounds=2 verdict=approved -->
