@@ -120,3 +120,23 @@ describe('diffVersionHash — ShelfScheduleDiffItem explicit branch (Task 4)', (
     expect(diffVersionHash(a)).not.toBe(diffVersionHash(b))
   })
 })
+
+describe('computeScheduleDiff — 131105 預檢（第一筆排程狀態須與現況 is_active 不同）', () => {
+  const rowActive = (pkg_oid: string, is_active: boolean) =>
+    ({ pkg_oid, name: `Plan ${pkg_oid}`, is_bundle: false, is_active, reserve_queue: [] })
+  it('is_active=true + 第一筆排「上架」-> DiffError（be2 131105 會拒）', async () => {
+    const gw = gatewayWith({ p1: [rowActive('k1', true)] })
+    await expect(computeScheduleDiff([item({ queue: [{ reserve_date_utc: '2027-01-01 00:00:00', reserve_status: true }] })], ctxOf(gw)))
+      .rejects.toBeInstanceOf(DiffError)
+  })
+  it('is_active=true + 第一筆排「下架」-> 正常出 diff', async () => {
+    const gw = gatewayWith({ p1: [rowActive('k1', true)] })
+    const [d] = await computeScheduleDiff([item({ queue: [{ reserve_date_utc: '2027-01-01 00:00:00', reserve_status: false }] })], ctxOf(gw))
+    expect(d.noop).toBe(false)
+  })
+  it('queue=[]（清排程）不受預檢影響', async () => {
+    const gw = gatewayWith({ p1: [rowActive('k1', true)] })
+    const [d] = await computeScheduleDiff([item({ queue: [] })], ctxOf(gw))
+    expect(d.new_queue).toEqual([])
+  })
+})
