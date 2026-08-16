@@ -7,6 +7,7 @@ import { executeInventoryPlatform } from './executor.js'
 import { validateInventoryPlatformItems } from './validate.js'
 import { itemKey } from './keys.js'
 import { renderConfirm } from './renderer.js'
+import { inventoryPlatformWizard } from './ui.js'
 
 // Strict shapes for the two Phase 4a item kinds (Task 2 review #1: a loose z.record in the
 // union would swallow malformed SHELF items that previously failed zod, silently weakening
@@ -59,5 +60,6 @@ export const inventoryPlatformModule: ActionModule<InventoryPlatformItem, Invent
   },
   itemKey,
   execute: executeInventoryPlatform,
-  renderConfirm
+  renderConfirm,
+  wizard: inventoryPlatformWizard
 }

@@ -7,6 +7,7 @@ import { executeShelfSchedule } from './executor.js'
 import { validateShelfScheduleItems } from './validate.js'
 import { itemKey } from './keys.js'
 import { renderConfirm } from './renderer.js'
+import { shelfScheduleWizard } from './ui.js'
 
 const shelfScheduleItemShape = z.object({
   prod_oid: z.string().min(1),
@@ -57,5 +58,6 @@ export const shelfScheduleModule: ActionModule<ShelfScheduleItem, ShelfScheduleD
   },
   itemKey,
   execute: executeShelfSchedule,
-  renderConfirm
+  renderConfirm,
+  wizard: shelfScheduleWizard
 }

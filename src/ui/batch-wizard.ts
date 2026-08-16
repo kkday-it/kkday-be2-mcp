@@ -8,8 +8,16 @@
 // version — only markup/className/CSS were added. See STYLE below for the injected stylesheet and
 // the per-section comments for what got wrapped/restructured purely for presentation.
 import { connectApp, renderText } from './panelShared.js'
+import { inventoryPlatformWizard } from '../modules/product/inventoryPlatform/ui.js'
+import { shelfScheduleWizard } from '../modules/product/shelfSchedule/ui.js'
+import type { WizardDescriptor, WizardRowInput, DomHelpers } from '../core/changeset/module.js'
 
 type ActionType = 'inventory_platform' | 'shelf_schedule'
+
+const WIZARDS: Record<ActionType, WizardDescriptor> = {
+  inventory_platform: inventoryPlatformWizard,
+  shelf_schedule: shelfScheduleWizard
+}
 
 interface ScheduleEntry { reserve_date_utc: string; reserve_status: boolean }
 interface AffectedPkg { prod_oid: string; pkg_oid: string; pkg_name: string }
@@ -26,17 +34,9 @@ const PLATFORM_LABELS: Record<string, string> = {
 }
 const platformLabel = (v: string | null | undefined): string => (v == null ? '無法讀取' : (PLATFORM_LABELS[v] ?? v))
 
-const ACTION_LABELS: Record<ActionType, string> = {
-  inventory_platform: '批次庫存平台調整',
-  shelf_schedule: '批次上架排程設定',
-}
-
+// formatDualDisplay 的既有時區換算(不重寫時間數學),只是把它回傳的單行字串依既定分隔符拆成兩個獨立元素方便分層上色。
 function pad2(n: number): string { return String(n).padStart(2, '0') }
 
-// Local wall-clock (date + hh:mm in `tz`) -> be2's UTC storage format "YYYY-MM-DD HH:mm:ss"
-// (src/changeset/types.ts ScheduleEntry / src/changeset/batchValidate.ts RESERVE_DATE_RE).
-// Exported for direct unit testing (brief's literal test value: 2026-08-20 10:00 Asia/Taipei ->
-// 2026-08-20 02:00:00) without needing to drive the whole panel UI just for arithmetic.
 export function toReserveDateUtc(dateStr: string, hh: number, mm: number, tz: string): string {
   const offset = TZ_OFFSET_HOURS[tz] ?? 0
   const [y, mo, d] = dateStr.split('-').map(Number)
@@ -46,9 +46,6 @@ export function toReserveDateUtc(dateStr: string, hh: number, mm: number, tz: st
   return res
 }
 
-// Step-2 review dual display (spec: GMT+X alongside UTC — the confirm-page renderer
-// (src/server/confirmRoutes.ts renderSchedulePage) only shows raw UTC; the wizard panel goes one
-// step further per the brief for readability during the guided flow).
 export function formatDualDisplay(reserveDateUtc: string, tz: string): string {
   const offset = TZ_OFFSET_HOURS[tz] ?? 0
   const ms = Date.parse(reserveDateUtc.replace(' ', 'T') + 'Z')
@@ -57,14 +54,6 @@ export function formatDualDisplay(reserveDateUtc: string, tz: string): string {
   const localStr = `${local.getUTCFullYear()}-${pad2(local.getUTCMonth() + 1)}-${pad2(local.getUTCDate())} ${pad2(local.getUTCHours())}:${pad2(local.getUTCMinutes())}:${pad2(local.getUTCSeconds())}`
   const sign = offset >= 0 ? '+' : '-'
   return `${localStr} (GMT${sign}${Math.abs(offset)}) / ${reserveDateUtc} UTC`
-}
-
-// Same rule as src/ui/changeset-panel.ts#itemKeyOf (source of truth:
-// src/changeset/confirmService.ts#itemKeysOf) — confirmed_keys must match this exactly or the
-// server throws CONFIRMED_KEYS_MISMATCH. inventory_platform diff items carry item_oid; shelf_
-// schedule ones don't.
-function itemKeyOf(d: Record<string, unknown>): string {
-  return 'item_oid' in d ? `${d.item_oid}:${d.supplier_oid}` : `${d.prod_oid}:${d.pkg_oid}`
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -787,26 +776,15 @@ export function initWizard(app: WizardApp): void {
       return bar
     }
 
-    function buildInventoryPlatformItems(): Array<{ item_oid: string; supplier_oid: string; target: string; affected_pkgs: AffectedPkg[] }> {
-      const target = radioButtons.find(r => r.checked)?.value ?? 'BE2'
-      const groups = new Map<string, { item_oid: string; supplier_oid: string; target: string; affected_pkgs: AffectedPkg[] }>()
-      for (const r of rows) {
-        if (!r.checkbox.checked || !r.item_oid || !r.supplier_oid) continue
-        const key = `${r.item_oid}:${r.supplier_oid}`
-        let g = groups.get(key)
-        if (!g) { g = { item_oid: r.item_oid, supplier_oid: r.supplier_oid, target, affected_pkgs: [] }; groups.set(key, g) }
-        g.affected_pkgs.push({ prod_oid: r.prod_oid, pkg_oid: r.pkg_oid, pkg_name: r.pkg_name })
-      }
-      return [...groups.values()]
-    }
-
-    function buildShelfScheduleItems(): Array<{ prod_oid: string; pkg_oid: string; queue: ScheduleEntry[] }> {
-      return rows.filter(r => r.checkbox.checked && !r.is_bundle && (r.queue.length > 0 || r.cleared))
-        .map(r => ({ prod_oid: r.prod_oid, pkg_oid: r.pkg_oid, queue: r.queue }))
-    }
-
     async function doNext(): Promise<void> {
-      const items = actionType === 'inventory_platform' ? buildInventoryPlatformItems() : buildShelfScheduleItems()
+      const target = radioButtons.find(r => r.checked)?.value
+      const rowInputs: WizardRowInput[] = rows.map(r => ({
+        checked: r.checkbox.checked, is_bundle: r.is_bundle ?? false,
+        prod_oid: r.prod_oid, pkg_oid: r.pkg_oid, pkg_name: r.pkg_name,
+        item_oid: r.item_oid, supplier_oid: r.supplier_oid,
+        queue: r.queue, cleared: r.cleared ?? false
+      }))
+      const items = WIZARDS[actionType].buildItems(rowInputs, { target }) as Array<Record<string, unknown>>
       if (items.length === 0) {
         const checkedNonBundleCount = rows.filter(r => r.checkbox.checked && !r.is_bundle).length
         const totalCheckedCount = rows.filter(r => r.checkbox.checked).length
@@ -911,65 +889,25 @@ export function initWizard(app: WizardApp): void {
   }
 
   function renderDiffCard(d: Record<string, unknown>): HTMLElement {
-    const card = document.createElement('div')
-    card.className = 'bw-diff-card'
+    const domHelpers: DomHelpers = {
+      el(tag: string, className?: string) {
+        const e = document.createElement(tag)
+        if (className) e.className = className
+        return e
+      },
+      text: renderText,
+      renderQueueLines: (el: HTMLElement, q: unknown[], emptyLabel?: string) => renderQueueLines(el, q as ScheduleEntry[], emptyLabel)
+    }
+
     if (actionType === 'shelf_schedule' && Array.isArray(d.new_queue)) {
-      const title = document.createElement('div')
-      title.className = 'bw-diff-title'
-      renderText(title, d.pkg_name ?? d.pkg_oid)
-      card.appendChild(title)
-
-      const row = document.createElement('div')
-      row.className = 'bw-diff-row'
-      const curSide = document.createElement('div')
-      curSide.className = 'bw-diff-side'
-      renderQueueLines(curSide, Array.isArray(d.current_queue) ? (d.current_queue as ScheduleEntry[]) : [], '(無排程)')
-      const arrow = document.createElement('span')
-      arrow.className = 'bw-diff-arrow'
-      renderText(arrow, '→')
-      const newSide = document.createElement('div')
-      newSide.className = 'bw-diff-side'
-      renderQueueLines(newSide, d.new_queue as ScheduleEntry[])
-      row.appendChild(curSide); row.appendChild(arrow); row.appendChild(newSide)
-      card.appendChild(row)
-
-      if (d.noop) {
-        const noop = document.createElement('div')
-        noop.className = 'bw-noop-badge'
-        renderText(noop, '此筆現況與目標相同，將不產生實際變更')
-        card.appendChild(noop)
-      }
-      return card
+      return WIZARDS[actionType].renderDiffCard(d, domHelpers)
     }
     if (actionType === 'inventory_platform' && 'target' in d) {
-      const affected = Array.isArray(d.affected_pkgs) ? (d.affected_pkgs as AffectedPkg[]) : []
-      const title = document.createElement('div')
-      title.className = 'bw-diff-title'
-      renderText(title, affected.length ? affected.map(p => p.pkg_name).join('、') : `${d.item_oid}:${d.supplier_oid}`)
-      card.appendChild(title)
-
-      const row = document.createElement('div')
-      row.className = 'bw-diff-row'
-      const curSpan = document.createElement('span')
-      renderText(curSpan, d.current != null ? String(d.current) : '—')
-      const arrow = document.createElement('span')
-      arrow.className = 'bw-diff-arrow'
-      renderText(arrow, '→')
-      const targetSpan = document.createElement('span')
-      targetSpan.className = 'bw-diff-target'
-      renderText(targetSpan, d.target != null ? String(d.target) : '—')
-      row.appendChild(curSpan); row.appendChild(arrow); row.appendChild(targetSpan)
-      card.appendChild(row)
-
-      if (d.noop) {
-        const noop = document.createElement('div')
-        noop.className = 'bw-noop-badge'
-        renderText(noop, '此筆現況與目標相同，將不產生實際變更')
-        card.appendChild(noop)
-      }
-      return card
+      return WIZARDS[actionType].renderDiffCard(d, domHelpers)
     }
     // Fallback for any other/unknown diff shape — raw dump, same safety net the prior version had.
+    const card = document.createElement('div')
+    card.className = 'bw-diff-card'
     renderText(card, d)
     return card
   }
@@ -979,10 +917,11 @@ export function initWizard(app: WizardApp): void {
     setStep(2)
     lastViewRec = rec
     wizardEl.textContent = ''
-    if (actionType === 'shelf_schedule') {
+    const warningText = WIZARDS[actionType].step2WarningText
+    if (warningText) {
       const warn = document.createElement('div')
       warn.className = 'bw-banner bw-banner-danger'
-      renderText(warn, '原排程將被整組取代（reserve_queue 為整組替換、非合併）')
+      renderText(warn, warningText)
       wizardEl.appendChild(warn)
     }
 
@@ -1039,7 +978,7 @@ export function initWizard(app: WizardApp): void {
   async function doApprove(): Promise<void> {
     if (!changesetId || !currentNonce || !currentDiffVersion) { showFallback(fallbackEl, '缺少批准所需資訊，請回上一步重載'); return }
     statusEl.textContent = '執行中…'
-    const confirmedKeys = currentDiffItems.map(itemKeyOf)
+    const confirmedKeys = currentDiffItems.map(WIZARDS[actionType].itemKey)
     try {
       const r = await app.callServerTool({
         name: 'app_confirm_changeset',
@@ -1281,7 +1220,7 @@ export function initWizard(app: WizardApp): void {
       const rec = (env?.items?.[0] as { action_type?: ActionType; prod_oids?: string[] } | undefined) ?? {}
       actionType = rec.action_type ?? 'inventory_platform'
       headerEl.className = 'bw-title'
-      renderText(headerEl, ACTION_LABELS[actionType])
+      renderText(headerEl, WIZARDS[actionType].label)
       renderStep1(rec.prod_oids ?? [])
     } catch (e) { showFallback(fallbackEl, '渲染失敗：' + String(e)) }
   }
