@@ -10,6 +10,7 @@ import type { ApprovalNonceStore } from '../core/changeset/approvalNonce.js'
 import type { AppRateBudget } from '../limits/appRateBudget.js'
 import { CredentialStore } from '../store/credentialStore.js'
 import type { Envelope } from '../tools/envelope.js'
+import type { ToolAnnotations } from '../tools/types.js'
 import { AppError, AuthError, RateError } from '../errors.js'
 import { approveAndExecute as approveAndExecuteService, type ApproveParams, type ApproveResult } from '../core/changeset/confirmService.js'
 
@@ -58,6 +59,7 @@ export interface AppToolDef {
   name: string
   description: string
   inputShape: Record<string, unknown>
+  annotations?: ToolAnnotations
   handler(args: any, ctx: AppToolContext): Promise<Envelope>
 }
 

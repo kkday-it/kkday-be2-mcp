@@ -123,6 +123,13 @@ export const createChangesetTool: L2ToolDef = {
     'Convert local time to UTC "YYYY-MM-DD HH:mm:ss" for reserve_date_utc. If any is missing, ASK first, do NOT stage.',
   inputShape,
   uiResourceUri: 'ui://be2/changeset-panel.html',
+  annotations: {
+    title: 'Stage draft change-set',
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
   async handler(args, ctx: L2ToolContext) {
     return createChangesetCore(args, ctx)
   },
@@ -133,6 +140,13 @@ export const getChangesetStatusTool: L2ToolDef = {
   description: 'Query a change-set you created: its approval/execution status and per-item before/after results. Read-only.',
   inputShape: { changeset_id: z.string().min(1) },
   uiResourceUri: 'ui://be2/changeset-panel.html',
+  annotations: {
+    title: 'Get change-set status',
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   async handler(args, ctx) {
     const rec = ctx.changeSets.get(args.changeset_id as string)
     if (!rec || rec.creatorLabel !== ctx.userLabel) return makeEnvelope([], [{ key: args.changeset_id as string, code: 'NOT_FOUND', message: 'No such change-set for this user.' }])

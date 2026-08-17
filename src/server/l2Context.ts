@@ -4,6 +4,7 @@ import type { ReadOidStore } from '../store/readOidStore.js'
 import type { ChangeSetStore } from '../core/changeset/store.js'
 import type { RateBudget } from '../limits/rateBudget.js'
 import type { Envelope } from '../tools/envelope.js'
+import type { ToolAnnotations } from '../tools/types.js'
 
 // L2 (change-set) tools need more than the L0 read ToolContext (src/tools/types.ts):
 // the read-oid scope substrate, the change-set store, the rate budget, and the bits
@@ -38,5 +39,6 @@ export interface L2ToolDef {
   inputShape: z.ZodRawShape
   uiResourceUri?: string // 有值 → 走 registerAppTool，面板綁此 ui:// 資源
   outputShape?: z.ZodRawShape // structuredContent 的 outputSchema（MCP 規範需宣告）
+  annotations?: ToolAnnotations
   handler(args: any, ctx: L2ToolContext): Promise<Envelope>
 }

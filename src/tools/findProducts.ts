@@ -48,6 +48,13 @@ export const findProductsTool: ToolDef<typeof inputShape> = {
     'keyword search is NOT supported in this phase. Per-oid failures are reported in `errors` without failing the batch.',
   inputShape,
   uiResourceUri: 'ui://be2/products-panel.html',
+  annotations: {
+    title: 'Find products',
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   async handler(args, ctx) {
     // Max 5 oids in flight (2 requests each) — never burst the gateway with 40 concurrent GETs.
     const results: Array<{ item?: unknown; error?: EnvelopeError }> = []
