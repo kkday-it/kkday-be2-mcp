@@ -291,6 +291,15 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
       const sessionId = req.header('mcp-session-id')
       let transport = sessionId ? transports.get(sessionId) : undefined
       if (!transport) {
+        // MCP Streamable HTTP 規範：請求帶了 Mcp-Session-Id 但 server 不認得（如重啟後
+        // in-memory transports 清空）→ 一律 404；規範要求 client 收到 404 後重新 initialize
+        // 建新 session（mcp-remote / Claude Code SDK 都實作了這個自癒）。先前回 400（甚至
+        // POST 會 fall-through 建新 transport 餵非 initialize 訊息）讓 Desktop 陷入
+        // 「連線假活、工具全掛」，只能手動重啟——2026-08-17 連線障礙 retro 的根治項。
+        if (sessionId) {
+          res.status(404).json({ error: { code: 'SESSION_NOT_FOUND', message: 'unknown or expired mcp session — re-initialize' } })
+          return
+        }
         if (req.method !== 'POST') { res.status(400).json({ error: { code: 'NO_SESSION', message: 'unknown mcp session' } }); return }
         // 新 session 一律由 initialize POST 建立，client capabilities 在此請求 body 的
         // params.capabilities（非 batch 陣列時）；防禦性處理 batch 陣列型式（本 SDK 目前
