@@ -12,6 +12,13 @@ export const appGetChangesetViewTool: AppToolDef = {
   name: 'app_get_changeset_view',
   description: 'Panel-only: fetch a change-set the caller created (status, diff, per-item results).',
   inputShape: { changeset_id: z.string().min(1) } as never,
+  annotations: {
+    title: 'Get change-set view',
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   async handler(args, ctx: AppToolContext) {
     const rec = ctx.changeSets.get(args.changeset_id)
     if (!rec || rec.creatorLabel !== ctx.userLabel) return NOT_FOUND(args.changeset_id)
@@ -33,6 +40,13 @@ export const appGetConfirmLinkTool: AppToolDef = {
   name: 'app_get_confirm_link',
   description: 'Panel-only: get the confirm-page URL for a change-set the caller created (opened via openLink).',
   inputShape: { changeset_id: z.string().min(1) } as never,
+  annotations: {
+    title: 'Get confirm link',
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   async handler(args, ctx: AppToolContext) {
     const rec = ctx.changeSets.get(args.changeset_id)
     if (!rec || rec.creatorLabel !== ctx.userLabel) return NOT_FOUND(args.changeset_id)
@@ -61,6 +75,13 @@ export const appConfirmChangesetTool: AppToolDef = {
     diff_version: z.string().min(1),
     confirmed_keys: z.array(z.string()),
   } as never,
+  annotations: {
+    title: 'Confirm and execute change-set',
+    readOnlyHint: false,
+    destructiveHint: true,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
   async handler(args, ctx: AppToolContext) {
     const rec = ctx.changeSets.get(args.changeset_id)
     if (!rec || rec.creatorLabel !== ctx.userLabel) return NOT_FOUND(args.changeset_id)
@@ -102,6 +123,13 @@ export const appGetBatchViewTool: AppToolDef = {
     action_type: z.enum(['inventory_platform', 'shelf_schedule']),
     prod_oids: z.array(z.string().min(1)).min(1).max(10),
   } as never,
+  annotations: {
+    title: 'Get batch view',
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   async handler(args, ctx: AppToolContext) {
     // 沿用既有 L0/L2 讀取工具慣例：view 每次呼叫做真實 gateway 讀取，計一次讀取 budget（與
     // appRateBudget 的面板輪詢節流是兩個獨立額度，見 appPipeline.ts AppToolContext 註解）。
@@ -131,6 +159,13 @@ export const appCreateChangesetTool: AppToolDef = {
     'app_get_changeset_view to load the diff for rendering. Creating a change-set here does NOT ' +
     'approve or execute it; that still requires app_confirm_changeset with its panel-issued nonce.',
   inputShape: createChangesetInputShape as never,
+  annotations: {
+    title: 'Stage draft change-set (panel)',
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
   async handler(args, ctx: AppToolContext) {
     const env = await createChangesetCore(args as never, ctx)
     if (env.items.length === 0) return env   // pure failure: forward errors/warnings unchanged

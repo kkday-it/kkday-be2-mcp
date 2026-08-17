@@ -38,6 +38,13 @@ export const productPlansTool: ToolDef<typeof inputShape> = {
     'When asked about multiple products, call this for each prod_oid, then combine results into a single markdown table (columns: prod_oid, plan name, pkg_oid, is_active). Note that bundle plans cannot be scheduled individually. After presenting, ask the user which plans to modify; do not guess.',
   inputShape,
   uiResourceUri: 'ui://be2/products-panel.html',
+  annotations: {
+    title: 'Get product plans',
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   async handler(args, ctx) {
     const oid = encodeURIComponent(args.prod_oid)
     const [pkgsResult, cfgResult] = await Promise.allSettled([

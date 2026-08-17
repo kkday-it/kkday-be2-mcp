@@ -41,6 +41,13 @@ export const inventorySettingsTool: ToolDef<typeof inputShape> = {
     'Read-only, no side effects. item_oid comes from be2_get_product_plans (1 plan = 1 item).',
   inputShape,
   uiResourceUri: 'ui://be2/products-panel.html',
+  annotations: {
+    title: 'Get inventory settings',
+    readOnlyHint: true,
+    destructiveHint: false,
+    idempotentHint: true,
+    openWorldHint: true,
+  },
   async handler(args, ctx) {
     const oid = encodeURIComponent(args.item_oid)
     const calls: Promise<unknown>[] = [ctx.gateway.get(`/product/api/v1/items/${oid}/inventories/status`, ctx.accessToken)]

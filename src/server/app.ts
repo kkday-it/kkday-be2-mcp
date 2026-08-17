@@ -37,6 +37,7 @@ import { createChangesetTool, getChangesetStatusTool } from '../core/changeset/t
 import { APP_TOOLS } from '../tools/appTools.js'
 import type { ToolDef } from '../tools/types.js'
 import type { L2ToolDef } from './l2Context.js'
+import { buildHostGuard } from './hostGuard.js'
 import { AppError } from '../errors.js'
 
 export interface ServerDeps { config: Config; db: Database.Database }
@@ -194,10 +195,14 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
         registerAppTool(server, tool.name, {
           description: tool.description, inputSchema: tool.inputShape,
           ...(tool.outputShape ? { outputSchema: tool.outputShape } : {}),
+          ...(tool.annotations ? { annotations: tool.annotations } : {}),
           _meta: { ui: { resourceUri: tool.uiResourceUri } },
         }, wrapTool(tool, deps) as never)
       } else {
-        server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputShape },
+        server.registerTool(tool.name, {
+          description: tool.description, inputSchema: tool.inputShape,
+          ...(tool.annotations ? { annotations: tool.annotations } : {}),
+        },
           wrapTool(tool, deps) as never)
       }
     }
@@ -206,11 +211,14 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
         registerAppTool(server, tool.name, {
           description: tool.description, inputSchema: tool.inputShape,
           ...(tool.outputShape ? { outputSchema: tool.outputShape } : {}),
+          ...(tool.annotations ? { annotations: tool.annotations } : {}),
           _meta: { ui: { resourceUri: tool.uiResourceUri } },
         }, wrapL2Tool(tool, l2Deps) as never)
       } else {
-        server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputShape },
-          wrapL2Tool(tool, l2Deps) as never)
+        server.registerTool(tool.name, {
+          description: tool.description, inputSchema: tool.inputShape,
+          ...(tool.annotations ? { annotations: tool.annotations } : {}),
+        }, wrapL2Tool(tool, l2Deps) as never)
       }
     }
     // app-only（面板專用）工具：僅在 host 支援 MCP Apps 時註冊，且 visibility:['app'] 表明不
@@ -220,6 +228,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
       for (const t of APP_TOOLS) {
         registerAppTool(server, t.name, {
           description: t.description, inputSchema: t.inputShape as never,
+          ...(t.annotations ? { annotations: t.annotations } : {}),
           _meta: { ui: { visibility: ['app'] } },
         }, wrapAppTool(t, appDeps) as never)
       }
@@ -232,6 +241,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   const app = express()
   app.use(express.json())
   app.get('/healthz', (_req, res) => { res.status(200).send('ok') })
+  app.use(buildHostGuard())
   // Task 6：OAuth discovery（RFC 9728 + RFC 8414）——公開端點，Claude 的 OAuth client
   // 用它找到 authorize/token/register 端點與 PKCE/public-client 能力，無需 bearer。
   app.use(buildDiscoveryRouter({ baseUrl: `http://127.0.0.1:${config.port}` }))
