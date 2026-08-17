@@ -69,6 +69,26 @@ be2 token 存 server store（Option 1），續期分兩層（設計見 `be2-mcp-
 
 **Live 實例（2026-08-16，Phase 5 模組化網頁驗收）**：store 內 identity 為 5.9 小時前登入，access 早已過期；dev panel harness 呼叫 `app_get_batch_view` 時 TokenManager 觸發 L2 refresh，對 auth-220 換到新 token 對後，後續 gateway 讀取全部 200——「5.9 小時前的 identity 還能用」靠的是 refresh 這條路，不是 access 還活著。
 
+## mcp-remote（Claude Desktop）故障排除 SOP — 2026-08-16/17 實戰萃取
+
+三次真實連線障礙的因果鏈與對症動作（症狀 → 根因 → 動作）：
+
+| 症狀 | 根因 | 動作 |
+|---|---|---|
+| callback 分頁 `localhost:<port>` 拒絕連線 | **殭屍 leader lockfile**：`~/.mcp-auth/mcp-remote-*/**_lock.json` 記著已死 pid，之後每個 mcp-remote 實例都禮讓它、沒人開 listener（port 由 server URL 決定，所以每次都同一個 port）| 全清重來（下方 SOP）|
+| 登入完成後 Desktop 顯示 `Server disconnected`，Desktop log 見 `InvalidGrantError` | **舊分頁重放**：先前失敗留下的 callback/error 分頁被重新載入，把過期 code 打進新開的 listener；mcp-remote 收到一次 invalid_grant 就 fatal 退出、不重試 | 關掉**所有**舊授權/callback 分頁再重試 |
+| 工具突然全部沒反應，但 Desktop 顯示連線正常 | **server 重啟殺掉記憶體內 MCP session**：mcp-remote 拿舊 session id 一直被拒（token 換發不吃 session，所以「看起來有連線」）| 重啟 Desktop 重建 session；server 端改進項見下 |
+| `Fatal error: Invalid URL, input: '--transport'` | config args 順序錯：URL 必須在 flag 前 | `"args": ["-y","mcp-remote","http://127.0.0.1:8787/mcp","--transport","http-only"]` |
+
+**乾淨重來 SOP（照順序，缺一步都可能重演）**：
+1. Cmd+Q 完全結束 Claude Desktop
+2. `pkill -f mcp-remote`（清殭屍——Desktop 每次重啟/重讀 config 都可能多生一組）
+3. `rm -rf ~/.mcp-auth`（清毒 lockfile 與舊 client 註冊）
+4. **關掉瀏覽器所有** `…/oauth/authorize` 與 `localhost:*/oauth/callback` 分頁
+5. 重開 Desktop → 只操作新跳出的授權分頁、盡快完成登入
+
+**Server 端已知改進項（backlog）**：未知 session 目前回 400 `NO_SESSION`——MCP 規範語義是 404 讓 client 自動重新 initialize，改掉可讓「server 重啟後 Desktop 自癒」；401 嘗試納稽核見 `audit-logging-gap-analysis.md` G3。
+
 ## Token 生命週期治理：`oauth-purge`
 
 OAuth 外殼會持續在 SQLite 累積三類「用過即該丟」的資料：
