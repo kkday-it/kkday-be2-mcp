@@ -200,6 +200,37 @@ describe('MCP server integration', () => {
     const text = await res.text()
     expect(text).toContain('loginFlow=POPUP')
   })
+  it('rejects POST with unknown mcp-session-id (404 SESSION_NOT_FOUND)', async () => {
+    const res = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        authorization: `Bearer ${BEARER}`,
+        'mcp-session-id': 'bogus-session-id',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 99, method: 'tools/call',
+        params: { name: 'be2_find_products', arguments: { prod_oids: ['p1'] } },
+      }),
+    })
+    const body = await res.json() as { error: { code: string } }
+    expect(res.status).toBe(404)
+    expect(body.error.code).toBe('SESSION_NOT_FOUND')
+  })
+  it('rejects GET with unknown mcp-session-id (404 SESSION_NOT_FOUND)', async () => {
+    const res = await fetch(`${base}/mcp`, {
+      method: 'GET',
+      headers: {
+        accept: 'text/event-stream',
+        authorization: `Bearer ${BEARER}`,
+        'mcp-session-id': 'bogus-session-id',
+      },
+    })
+    const body = await res.json() as { error: { code: string } }
+    expect(res.status).toBe(404)
+    expect(body.error.code).toBe('SESSION_NOT_FOUND')
+  })
 })
 
 describe('MCP Apps dispatch — real path (Task 6 carried-forward from Task 4 review)', () => {
