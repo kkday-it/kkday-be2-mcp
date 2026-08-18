@@ -30,6 +30,13 @@ export const openBatchWizardTool: ToolDef<typeof inputShape> = {
     'render a panel — use be2_create_changeset plus the confirm-page flow instead.',
   inputShape,
   uiResourceUri: 'ui://be2/batch-wizard.html',
+  annotations: {
+    title: 'Open batch wizard',
+    readOnlyHint: false,
+    destructiveHint: false,
+    idempotentHint: false,
+    openWorldHint: true,
+  },
   async handler(args) {
     return makeEnvelope([{ action_type: args.action_type, prod_oids: args.prod_oids ?? [] }])
   },

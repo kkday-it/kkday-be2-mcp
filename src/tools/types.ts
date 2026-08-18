@@ -8,11 +8,20 @@ export interface ToolContext {
   userLabel: string
 }
 
+export interface ToolAnnotations {
+  title?: string
+  readOnlyHint?: boolean
+  destructiveHint?: boolean
+  idempotentHint?: boolean
+  openWorldHint?: boolean
+}
+
 export interface ToolDef<Shape extends z.ZodRawShape = z.ZodRawShape> {
   name: string
   description: string
   inputShape: Shape
   uiResourceUri?: string // 有值 → 走 registerAppTool，面板綁此 ui:// 資源
   outputShape?: z.ZodRawShape // structuredContent 的 outputSchema（MCP 規範需宣告）
+  annotations?: ToolAnnotations
   handler(args: z.infer<z.ZodObject<Shape>>, ctx: ToolContext): Promise<Envelope>
 }
