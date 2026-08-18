@@ -240,6 +240,21 @@ interface RowState {
 function showFallback(el: HTMLElement, m: string): void { el.hidden = false; el.textContent = m }
 function clearFallback(el: HTMLElement): void { el.hidden = true; el.textContent = '' }
 
+// 待送佇列可視化（shelf_schedule 專用；platform 模式的同一顆 badge 由 syncSiblings 顯示
+// 「將一併變更」，兩者不同 actionType 不會互踩）：套用後把該列累積的排程明細直接寫在列上——
+// 之前只有「將清除排程」有提示，多筆/重套時使用者看不到自己排了什麼，錯套只能整頁重載。
+// 時間顯示沿用 store 的 UTC 字串（切到分鐘），前綴標明 UTC；本地時間對照在步驟 2 的
+// 雙時區 diff 卡（formatDualDisplay）有完整呈現，這裡以精簡可掃視為先。
+function renderQueueBadge(r: RowState): void {
+  if (r.cleared) { renderText(r.badge, '將清除排程'); r.badge.hidden = false; return }
+  if (r.queue.length === 0) { r.badge.hidden = true; return }
+  const parts = [...r.queue]
+    .sort((a, b) => (a.reserve_date_utc < b.reserve_date_utc ? -1 : 1))
+    .map(q => `${q.reserve_date_utc.slice(5, 16)} ${q.reserve_status ? '上架' : '下架'}`)
+  renderText(r.badge, `待送(UTC)：${parts.join('、')}`)
+  r.badge.hidden = false
+}
+
 // Recomputes a plan row's visual state (checked tint / bundle dim) from its current
 // checkbox/is_bundle state. Presentation-only — never touches `checked` itself. Called on initial
 // render, inside the row's own onclick, and for every sibling syncSiblings() auto-toggles (so the
@@ -759,15 +774,16 @@ export function initWizard(app: WizardApp): void {
             if (isClear) {
               r.queue = []
               r.cleared = true
-              renderText(r.badge, '將清除排程')
-              r.badge.hidden = false
             } else {
-              r.queue.push({ reserve_date_utc: utc, reserve_status: status.value === 'true' })
-              if (r.cleared) {
-                r.cleared = false
-                r.badge.hidden = true
-              }
+              // 同一時間戳重複套用 = 取代，不累加（2026-08-18 demo 前實際咬到：「上架」套錯
+              // 改「下架」再套，佇列殘留舊上架排序後仍是第一筆 → 131105 預檢反覆擋，使用者
+              // 只能整頁重載）。不同時間戳維持累加——「今天下架、下週上架」是合法多筆排程。
+              const existing = r.queue.find(q => q.reserve_date_utc === utc)
+              if (existing) existing.reserve_status = status.value === 'true'
+              else r.queue.push({ reserve_date_utc: utc, reserve_status: status.value === 'true' })
+              r.cleared = false
             }
+            renderQueueBadge(r)
           }
         }
       })
