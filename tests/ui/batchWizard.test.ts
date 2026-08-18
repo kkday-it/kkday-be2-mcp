@@ -656,6 +656,82 @@ describe('batch-wizard panel: shelf_schedule flow', () => {
     expect(secondary?.textContent).toBe('P2:D')
   })
 
+  it('同一時間戳重複套用 = 取代（上架套錯改下架，佇列只剩一筆下架）', async () => {
+    const batchViewResult = envelope([{
+      products: [{ prod_oid: 'P2', name: '商品2', plans: [{ pkg_oid: 'D', name: '方案D', is_bundle: false, reserve_queue: [] }] }],
+    }])
+    const createResult = envelope([{ changeset_id: 'cs-r' }])
+    const viewResult = envelope([{ changeset_id: 'cs-r', status: 'pending_approval', nonce: 'nr', diff_version: 'dvr', diff: { items: [] } }])
+    const { app, calls, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => batchViewResult,
+      app_create_changeset: () => createResult,
+      app_get_changeset_view: () => viewResult,
+    })
+    initWizard(app as never)
+    fireLaunch('shelf_schedule', ['P2'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    const cbD = checkboxesFor(wizardEl, 'pkg-oid', 'D')[0]
+    cbD.checked = true
+    ;(findByRole(wizardEl, 'defDate') as FakeElement).value = '2026-08-20'
+    ;(findByRole(wizardEl, 'defHour') as FakeElement).value = '10'
+    ;(findByRole(wizardEl, 'defMinute') as FakeElement).value = '0'
+    ;(findByRole(wizardEl, 'defTz') as FakeElement).value = 'UTC'
+    ;(findByRole(wizardEl, 'defStatus') as FakeElement).value = 'true'
+    findByRole(wizardEl, 'applyAllBtn').onclick!()      // 先套「上架」
+    ;(findByRole(wizardEl, 'defStatus') as FakeElement).value = 'false'
+    findByRole(wizardEl, 'applyAllBtn').onclick!()      // 同時間改套「下架」→ 取代
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+    expect(calls[1].name).toBe('app_create_changeset')
+    expect(calls[1].arguments.items).toEqual([{
+      prod_oid: 'P2', pkg_oid: 'D',
+      queue: [{ reserve_date_utc: '2026-08-20 10:00:00', reserve_status: false }],
+    }])
+  })
+
+  it('不同時間戳套用兩次 = 累加兩筆', async () => {
+    const batchViewResult = envelope([{
+      products: [{ prod_oid: 'P2', name: '商品2', plans: [{ pkg_oid: 'D', name: '方案D', is_bundle: false, reserve_queue: [] }] }],
+    }])
+    const createResult = envelope([{ changeset_id: 'cs-a' }])
+    const viewResult = envelope([{ changeset_id: 'cs-a', status: 'pending_approval', nonce: 'na', diff_version: 'dva', diff: { items: [] } }])
+    const { app, calls, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => batchViewResult,
+      app_create_changeset: () => createResult,
+      app_get_changeset_view: () => viewResult,
+    })
+    initWizard(app as never)
+    fireLaunch('shelf_schedule', ['P2'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    const cbD = checkboxesFor(wizardEl, 'pkg-oid', 'D')[0]
+    cbD.checked = true
+    ;(findByRole(wizardEl, 'defDate') as FakeElement).value = '2026-08-20'
+    ;(findByRole(wizardEl, 'defHour') as FakeElement).value = '10'
+    ;(findByRole(wizardEl, 'defMinute') as FakeElement).value = '0'
+    ;(findByRole(wizardEl, 'defTz') as FakeElement).value = 'UTC'
+    ;(findByRole(wizardEl, 'defStatus') as FakeElement).value = 'false'
+    findByRole(wizardEl, 'applyAllBtn').onclick!()
+    ;(findByRole(wizardEl, 'defDate') as FakeElement).value = '2026-08-27'
+    ;(findByRole(wizardEl, 'defStatus') as FakeElement).value = 'true'
+    findByRole(wizardEl, 'applyAllBtn').onclick!()
+    // badge 顯示兩筆待送明細
+    const badgeD = cbD.parentNode!.querySelectorAll('[data-role=coBadge]')[0] as FakeElement
+    expect(badgeD.hidden).toBe(false)
+    expect(badgeD.textContent).toContain('08-20 10:00 下架')
+    expect(badgeD.textContent).toContain('08-27 10:00 上架')
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+    expect(calls[1].arguments.items).toEqual([{
+      prod_oid: 'P2', pkg_oid: 'D',
+      queue: [
+        { reserve_date_utc: '2026-08-20 10:00:00', reserve_status: false },
+        { reserve_date_utc: '2026-08-27 10:00:00', reserve_status: true },
+      ],
+    }])
+  })
+
   it('clear schedule: applies cleared state, outputs queue: [], applying time un-clears', async () => {
     const batchViewResult = envelope([{
       products: [{
@@ -734,7 +810,11 @@ describe('batch-wizard panel: shelf_schedule flow', () => {
     findByRole(wizardEl, 'applyAllBtn').onclick!()
     
     const badgeG = cbG.parentNode!.querySelectorAll('[data-role=coBadge]')[0] as FakeElement
-    expect(badgeG.hidden).toBe(true)
+    // 待送佇列可視化（2026-08-18 apply-replace 修正）：套用一般時間後 badge 改顯示佇列明細，
+    // 不再隱藏——舊行為（hidden=true）正是「使用者看不到自己排了什麼」的缺陷本身。
+    expect(badgeG.hidden).toBe(false)
+    expect(badgeG.textContent).toContain('待送')
+    expect(badgeG.textContent).toContain('上架')
 
     // 3. Re-clear both for the final payload
     cbF.checked = true
@@ -855,9 +935,10 @@ describe('batch-wizard panel: shelf_schedule flow', () => {
     defMinute.value = '0'
     applyAllBtn.onclick!()
     expect(fallbackEl.hidden).toBe(true)
-    // 正常套用時間不顯示 badge（badge 專屬「將一併變更/將清除排程」）——合法套用的行為由
-    // 既有 shelf_schedule 全流程測試驗證（queue 進 create payload），這裡只確認驗證不誤攔。
-    expect(badgeA.hidden).toBe(true)
+    // 2026-08-18 apply-replace 修正後：合法套用會在 badge 顯示待送佇列明細（可視化），
+    // 這裡確認驗證不誤攔且套用有生效。
+    expect(badgeA.hidden).toBe(false)
+    expect(badgeA.textContent).toContain('待送')
   })
 
   it('Fix 3: surfaces server error on create failure', async () => {
