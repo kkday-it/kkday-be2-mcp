@@ -2,6 +2,9 @@
 
 日期：2026-08-18　來源：SIT be2-220　標的：`shelf_toggle_bundle`（factory 首發備援標的）
 
+> ⏸️ **DEFERRED（2026-08-18）**：SIT 無組合方案商品可觀察 bundle row 欄位 → 段②/③ 暫緩，**待上 stage 環境或 SIT 補建組合方案商品後驗收**。skill 本體已完成，此標的只差真商品攔一次 200。
+
+
 ## 1. 摘要
 
 bundle（組合方案）上下架——同 product API、同 envelope（`meta.status 100000`），最像 `shelfToggle`（flip is_active）。選為 factory 首發備援標的（真首發 announcement 欄位 TBD）。**探索結果觸發欄位 gate**，見 §5/§6。
