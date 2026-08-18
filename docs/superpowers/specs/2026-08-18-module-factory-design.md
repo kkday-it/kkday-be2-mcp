@@ -1,0 +1,138 @@
+# Module Factory — 多 agent 自動化「新增 MCP 功能模組」設計
+
+日期：2026-08-18　狀態：agy APPROVED（rounds=3）
+> 目標：把「擴展一個新 action_type」從人工工程（現在手動碰 7+ 檔、派 agy 多輪）變成**可複製、可稽核的三段闘關流程**。這是 Phase 5 模組化「domain-onboarding 自動收納流程」的完全體。
+> 搭配讀：`docs/be2-mcp/module-onboarding.md`（要自動化的人工 checklist）、`docs/be2-mcp/module-catalog.md`（產物登記處）、`docs/be2-mcp/sit-announcement-contract.md`（段① 產物已存在的真實範本）、`docs/superpowers/specs/2026-08-16-be2-mcp-modularization-design.md`（ActionModule 介面，factory 產出的目標形狀）。
+
+## 1. 目標與非目標
+
+**目標**：給定 repo／設計文件（如 `ENDPOINTS.md`）+ 一個標的 `action_type` 名 → factory 自動探索契約、產出一包 `ActionModule`（schema/diff/executor/renderer/ui/keys + 單元測試 + e2e + error handling），開成 draft PR。人只在三個 gate 介入。
+
+**輸入文件（`ENDPOINTS.md`）不是 repo 檔**：它是 factory **每次跑時由使用者提供的外部設計文件**（首發那份在 `~/Downloads/ENDPOINTS.md`）。段① 第一步硬性動作：把該輸入文件**複製進 repo**（`docs/be2-mcp/factory-input-<domain>.md`）當可稽核的探索起點，之後段①/② 的引用一律指 repo 內副本，不依賴 repo 外的幻影路徑。
+
+**首發標的**：商品公告（product announcement）——全新 domain，非 product 形狀（不同 host svc-b2c、不同 envelope `metadata.status '0000'`、額外 header），最能驗證 `ActionModule` 介面的通用性。段① 契約探索已完成（`sit-announcement-contract.md`）。
+
+**Non-goals（明確不做）**：
+- 不做「零人工全自動到 merge」——契約黑箱（如 svc-b2c 的 S2S-token-403）必須 gate 給人，盲寫違反主 spec 鐵則。
+- 不改 core 治理層——factory 產出的 module 走既有 registry，不碰 `src/core/`（= module-onboarding 的驗收標準）。
+- 不做背景 Workflow 版本——三段之間要停下來問人，背景執行問不了人（見 §5 載體決策）。
+- 首發只跑商品公告一個標的；其他標的（庫存數量新路徑、bundle 上下架）留作 factory 第二/三次跑的驗證，不在本 spec。
+
+## 2. 三段闘關流程（本 spec 核心）
+
+```
+段① 探索（Claude 跑）
+  輸入：設計文件（ENDPOINTS.md）+ 標的 action_type 名
+  並行 agent：
+    - endpoint-prober   : curl/playwright 攔真實請求 → host/path/header/envelope
+    - bundle-miner      : 前端 bundle 逆向 → businessList 授權碼
+    - reference-reader  : 讀現有 4 個 module → 判定「最像哪個」當形狀範本
+  產物：契約報告（sit-<domain>-contract.md，格式見既有範本）
+  ┌─ GATE 1（人，AskUserQuestion）：報告有無「未解 gate 項」？
+  │    有真黑箱 → 該格（通常是 executor）標 PENDING，其餘格照產
+  └─ 進段②
+
+段② 產（六格並行 + 對抗驗證，方案 A 引擎）
+  六格 agent（agy 並行 accept-edits，Claude 編排）：
+    keys / schema+validate / diff / executor / renderer / ui
+    每格規格 = 契約報告 + reference-reader 指定的「最像現成 module 的同名格」
+    tests 隨每格附（該格的單元測試）
+  → conformance-verifier（Claude subagent，對抗式）：
+    跑 conformance harness + 逐格「這格會不會騙過測試/有無互斥性 bug」
+  產物：src/modules/<domain>/<action>/ 一包 + tests
+  ┌─ GATE 2（人）：Claude 攤六格 diff + conformance 結果，人點頭
+  └─ 進段③
+
+段③ 驗收（Claude 編排）
+  npm run ci 全綠 → build-ui → registry exhaustive 測試 → dev panel e2e（playwright 驅動）
+  → error-handling agent：補 403/500/stale/併發 的 executor 分支測試
+  產物：draft PR（含契約報告、六格產物、e2e 紀錄）
+  ┌─ GATE 3（人）：merge 決定 + live 寫入驗收（GATE 1 有 executor gate 則標 PENDING）
+  └─ 完成
+```
+
+### 2.1 兩個關鍵設計決策
+
+1. **GATE 1 有兩種 gate 項，效果不同——這是 factory 正確性的核心**：
+   - **(a) 授權 gate（executor-only）**：如 announcement 的 S2S-403。知道欄位、只是寫入身分過不了 → 段② 其餘格照產，**只有 executor 格**標 `PENDING: 待授權確認`（同 3a 庫存先例）。
+   - **(b) 欄位 gate（block 段②）**：item 欄位形狀未知（如 announcement 探索當下 502 導致 row 結構、POST 必填欄位拿不到）→ **段② 整個 block**。理由：`itemSchema: z.ZodType<Item>` 是所有格的地基，欄位不明就寫 schema = 盲寫（違反主 spec 鐵則，3a 教訓）。factory **絕不憑空補欄位**；段② 在欄位解出前不啟動。
+   - GATE 1 判定準則：契約報告的「item 欄位形狀」欄位是否已填實（從輸入文件的 payload 定義 / 攔到的 200 回應 / 參考前端型別任一來源）。填實 → 進段②；未填 → 停在 GATE 1 等人補來源（後端恢復攔 200、或人工提供欄位定義）。授權 gate 不 block 段②、欄位 gate block 段②。
+
+2. **每格 agent 的規格 = 契約報告 + 最像的現成同名格**：executor 格吃契約報告 + 例如 `shelfSchedule/executor.ts` 當形狀範本——「照最像的現成格改」而非憑空產。品質可控、天然繼承既有錯誤處理慣例（read-merge-write、per-item mutex、status 聚合等）。reference-reader 在段① 就選定範本，寫進契約報告。
+
+## 3. 段② 引擎：方案 A（六格並行 + 對抗驗證）
+
+為何並行而非 pipeline：`ActionModule` 介面本就為「各格獨立可測」設計（conformance harness 已存在），六格之間只透過介面契約耦合、無執行期依賴 → 可並行產出。取捨紀錄：
+- 方案 B（pipeline 逐格串接）：依賴清楚但序列慢，executor 卡住整條停，未發揮解耦紅利——不採。
+- 方案 C（整包一個 agent + review）：最省編排但單 agent 扛整包 context、品質不穩、複製性差——不採。
+
+**對抗驗證**複用既有「adversarial verify」模式：把歷次模組化 review 反覆抓的 bug 類型（hash 恆定、itemKey 撞號、diff fall-through、per-type 判別不一致）變成 conformance-verifier 的固定檢查清單。這步是 factory 品質的核心保障，非可選。
+
+### 3.1 六格的實際編排（不假設「原生並行」）
+
+Claude 透過 Bash 派 agy，「六格並行」的落地是**受控的**，不是天真地同時噴六個背景程序：
+- **各格寫各自的檔**：keys.ts / module.ts / diff.ts / executor.ts / renderer.ts / ui.ts 六個獨立檔——六個 agy 程序寫六個不同檔，**檔案系統無衝突**；agy 期間**完全不動 git**（commit 由 Claude 在全部完成後一次做），故無 git lock 風險。
+- **有界並行 + 完成通知**：一次最多派 2–3 個背景 agy（`run_in_background`），靠 harness 的 task-completion 通知逐一收；不是六個一次噴。收齊一格才判該格成敗。
+- **per-格 fallback 明確**：某格 agy 零產出（headless soft-deny，本專案反覆遇到）→ 重派一次帶強化禁令；第二次仍零產出 → **該格改由 Claude 直接寫**（本 session 已多次這樣救場）。fallback 判定 = 該格目標檔是否被寫入（Claude Bash 檢查檔案存在與非空），不靠解析 agy stdout。
+- **依賴順序**：keys.ts 先產（schema/ui/executor 都 import 它的 itemKey）；其餘五格可並行。這是唯一的段內序列點。
+
+**機械編排寫成腳本（`scripts/run-agy-batch.sh`），不靠 Claude 在 context 裡手動 juggle**（agy review round 2）。職責邊界劃清：
+- **腳本做（機械、可自動化的部分）**：吃一份 `(格名, prompt 檔, 目標檔)` 清單 → 以有界並行（`MAX_PARALLEL=3`）背景派 agy → `wait` 收攏 → **逐格檢查目標檔是否存在且非空** → 印出結構化報告（每格 `OK` / `EMPTY`）。含 keys.ts 先跑、其餘並行的順序邏輯。一個指令、冪等（已非空的格可跳過重派）。
+- **Claude 做（腳本無法自動化的部分）**：讀腳本報告 → 對 `EMPTY` 的格執行 fallback（重派一次帶強化禁令；仍 EMPTY 則 Claude 親自寫該格）→ 全部 OK 後跑 conformance + 一次 commit。
+- **為何不做成全自動腳本**：fallback 的終點是「Claude 自己寫該格」，腳本無法呼叫 Claude；且段間 gate 需 `AskUserQuestion`（互動）。腳本吸收機械併發/檔案檢查的脆弱性，判斷與 fallback 留給 Claude——這是兩者各就其位，非把協調責任推回 context window。
+
+## 4. 載體與分工
+
+Factory = repo skill `.claude/skills/module-factory/`。主對話照 SKILL.md 逐段執行，三個 gate 用 `AskUserQuestion` 在對話裡問人。
+
+```
+.claude/skills/module-factory/
+  SKILL.md                          三段 + 三 gate 的執行順序、gate 判定準則
+  scripts/
+    run-agy-batch.sh                段② 機械編排（Claude 一行呼叫，見 §3.1）
+  references/
+    stage1-explore.md               三個探索 agent 的 prompt 模板 + 契約報告格式
+    stage2-produce.md               六格 agent 的 prompt 模板（各註明參考哪個現成格）
+    stage3-verify.md                ci/build-ui/dev-panel-e2e/PR 驗收步驟
+    contract-report-template.md     = sit-announcement-contract.md 骨架
+```
+
+**每段誰跑（依 memory `agy-work-allocation`）：**
+
+| 段 | 動作 | 執行者 | 理由 |
+|---|---|---|---|
+| ① | curl/playwright 攔契約、bundle 逆向 | **Claude** | agy 跑不了 shell/瀏覽器（實證多次） |
+| ① | 寫契約報告 | **Claude** | agy 純寫作屢次零產出，Claude 直接寫更快 |
+| ② | 六格 module 實作 | **agy 並行**（六個 accept-edits），Claude 編排 | 實作類省 Claude 額度；六格獨立可平行 |
+| ② | conformance 對抗驗證 | **Claude subagent** | 需跨檔判斷 + 跑測試，agy 做不了 |
+| ③ | ci/e2e/PR | **Claude** | 測試、playwright、git 都要 shell |
+
+**agy 零產出的對策固化進 skill**：stage2 的 agy prompt 模板內建禁令段（只有唯讀 shell、檔案用內建編輯工具、產物路徑明確、prompt 不用「先 grep」這類誘導跑 shell 的動詞），並註明「agy 連兩次零產出 → 該格改由 Claude 接手」。把本專案反覆踩到的 agy headless 限制寫成流程的一部分。
+
+## 5. 載體決策：為何 repo skill 而非 Workflow
+
+三段之間要停下來問人（gate）。Claude Code 的 Workflow 是背景執行、中途無法 `AskUserQuestion`——選它就得把三段拆成三次 Workflow 呼叫、gate 在呼叫之間，反而更碎。且 agy 接不進 Workflow 的 agent()（Workflow 只跑 Claude subagent，吃 Claude 額度）。repo skill + 段內派 agy 既保留 gate 的互動性、又用 agy 省額度，與現行工作方式一致。
+
+## 6. 首發驗證：商品公告
+
+skill 寫完後立刻拿商品公告當第一個真實案例跑三段——既驗 factory 能動，產出的 announcement module 也是真交付物。**但誠實揭露：announcement 目前同時撞到 GATE 1 的兩種 gate**：
+- 段①：已完成（`sit-announcement-contract.md`）。GATE 1 觸發兩項——**(a) 授權 gate**（S2S-token-403，executor-only）＋**(b) 欄位 gate**（探索當下 svc-b2c 502，row 結構與 POST 必填欄位未取得）。
+- **依 §2.1 判定準則，欄位 gate 使段② 目前 block**——announcement 的 item 欄位形狀未填實，factory 不得憑空補欄位。**解 block 的來源**（任一）：後端恢復攔一次 200 回應、或從 svc-b2c 後端 repo / 前端型別定義取欄位。這是 factory 忠實執行「不盲寫」的正確行為，不是設計缺陷。
+- 欄位一旦補齊：段② 六格產出（executor 因授權 gate 仍標 PENDING）→ 段③ ci/conformance/非寫入面 e2e。
+
+**首發成功定義（分兩種認定，因 announcement 撞欄位 gate）**：
+- **若 announcement 欄位在 factory 首跑前補齊** → 完整定義：module 註冊進 registry、conformance 自動繼承通過、`npm run ci` 全綠、非寫入面 dev panel e2e 通過、三 gate 各觸發且人可介入。
+- **若欄位仍未補齊** → factory 正確地**停在 GATE 1 欄位 gate**、產出契約報告並如實回報 block 原因，即算 factory 機制驗證成功（證明「不盲寫、遇欄位黑箱就停」這條核心正確運作）；此時改用**已知欄位的備援標的**（bundle 上下架：同 product API、GET/PUT 都在 gateway 可達、欄位在 `package-configs` 既有形狀內）跑完整三段驗 factory 的「產」能力。備援標的僅供驗證 factory，非本 spec 承諾的交付物。
+
+## 7. 風險與對策
+
+| 風險 | 對策 |
+|---|---|
+| 六格 agent 產出介面不一致（如 itemKey 兩處判別法不同——模組化時的老 bug） | conformance-verifier 固定檢查「itemKey server/ui 同源」；每格規格強制引用同一份 keys.ts |
+| 契約探索猜錯（盲寫容錯路徑，3a 教訓） | GATE 1 硬性分兩種：欄位未知 → block 段②（§2.1(b)）；授權未過 → 僅 executor 標 PENDING（§2.1(a)）。factory 絕不憑空補欄位 |
+| 六格 agy 並行的 git lock / 檔案衝突 / 完成解析 | §3.1：各格寫各自檔（無 fs 衝突）、agy 期間不動 git（commit 由 Claude 事後一次做）、有界並行 2–3 + 完成通知逐一收、fallback 判定看檔案而非解析 stdout |
+| agy 段② 零產出拖慢 | prompt 模板內建禁令；兩次零產出該格 Claude 接手（§3.1）；fallback 看目標檔是否非空、不靠 agy stdout |
+| factory 產出繞過 core 治理（安全洞） | 產出只能落 `src/modules/<domain>/`，SKILL.md 明令不碰 `src/core/`；段③ ci 含既有 draft-only/scope-binding 回歸 |
+| 首發標的授權黑箱使 executor 無法 live 驗 | 接受 PENDING（與 3a/announcement 同狀態）；factory 的價值在自動化「產」與「驗非寫入面」，live 寫入本就受外部授權限制 |
+
+<!-- agy-peer-reviewed: 2026-08-18T12:21:15Z rounds=3 verdict=approved -->
