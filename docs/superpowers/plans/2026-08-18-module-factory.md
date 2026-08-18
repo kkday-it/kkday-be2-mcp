@@ -116,15 +116,19 @@ echo "ALL PASS"
 ```
 
 - [ ] **Step 2: 跑測試確認失敗**（腳本不存在）：`bash .claude/skills/module-factory/scripts/test-run-agy-batch.sh` → 非 `ALL PASS`（runner 不存在報錯）。
-- [ ] **Step 3: 實作 run-agy-batch.sh**：
+- [ ] **Step 3: 實作 run-agy-batch.sh**（**bash 3.2 相容**——macOS 預設 bash 3.2，agy review round 1 抓到四個 3.2 bug，此版全避開：不用 array `${arr[@]:-}`、不用 `wait -n`、read 帶 `|| [ -n ]` 收無尾換行的末行、用 temp 檔避開 pipe-subshell 讓計數器持續）：
 
 ```bash
 #!/usr/bin/env bash
-# run-agy-batch.sh MANIFEST — 段② 機械編排（Module Factory spec §3.1）。
+# run-agy-batch.sh MANIFEST — 段② 機械編排（Module Factory spec §3.1）。bash 3.2 相容。
 # MANIFEST 每行: 格名<TAB>prompt檔<TAB>目標檔
-# 職責：keys 格先跑；其餘有界並行(MAX_PARALLEL,預設3)派 AGY_CMD；
+# 職責：keys 格先跑(序列)；其餘以 MAX_PARALLEL(預設3)為批、每批整批 wait；
 # 每格完成後檢查目標檔存在且非空 -> 印 RESULT <格名> OK|EMPTY；
 # 已非空的目標檔跳過重派(冪等)。fallback 與 gate 不在此腳本(交給 Claude)。
+# ARG_MAX 註：$AGY_CMD "$(cat prompt)" 把整份 prompt 當單一引數傳——這是 agy CLI 的真實
+# 介面(-p 收字串,非檔路徑;本專案全程如此呼叫)。macOS 單引數上限 ~256KB，factory 的
+# prompt(禁令+模板+契約報告,數十 KB)遠低於此；若某格 prompt 逼近上限,代表模板過肥、該拆,
+# 不是靠腳本繞。
 set -u
 MAN="${1:?usage: run-agy-batch.sh MANIFEST}"
 MAX_PARALLEL="${MAX_PARALLEL:-3}"
@@ -137,31 +141,35 @@ run_one() {
   if [ -s "$target" ]; then echo "RESULT $name OK"; else echo "RESULT $name EMPTY"; fi
 }
 
-# 分兩批：keys 先(序列)，其餘有界並行
-declare -a KEYS_LINES=() REST_LINES=()
-while IFS=$'\t' read -r name prompt target; do
-  [ -z "${name:-}" ] && continue
-  case "$name" in *keys*) KEYS_LINES+=("$name	$prompt	$target");; *) REST_LINES+=("$name	$prompt	$target");; esac
+keys_f="$(mktemp)"; rest_f="$(mktemp)"; trap 'rm -f "$keys_f" "$rest_f"' EXIT
+# `|| [ -n "$name" ]` 收沒有結尾換行的最後一行（bash read EOF 會丟末行）
+while IFS=$'\t' read -r name prompt target || [ -n "${name:-}" ]; do
+  [ -z "${name:-}" ] && { name=""; continue; }
+  case "$name" in
+    *keys*) printf '%s\t%s\t%s\n' "$name" "$prompt" "$target" >> "$keys_f" ;;
+    *)      printf '%s\t%s\t%s\n' "$name" "$prompt" "$target" >> "$rest_f" ;;
+  esac
+  name=""
 done < "$MAN"
 
-for line in "${KEYS_LINES[@]:-}"; do
-  [ -z "$line" ] && continue
-  IFS=$'\t' read -r name prompt target <<< "$line"
+# keys 先跑（序列）；`done < file` 在當前 shell 執行，非 subshell
+while IFS=$'\t' read -r name prompt target; do
+  [ -z "$name" ] && continue
   run_one "$name" "$prompt" "$target"
-done
+done < "$keys_f"
 
-running=0
-for line in "${REST_LINES[@]:-}"; do
-  [ -z "$line" ] && continue
-  IFS=$'\t' read -r name prompt target <<< "$line"
+# 其餘：每 MAX_PARALLEL 個一批、整批 wait（bash 3.2 無 wait -n；整批 wait 正確簡單）
+count=0
+while IFS=$'\t' read -r name prompt target; do
+  [ -z "$name" ] && continue
   run_one "$name" "$prompt" "$target" &
-  running=$((running+1))
-  if [ "$running" -ge "$MAX_PARALLEL" ]; then wait -n 2>/dev/null || wait; running=$((running-1)); fi
-done
-wait
+  count=$((count+1))
+  if [ "$count" -ge "$MAX_PARALLEL" ]; then wait; count=0; fi
+done < "$rest_f"
+wait   # 收最後不足一批的殘餘
 ```
 
-- [ ] **Step 4: 跑測試確認通過**：`bash .claude/skills/module-factory/scripts/test-run-agy-batch.sh` → `ALL PASS`。（若 `wait -n` 在該 bash 版本不支援，改 `wait` 收全部——測試 d 的 keys-first 由「keys 在並行批之前序列跑」保證，與 `wait -n` 無關。）
+- [ ] **Step 4: 跑測試確認通過**：`bash .claude/skills/module-factory/scripts/test-run-agy-batch.sh` → `ALL PASS`。此版在 bash 3.2 與 5.x 皆正確：keys 序列先跑（測試 d 的 head-1 恆為 keys）、rest 分批整批 wait、末行無換行也收得到、空 keys/rest 檔迴圈自然跳過（無 array unbound）。
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -240,29 +248,48 @@ git commit -m "feat(factory): run-agy-batch.sh 機械編排（keys先跑/有界�
 
 ---
 
-### Task 5: Factory 首發乾跑——bundle 標的走段①
+### Task 5: Factory 首發完整跑——bundle 標的走三段（真實 e2e 驗證）
 
 **Files:**
 - Create: `docs/be2-mcp/factory-input-bundle.md`（輸入副本，= ENDPOINTS.md bundle 段）
 - Create: `docs/be2-mcp/sit-bundle-contract.md`（段① 產物）
+- Create: `src/modules/product/shelfToggleBundle/{keys,module,diff,executor,renderer}.ts`（段② 六格產物；bundle 無面板 → 無 ui.ts）
+- Create: `tests/modules/shelfToggleBundle*.test.ts`（段② 隨格附測試）
+- Modify: `src/core/changeset/types.ts`（ActionType union 加 `shelf_toggle_bundle`）、`src/modules/index.ts`（registerModule）、`docs/be2-mcp/module-catalog.md`
 
 **Interfaces:**
-- Consumes: Task 2-4 的 skill 定義；ENDPOINTS.md 的 bundle 段（`GET/PUT /products/{prodOid}/bundle-package-configs`）。
-- Produces: bundle 標的的契約報告，證明 skill stage1 能實際執行、GATE 1 判定正確。
+- Consumes: Task 2-4 的 skill 定義；ENDPOINTS.md bundle 段（`GET/PUT /products/{prodOid}/bundle-package-configs`）；`shelfToggle/*` 六格當參考範本。
+- Produces: 一個真實可用的 `shelf_toggle_bundle` module + 完整三段執行紀錄，**證明 factory skill 端到端能動**（agy review round 1：Task 5 原本只跑段①、未證段②/③，是比 spec §6「跑完整三段」還少的缺口）。
 
-這個 task 是 **factory 骨架的真實驗證**：照 SKILL.md 段① 對 `shelf_toggle_bundle` 實跑一遍（Claude 執行，非模擬）。
+這個 task 是 **factory 的真實 e2e 驗收**：照 SKILL.md 完整跑三段對 `shelf_toggle_bundle`（Claude 編排、段② 派真 agy、非模擬）。
 
-- [ ] **Step 1:** 把 ENDPOINTS.md 的 bundle 兩行複製進 `docs/be2-mcp/factory-input-bundle.md`（含 host 表 + envelope 契約 + bundle 端點），照 stage1-explore.md 的「輸入複製動作」。
-- [ ] **Step 2:** 段① endpoint-prober：用 `.env` 的 SIT token 直打 `GET https://api-gateway-220.sit.kkday.com/product/api/v1/products/34133/bundle-package-configs`（bundle 在 product API、gateway 可達），攔真實 200 回應形狀。**Run 並記錄 HTTP code 與 envelope（`meta.status 100000`）+ bundle row 欄位（is_active 等）。**
-- [ ] **Step 3:** 段① reference-reader：判定 `shelf_toggle_bundle` 最像 `shelfToggle`（同 flip is_active、同 product API/envelope）——寫進契約報告「參考格對照」。
-- [ ] **Step 4:** 產 `docs/be2-mcp/sit-bundle-contract.md`（照 contract-report-template.md 七節）：**item 欄位形狀填實**（bundle row 欄位 + PUT body = `{is_active, modify_user}` 類比 shelfToggle）→ GATE 1 **無欄位 gate**（欄位已知）、**無授權 gate**（gateway 可達、非 svc-b2c）→ 判定「可全六格產」。這證明 skill 對「順利標的」的完整路徑。
-- [ ] **Step 5:** 更新 `docs/be2-mcp/module-catalog.md` 末尾加一行「`shelf_toggle_bundle`（factory 首發驗證標的，段① 契約已探索，段②待跑）」。
-- [ ] **Step 6: Commit** `docs(factory): 首發乾跑——bundle 標的段① 契約探索（欄位填實、無 gate、可全格產）`
+**段①（探索）：**
+- [ ] **Step 1:** 把 ENDPOINTS.md bundle 兩行複製進 `docs/be2-mcp/factory-input-bundle.md`（含 host 表 + envelope 契約 + bundle 端點），照 stage1-explore.md 的「輸入複製動作」。
+- [ ] **Step 2:** endpoint-prober：用 `.env` SIT token 直打 `GET https://api-gateway-220.sit.kkday.com/product/api/v1/products/34133/bundle-package-configs`，記錄 HTTP 200 + envelope（`meta.status 100000`）+ bundle row 欄位（is_active 等）。reference-reader：判定最像 `shelfToggle`。
+- [ ] **Step 3:** 產 `docs/be2-mcp/sit-bundle-contract.md`（contract-report-template.md 七節）：**item 欄位形狀填實**（bundle row + PUT body `{is_active, modify_user}` 類比 shelfToggle）→ GATE 1 **無欄位 gate、無授權 gate**（gateway 可達、非 svc-b2c）→ 判定「可全六格產」。**GATE 1（AskUserQuestion）觸發一次**，人確認契約報告無 block 項。
+- [ ] **Step 4: Commit** `docs(factory): 段① bundle 契約探索（欄位填實、無 gate）`
+
+**段②（產，方案 A 六格 + 對抗驗證）：**
+- [ ] **Step 5:** 照 stage2-produce.md 為六格（keys/module/diff/executor/renderer——bundle 無面板故不含 ui）組 prompt，各引 `shelfToggle/<同名檔>` 當範本 + `sit-bundle-contract.md` 契約；組 manifest → `MAX_PARALLEL=3 bash .claude/skills/module-factory/scripts/run-agy-batch.sh manifest`。
+- [ ] **Step 6:** 讀 `RESULT ... OK|EMPTY`；對 EMPTY 格執行 fallback（重派帶強化禁令；仍 EMPTY 則 Claude 親寫）。改 `types.ts` union + `src/modules/index.ts` 註冊。
+- [ ] **Step 7:** conformance-verifier（Claude subagent，對抗式）：跑 `npm run ci`，逐格挑「itemKey server/ui 同源、diffVersion 非恆定、schema 互斥、無 fall-through」。DATA sample 加進 `tests/core/moduleConformance.test.ts` 的 SAMPLES/DIFF_SAMPLES。
+- [ ] **Step 8: GATE 2（AskUserQuestion）**：Claude 攤六格 diff + conformance 結果，人點頭。
+- [ ] **Step 9: Commit** `feat(factory): 段② bundle module 六格產出（factory 首發真實產物）`
+
+**段③（驗收）：**
+- [ ] **Step 10:** `npm run ci` 全綠（新增 shelf_toggle_bundle 測試 + conformance）→ `node scripts/build-ui.mjs` → dev panel e2e：`BE2_MCP_DEV_PANEL=1` 起 server + playwright 對 34133 驗 bundle 讀取面（同本 session 彩排法；bundle 寫入若要 live 則同 shelfToggle 的 403 前例、可標 PENDING）。error-handling：補 bundle executor 的 403/500 測試。
+- [ ] **Step 11:** 更新 `module-catalog.md` 加 `shelf_toggle_bundle` 條目（key 形狀、authz、executor 形狀、factory 首發標記）。
+- [ ] **Step 12: GATE 3（AskUserQuestion）**：Claude 報告三段完成 + e2e 結果，人決定 merge。
+- [ ] **Step 13: Commit** `feat(factory): 段③ bundle 驗收（ci/e2e 綠）+ catalog 登記；factory 端到端驗證完成`
+
+**首發驗收成功定義**：`shelf_toggle_bundle` 註冊進 registry、conformance 自動繼承通過、`npm run ci` 全綠、dev panel 讀取面 e2e 通過、三個 GATE 各觸發一次且人可介入——**證明 factory skill 三段端到端可動**。
 
 ---
 
 ## Self-Review 紀錄
 
-1. **Spec coverage**：§1 目標/輸入複製（Task 3 Step1）、§2 三段（Task 2 流程圖）、§2.1 兩種 GATE 1（Task 2 Step1.3 + Task 3 模板「item 欄位形狀」節 + Task 5 Step4 實證無 gate）、§3 方案 A/對抗驗證（Task 4 Step1.4）、§3.1 run-agy-batch 職責邊界（Task 1）、§4 分工/禁令（Task 2 Step1.4 + Task 4 Step1.1）、§5 載體決策（skill 形式本身）、§6 首發（Task 5，用備援 bundle 因 announcement 欄位 TBD）、§7 風險（run-agy-batch 檔案隔離 Task 1、對抗驗證 Task 4）。無缺。
-2. **Placeholder 掃描**：run-agy-batch.sh 與其測試是完整 bash（非佔位）；references 模板內的 `{{...}}` 是**模板設計的一部分**（factory 執行時填），非 plan 佔位——已在 Task 4 Step1.2 說明。announcement 欄位 TBD 是**外部依賴**（memory 已記、首發改用 bundle 繞開），非 plan 內的未完成項。
-3. **型別一致性**：`run-agy-batch.sh MANIFEST`（格名<TAB>prompt<TAB>目標檔、`RESULT <名> OK|EMPTY`）在 Task 1 定義、Task 2 Step5 與 Task 4 Step1.3 引用一致；`AGY_CMD`/`MAX_PARALLEL` 環境變數名一致。
+1. **Spec coverage**：§1 目標/輸入複製（Task 3 Step1 + Task 5 Step1）、§2 三段（Task 2 流程圖 + Task 5 完整跑三段）、§2.1 兩種 GATE 1（Task 2 Step1.3 + Task 3 模板「item 欄位形狀」節 + Task 5 Step3 實證無 gate）、§3 方案 A/對抗驗證（Task 4 Step1.4 + Task 5 Step5-7）、§3.1 run-agy-batch 職責邊界（Task 1，bash 3.2 相容）、§4 分工/禁令（Task 2 Step1.4 + Task 4 Step1.1 + Task 5 段②派 agy）、§5 載體決策（skill 形式本身）、§6 首發跑完整三段（Task 5，用備援 bundle 因 announcement 欄位 TBD）、§7 風險（run-agy-batch 檔案隔離 Task 1、對抗驗證 Task 4/Task 5 Step7）。無缺。
+2. **Placeholder 掃描**：run-agy-batch.sh 與其測試是完整 bash（非佔位、bash 3.2 相容）；references 模板內的 `{{...}}` 是**模板設計的一部分**（factory 執行時填），非 plan 佔位——Task 4 Step1.2 說明。announcement 欄位 TBD 是**外部依賴**（memory 已記、首發改用 bundle 繞開），非 plan 內未完成項。
+3. **型別一致性**：`run-agy-batch.sh MANIFEST`（格名<TAB>prompt<TAB>目標檔、`RESULT <名> OK|EMPTY`）在 Task 1 定義、Task 2 Step5 / Task 4 Step1.3 / Task 5 Step5 引用一致；`AGY_CMD`/`MAX_PARALLEL` 環境變數名一致；`shelf_toggle_bundle` action_type 命名在 Task 5 全程一致。
+
+<!-- agy-peer-reviewed: 2026-08-18T12:58:04Z rounds=2 verdict=approved -->
