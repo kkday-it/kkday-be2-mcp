@@ -78,6 +78,7 @@ be2 token 存 server store（Option 1），續期分兩層（設計見 `be2-mcp-
 | callback 分頁 `localhost:<port>` 拒絕連線 | **殭屍 leader lockfile**：`~/.mcp-auth/mcp-remote-*/**_lock.json` 記著已死 pid，之後每個 mcp-remote 實例都禮讓它、沒人開 listener（port 由 server URL 決定，所以每次都同一個 port）| 全清重來（下方 SOP）|
 | 登入完成後 Desktop 顯示 `Server disconnected`，Desktop log 見 `InvalidGrantError` | **舊分頁重放**：先前失敗留下的 callback/error 分頁被重新載入，把過期 code 打進新開的 listener；mcp-remote 收到一次 invalid_grant 就 fatal 退出、不重試 | 關掉**所有**舊授權/callback 分頁再重試 |
 | 工具突然全部沒反應，但 Desktop 顯示連線正常 | **server 重啟殺掉記憶體內 MCP session**：mcp-remote 拿舊 session id 一直被拒（token 換發不吃 session，所以「看起來有連線」）| 重啟 Desktop 重建 session；server 端改進項見下 |
+| Cowork/Code sessions 顯示 `Couldn't start this server … Request timed out`（主對話卻正常） | **活 leader 不釋放 lock**：主對話的 mcp-remote 完成授權後不清 `_lock.json`，Cowork/Code 自起的副本看到「授權進行中」枯等到 initialize 逾時（mcp-remote 0.1.37 缺陷，0.1.38 待驗） | 只刪 lock、保留 tokens：`rm ~/.mcp-auth/mcp-remote-*/*_lock.json`，再重開該 session（副本用快取 token 秒啟，主對話不受影響） |
 | `Fatal error: Invalid URL, input: '--transport'` | config args 順序錯：URL 必須在 flag 前 | `"args": ["-y","mcp-remote","http://127.0.0.1:8787/mcp","--transport","http-only"]` |
 
 **乾淨重來 SOP（照順序，缺一步都可能重演）**：
