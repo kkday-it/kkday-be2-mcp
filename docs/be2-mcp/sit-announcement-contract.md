@@ -56,7 +56,15 @@ gateway ACL 允許的 header 白名單（response header `access-control-allow-h
 
 **在此 gate 解除前，announcement module 的 executor 無法對 SIT 跑出真 200**——與 3a 庫存寫入同屬「契約已知、live 寫入待授權」狀態。
 
-## 6. 未竟項（非阻擋，等後端恢復補一次即可）
+## 6. 未竟項（⚠️ TBD——使用者晚點補，勿忘）
+
+> **待辦 owner：使用者（lance）**。svc-b2c announcement 後端探索當下持續 502（連真前端都 502），以下欄位形狀**未取得**，是 Module Factory 段②「欄位 gate」的 block 來源（見 factory spec §6）：
+> - [ ] **列表 GET 200 的 row 欄位結構**——後端恢復後攔一次 200，或從 svc-b2c 後端 repo / v3 前端型別定義取。
+> - [ ] **POST create 的必填欄位形狀**（一筆橫跨多 prodOids 的 body 結構）。
+> - [ ] **PATCH 的 merge-vs-replace 語義**（部分更新是覆蓋整筆還是欄位級 merge）。
+>
+> 補齊任一「列表 row + POST body」即可解除 factory 段②的欄位 gate，讓 announcement 從備援標的（bundle）切回真首發標的。
+
 
 - 列表 200 的實際 **row 欄位結構**、POST create 的**必填欄位形狀**：探索當下 svc-b2c announcement 後端**持續 502**（連真前端登入態都 502），非我方問題。後端恢復後攔一次 200 即補齊。
 
