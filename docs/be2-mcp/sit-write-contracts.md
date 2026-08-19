@@ -142,6 +142,23 @@ The `.env` SIT account is **not mapped to any supplier** on be2-220 for the test
 
 (這也解釋 stage 可寫:同帳號在 stage 的群組含該 action、be2-220 沒有 —— 與 Phase 2a shelf-toggle 的 per-環境差異同構。)
 
+### 2026-08-19 追加(read-with-data 樣本終於攔到):`inventories/search` 200 的真實形狀 + Phase 3a 容錯解析欄位名全錯，須 FINALIZE
+
+於 be2-220、真人登入 + playwright,商品 2287(product-service `prod_oid 19510`)、`pkgOid 1904256`、`item_oid 1650033`(模式 **方案總量限制 = ITEM_BY_QUANTITY**,`control_type:1,inventory_type:0`,supplier `181`)。點庫存頁「搜尋條件 → 查詢」觸發:
+
+- **Request**:`POST /product/api/v1/items/1650033/inventories/search`，body = `{"supplier_oid":181,"page":1}`（item 在 path、不在 body；此模式**不帶** rrules/filter/spec）。
+- **Response 200**：`{"data":{"1650033":{"fullday":32}},"meta":{"status":"100000","desc":"成功"}}`
+  - `data` **以 itemOid 為 key**（非陣列），值 `{fullday: <數量>}`。
+  - **數量欄位 = `fullday`**（不是 total/remaining/quantity）；`32` = 剩餘可售量。與寫入側 `remain_qty` 的 `{fullday: qty}` 變體對齊（BY_DATETIME 模式才會出現 per-date/per-event 巢狀，本樣本是 item-quantity 故單一 fullday）。
+  - envelope = product-service `meta.status "100000"`。
+
+**⇒ Q1（read row 形狀 / 數量欄位名）解除。** 但揪出 Phase 3a `src/tools/inventoryShape.ts` 的容錯候選清單**與真實形狀全不符**（FINALIZE 待辦，非新 bug——當初就標「等真 200 再收斂」）：
+- `ROWS_KEYS = ['itemInventory','item_inventory','inventories','quantities']` → 真實無 wrapper array，`data` 直接是 `{[itemOid]:{...}}` 物件。
+- `QTY_KEYS = ['quantity','qty','inventory_qty','stock']` → 缺 `fullday`。
+- `DATE_KEYS` → item-quantity 模式無 per-date；BY_DATETIME 樣本仍待攔（才能定 per-date/per-event 巢狀鍵名）。
+- 讀取端點也仍需從 `GET .../inventories/{supplierOid}`（S2S-only、403）改為 `POST .../inventories/search`（見上節）。
+- **FINALIZE 動作**：改寫 `inventoryShape.ts` 解析「`data[itemOid].fullday`」為主形狀 + 保留容錯；補 `tests/fixtures/inventory-quantities.json` 用本樣本；讀取改打 POST search。BY_DATETIME 形狀需另攔一個該模式的 item。
+
 ## inventory-platform read (Phase 4a Task 1, 2026-08-14)
 
 目的:為 `inventory_platform` change-set(切換方案的庫存管理平台:BE2／BE2_SCM／EXTERNAL)定案「以 `(item_oid, supplier_oid)` 為鍵讀兩布林 `is_external_inventory`/`is_inventory_mgmt`」的讀取端點,供 Task 3 `readSupplierInventorySetting()` 實作依據。已知寫入契約(design doc §4.1,未在本次驗證):`PUT items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting` body `{is_external_inventory, is_inventory_mgmt, modify_user}`。
