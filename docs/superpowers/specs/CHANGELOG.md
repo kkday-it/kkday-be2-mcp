@@ -22,3 +22,5 @@
 - `2026-08-18-module-factory-design.md` §4（agy 分工措辭修正）/ 把「agy 主寫、Claude fallback」改為「agy 段② 需兩前置（pwd 放行 + 絕對路徑/trusted workspace），前置備齊即可用；bundle 首發因前置未備才全走 fallback」/ **解掉 2026-08-19 待議的 spec-vs-實作衝突**——2026-08-19 追到底並實測確認 agy 前置修好後能寫 repo，故非「agy 不可用」而是「前置未備」。
 
 
+
+<!-- agy-peer-reviewed: 2026-08-19T01:35:22Z rounds=1 verdict=approved -->

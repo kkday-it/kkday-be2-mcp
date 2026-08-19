@@ -140,3 +140,5 @@ skill 寫完後立刻拿商品公告當第一個真實案例跑三段——既�
 | 首發標的授權黑箱使 executor 無法 live 驗 | 接受 PENDING（與 3a/announcement 同狀態）；factory 的價值在自動化「產」與「驗非寫入面」，live 寫入本就受外部授權限制 |
 
 <!-- agy-peer-reviewed: 2026-08-18T12:21:15Z rounds=3 verdict=approved -->
+
+<!-- agy-peer-reviewed: 2026-08-19T01:35:22Z rounds=1 verdict=approved (§4 分工修正) -->
