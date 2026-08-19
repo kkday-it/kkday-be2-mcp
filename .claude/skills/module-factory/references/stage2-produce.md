@@ -2,17 +2,25 @@
 
 Claude 編排、agy 實作六格。每格 prompt = 禁令段 + 契約報告 + 參考格 + 該格職責。
 
+## ★ agy headless 兩個前置（2026-08-19 追到底的零產出根因）
+
+agy 段② 能用，取決於兩件事**都**成立（缺一即零產出）：
+
+1. **agy allowlist 有 `pwd` + 唯讀定位指令**（`~/.gemini/antigravity-cli/settings.json` 的 `permissions.allow`）：agy 寫檔前習慣跑 `pwd`，若不在白名單即 auto-deny→零產出。已放行：pwd/which/dirname/basename/realpath/test/stat/date（寫入/執行/網路/憑證維持批准）。
+2. **目標檔用絕對路徑 + repo 在 `trustedWorkspaces`**：headless `-p` 模式 agy **無 active workspace**，相對路徑會掉進 agy 自己的 scratch 資料夾（不是 repo）；絕對路徑則需該路徑落在 trusted workspace 內才准寫。→ **prompt 與 manifest 的目標檔一律用絕對路徑**（如 `/Users/…/mcp_poc/src/modules/product/<domain>/keys.ts`），且確認 repo 已在 `trustedWorkspaces`。
+
 ## agy headless 禁令段（每個六格 prompt 都要內建，逐字）
 
 ```
 【重要環境限制——違反即整次作業報廢】headless 模式你的 shell 權限只有唯讀：
-cat/ls/head/tail/grep/rg/find/wc、git status|log|diff|show。**禁止** mkdir/mv/cp/sed/tee/
-echo重導/npm/npx/tsc/vitest/git add|commit——這些會被 auto-deny 讓你零產出。
-所有檔案的建立與修改一律用你的內建檔案編輯工具（目標目錄已存在，直接寫檔、不需 mkdir）。
-不跑測試、不 commit。prompt 內不用「先 grep」這類誘導你跑 shell 的動詞。
+cat/ls/head/tail/grep/rg/find/wc/pwd/which/dirname/basename/realpath/test/stat/date、
+git status|log|diff|show。**禁止** mkdir/mv/cp/sed/tee/echo重導/npm/npx/tsc/vitest/git add|commit
+——這些會被 auto-deny 讓你零產出。所有檔案的建立與修改一律用你的內建檔案編輯工具，
+**目標檔用絕對路徑**（相對路徑會掉進 scratch、不進 repo）。不跑測試、不 commit。
+prompt 內不用「先 grep」這類誘導你跑 shell 的動詞。
 ```
 
-> **fallback**：某格 agy 連兩次零產出（soft-deny）→ 該格改由 Claude 親自寫（本專案已多次救場）。run-agy-batch.sh 的 `EMPTY` 就是這個訊號。
+> **fallback（次要路徑，非預設）**：前置成立時 agy 段② 正常運作；若某格仍連兩次零產出 → 該格改由 Claude 親自寫。run-agy-batch.sh 的 `EMPTY` 是此訊號。bundle 首發時前置未備齊（pwd 未放行、給相對路徑），故全走 fallback——前置修好後 agy 應可直接寫（2026-08-19 實測絕對路徑 + trusted workspace + pwd 放行後 agy 成功寫 repo）。
 
 ## 六格 prompt 模板
 

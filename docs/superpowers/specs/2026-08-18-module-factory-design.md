@@ -107,7 +107,11 @@ Factory = repo skill `.claude/skills/module-factory/`。主對話照 SKILL.md �
 | ② | conformance 對抗驗證 | **Claude subagent** | 需跨檔判斷 + 跑測試，agy 做不了 |
 | ③ | ci/e2e/PR | **Claude** | 測試、playwright、git 都要 shell |
 
-**agy 零產出的對策固化進 skill**：stage2 的 agy prompt 模板內建禁令段（只有唯讀 shell、檔案用內建編輯工具、產物路徑明確、prompt 不用「先 grep」這類誘導跑 shell 的動詞），並註明「agy 連兩次零產出 → 該格改由 Claude 接手」。把本專案反覆踩到的 agy headless 限制寫成流程的一部分。
+**agy 段② 的兩個前置（2026-08-19 追到底、實測確認）**：agy 在 headless accept-edits 下能否寫出檔，取決於兩件事**都**成立，缺一即零產出——
+1. **allowlist 有 `pwd` + 唯讀定位指令**：agy 寫檔前習慣跑 `pwd`，不在 `~/.gemini/antigravity-cli/settings.json` 白名單即 auto-deny→零產出。放行 pwd/which/dirname/basename/realpath/test/stat/date（寫入/執行/網路/憑證維持批准，不全放行）。
+2. **目標檔絕對路徑 + repo 在 `trustedWorkspaces`**：headless `-p` 無 active workspace，相對路徑掉進 agy scratch（不進 repo），絕對路徑需落在 trusted workspace 才准寫。
+
+前置備齊後 agy 段② 正常運作（實測絕對路徑 + trusted + pwd 放行後 agy 成功寫 repo）。**bundle 首發時前置未備（pwd 未放行、給相對路徑），故五格全走 Claude fallback**——這是「前置未備」而非「agy 不可用」。fallback（連兩次零產出 → Claude 接手該格）維持為次要保護路徑。這些 headless 限制與前置固化進 stage2 的 prompt 模板。
 
 ## 5. 載體決策：為何 repo skill 而非 Workflow
 

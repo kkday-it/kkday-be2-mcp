@@ -19,5 +19,6 @@
 
 - 建立本 CHANGELOG（追溯補記上述 2026-08-16/18 的 spec 異動）/ 落實新增的「規格變更」規則。
 - **待議（規格 vs 實作衝突，先記不靜默繞過）**：`2026-08-18-module-factory-design.md` §4 分工表寫「段② 六格由 agy 並行實作」，但實測 agy 在 headless accept-edits 下每次都想跑 shell（`pwd` 等非白名單指令）被拒→零產出，bundle 首發五格全由 Claude fallback 寫。→ **spec §4/§3.1 的「agy 主寫、Claude fallback」與現實不符，實際是「Claude 主寫、agy 為機率性加速」**。改 spec 前先解 agy allowlist（見下 evaluation），視放行後 agy 是否可用再定 spec 措辭。allowlist 評估（放行 8 個唯讀指令 pwd/which/dirname/basename/realpath/test/stat/date、寫入/執行/網路/憑證維持批准）已提交使用者、待改 agy settings.json 後實測驗證。
+- `2026-08-18-module-factory-design.md` §4（agy 分工措辭修正）/ 把「agy 主寫、Claude fallback」改為「agy 段② 需兩前置（pwd 放行 + 絕對路徑/trusted workspace），前置備齊即可用；bundle 首發因前置未備才全走 fallback」/ **解掉 2026-08-19 待議的 spec-vs-實作衝突**——2026-08-19 追到底並實測確認 agy 前置修好後能寫 repo，故非「agy 不可用」而是「前置未備」。
 
-<!-- agy-peer-reviewed: 2026-08-19T01:29:24Z rounds=1 verdict=approved -->
+
