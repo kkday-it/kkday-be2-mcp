@@ -159,6 +159,18 @@ The `.env` SIT account is **not mapped to any supplier** on be2-220 for the test
 - 讀取端點也仍需從 `GET .../inventories/{supplierOid}`（S2S-only、403）改為 `POST .../inventories/search`（見上節）。
 - **FINALIZE 動作**：改寫 `inventoryShape.ts` 解析「`data[itemOid].fullday`」為主形狀 + 保留容錯；補 `tests/fixtures/inventory-quantities.json` 用本樣本；讀取改打 POST search。BY_DATETIME 形狀需另攔一個該模式的 item。
 
+### 2026-08-19 附帶：sku-date-switch（日期/場次可售開關）讀取形狀（同 session 一併攔到，屬痛點#2 域、非庫存數量）
+
+同頁「日期/場次銷售開關」分頁觸發（item 1650033、supplier 181）：
+- **Request**：`POST /be2/api/v1/product/item/{itemOid}/sku-date-switch`，body = `{"rrules":[{recurrence_date, recurrence_event}], "supplier_oid":181, "page":1}`（`rrules` 取自 item 的 `basic-info.item_calendar_rule`；此為 **POST=讀**，phase0 §C 已定調）。
+- **Response 200**（envelope `metadata.status "0000"`，非 product-service 的 `meta.status "100000"`）：
+  ```
+  data: { [sku_oid]: { "YYYY-MM-DD": {fullday: 0|1}, ... }, ... }
+  ```
+  - **確認 date-based 巢狀 = `{[sku_oid]:{[date]:{fullday:N}}}`**（key 為 sku_oid、再 date、再 `fullday`）。與 item-quantity 的 `{[itemOid]:{fullday:N}}` 一致：**`fullday` 鍵通用，巢狀深度依模式（item vs sku、single vs by-date）而變**。
+  - 此域 `fullday: 1=可售 / 0=關閉`（是**可售開關**、不是數量）。→ 供未來「日期/場次可售」action_type 參考；SKU_BY_DATETIME 的庫存**數量**形狀應同結構、但 `fullday` 值為數量。
+- **transient 觀察**：同 body 先 403（#75）後 200（#78）——第一發撞 token refresh race，重試即過，非授權/契約問題。
+
 ## inventory-platform read (Phase 4a Task 1, 2026-08-14)
 
 目的:為 `inventory_platform` change-set(切換方案的庫存管理平台:BE2／BE2_SCM／EXTERNAL)定案「以 `(item_oid, supplier_oid)` 為鍵讀兩布林 `is_external_inventory`/`is_inventory_mgmt`」的讀取端點,供 Task 3 `readSupplierInventorySetting()` 實作依據。已知寫入契約(design doc §4.1,未在本次驗證):`PUT items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting` body `{is_external_inventory, is_inventory_mgmt, modify_user}`。
