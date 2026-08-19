@@ -39,10 +39,11 @@ describe('module conformance', () => {
       // shelf-toggle 家族（product/plan/bundle）共用 {prod_oid, target_is_active} 基底形狀，
       // 彼此的寬鬆 schema 會互相接受——這是設計上的重疊（executor 由 rec.actionType 明確路由，
       // 非靠 isItem 分辨），互斥性測試對家族內豁免（原本 product↔plan，bundle 加入同家族）。
-      const shelfFamily = new Set(['shelf_toggle_product', 'shelf_toggle_plan', 'shelf_toggle_bundle'])
+      const sfType = m.shapeFamily
       for (const [otherType, otherSample] of Object.entries(SAMPLES)) {
         if (type === otherType) continue
-        if (shelfFamily.has(type) && shelfFamily.has(otherType)) continue
+        const om = getModule(otherType)
+        if (sfType && sfType === om.shapeFamily) continue
         const parsed = m.itemSchema.safeParse(otherSample)
         const isItem = m.isItem(otherSample)
         expect(!parsed.success || !isItem).toBe(true)
@@ -77,7 +78,7 @@ describe('module conformance', () => {
       const m = getModule(type)
       const diffSample = DIFF_SAMPLES[type]
       const mutated = structuredClone(diffSample) as any
-      if (type === 'shelf_toggle_product' || type === 'shelf_toggle_plan' || type === 'shelf_toggle_bundle') {
+      if (m.shapeFamily === 'shelf_toggle') {
         mutated[0].current_is_active = !mutated[0].current_is_active
       } else if (type === 'inventory_setting') {
         mutated[0].dates[0].current += 1

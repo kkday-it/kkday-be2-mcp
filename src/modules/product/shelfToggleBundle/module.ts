@@ -21,6 +21,7 @@ function isBundleItem(i: unknown): i is BundleItem {
 
 export const shelfToggleBundleModule: ActionModule<BundleItem, BundleDiffItem> = {
   actionType: 'shelf_toggle_bundle',
+  shapeFamily: 'shelf_toggle',
   itemSchema,
   authz: {
     // bundle 上下架的 businessList 授權碼（沿用 shelf_toggle_plan 的 bundle-package 類碼）。

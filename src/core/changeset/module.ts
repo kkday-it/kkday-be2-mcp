@@ -45,6 +45,7 @@ export interface WizardDescriptor {
 
 export interface ActionModule<Item = unknown, DiffI = unknown> {
   actionType: string
+  shapeFamily?: string // 同 shapeFamily 的模組共用寬鬆基底形狀，互斥性測試對家族內豁免、diffVersion 敏感度測試共用同一 mutation 分支
   itemSchema: z.ZodType<Item>
   authz: { codes: string[]; onMissing: 'block' | 'warn' }
   invalidItemsMessage: string
