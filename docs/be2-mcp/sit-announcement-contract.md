@@ -56,17 +56,43 @@ gateway ACL 允許的 header 白名單（response header `access-control-allow-h
 
 **在此 gate 解除前，announcement module 的 executor 無法對 SIT 跑出真 200**——與 3a 庫存寫入同屬「契約已知、live 寫入待授權」狀態。
 
-## 6. 未竟項（⚠️ TBD——使用者晚點補，勿忘）
+## 6. 欄位 gate ✅ 已解（2026-08-19，改於 **stage** 攔到 200）
 
-> **待辦 owner：使用者（lance）**。svc-b2c announcement 後端探索當下持續 502（連真前端都 502），以下欄位形狀**未取得**，是 Module Factory 段②「欄位 gate」的 block 來源（見 factory spec §6）：
-> - [ ] **列表 GET 200 的 row 欄位結構**——後端恢復後攔一次 200，或從 svc-b2c 後端 repo / v3 前端型別定義取。
-> - [ ] **POST create 的必填欄位形狀**（一筆橫跨多 prodOids 的 body 結構）。
-> - [ ] **PATCH 的 merge-vs-replace 語義**（部分更新是覆蓋整筆還是欄位級 merge）。
->
-> 補齊任一「列表 row + POST body」即可解除 factory 段②的欄位 gate，讓 announcement 從備援標的（bundle）切回真首發標的。
+> **解除方式**：SIT svc-b2c 當時 502，改上 **be2.stage.kkday.com**（gateway `api-gateway.stage.kkday.com`，同 `/svc-b2c/api/v1` 前綴）以 lance.chien web session 用 playwright 攔真實請求——stage 後端是活的，list GET 直接 200。**factory 段②欄位 gate 解除**（list row + create 必填欄位皆到手），announcement 可從備援標的（bundle）切回真首發。
 
+### 6.1 列表 GET 200 — envelope + row（stage 實攔）
+`GET /svc-b2c/api/v1/admin/product/announcement?page=1&perPage=25` →
+```
+metadata: { status: "0000", desc: "Success",
+            pagination: { currentPage, total, lastPage, perPage } }
+data: [ row, ... ]
+```
+row 欄位 → 型別：
+| 欄位 | 型別 | 備註 |
+|---|---|---|
+| `productAnnouncementOid` | number | PK；對應 PATCH 的 `{announcementOid}` |
+| `name` | string | 公告標題 |
+| `prodOids` | number[] | 一筆橫跨多商品（✓ 印證「一筆多 prodOids」） |
+| `isEnabled` | boolean | 啟用開關 |
+| `startTime` | string | `"YYYY-MM-DD HH:mm:ss"`（UTC+0） |
+| `endTime` | string \| null | 同格式，可空 |
+| `modifyUser` | string | 顯示名（如 `李佳樺(chiahua.lee)`）；**我方寫入送的是 JWT platformId** |
+| `langs` | string | 語系（如 `zh-tw`） |
 
-- 列表 200 的實際 **row 欄位結構**、POST create 的**必填欄位形狀**：探索當下 svc-b2c announcement 後端**持續 502**（連真前端登入態都 502），非我方問題。後端恢復後攔一次 200 即補齊。
+### 6.2 POST create 必填欄位（stage `/create` 表單實測，未送出）
+表單欄位 → POST body 對映（`POST /svc-b2c/api/v1/admin/product/announcement`）：
+- `*Name`：string，≤254
+- `*Is Enabled`：boolean（預設 on）
+- `*Product Oids`：逗號分隔 prod oid（UI 提示 `ex: 7781,16384`）→ 對應 row 的 `prodOids` number[]
+- `*Start Time (UTC +0)`：必填 datetime
+- `End Time (UTC +0)`：選填 datetime
+- `*Select Languages`：必填多選，25 種語系（en-default / en-kk / … / zh-tw / ja-jp / ko-kr / th-th / vi-vn / …）；`en-default` 為 en-xx 的 fallback 文案來源
+- （每語系文案 content 疑似選語系後動態展開，表單初始未顯示——**若首發 action 是 enable/disable 開關則不需要**）
+
+### 6.3 仍待補（非 gate、非阻擋）
+- [ ] **POST body 的確切 wire 格式**（欄位鍵名、`prodOids` 是 array 還 csv、是否有 per-lang content 陣列）——需送出一次 create 才攔得到（**寫入**，需人核可；可建一筆 isEnabled=off 的拋棄式再刪）。上面 6.2 是表單語義層，足夠讓 factory 產 schema/renderer/ui。
+- [ ] **PATCH merge-vs-replace 語義**——同樣需一次真 PATCH。
+- 授權：§5 的 **S2S token 403** gate 不變（executor live 寫入仍卡此，屬「契約已知、live 寫入待授權」，與 3a 庫存同狀態）。
 
 ## 7. 對 `module-onboarding.md` §1 的對應
 
@@ -74,6 +100,6 @@ gateway ACL 允許的 header 白名單（response header `access-control-allow-h
 |---|---|
 | 可寫帳號與環境 | 🟡 帳號有、環境 SIT 220 有；但 announcement 授權對 S2S token 回 403（§5 gate） |
 | businessList 動作碼 | ✅ 已解（§4） |
-| contract probe（endpoint/必填/merge-vs-replace/modify_user/可逆） | 🟡 endpoint/header/envelope/授權碼已解；row 欄位與 create 必填待後端恢復（§6）；merge-vs-replace 待 PATCH 實測 |
+| contract probe（endpoint/必填/merge-vs-replace/modify_user/可逆） | 🟢 endpoint/header/envelope/授權碼/**row 欄位/create 必填欄位皆已解**（§6，stage 攔 200）；剩 POST wire body 確切格式 + PATCH merge-vs-replace 待一次真寫入 |
 
 → **factory 判定**：此 domain 可進段②「產」的部分（schema/renderer/ui 靠 ENDPOINTS.md + 本報告足夠），但 executor 的 live 驗收卡在 §5 gate——正是分段闘關制要人介入的點。
