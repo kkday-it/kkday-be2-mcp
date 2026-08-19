@@ -159,6 +159,47 @@ The `.env` SIT account is **not mapped to any supplier** on be2-220 for the test
 - 讀取端點也仍需從 `GET .../inventories/{supplierOid}`（S2S-only、403）改為 `POST .../inventories/search`（見上節）。
 - **FINALIZE 動作**：改寫 `inventoryShape.ts` 解析「`data[itemOid].fullday`」為主形狀 + 保留容錯；補 `tests/fixtures/inventory-quantities.json` 用本樣本；讀取改打 POST search。BY_DATETIME 形狀需另攔一個該模式的 item。
 
+### 2026-08-19 追加②：quantity PUT wire body 前端實證 + 官方操作手冊權威事實
+
+**(a) 寫入 wire body 前端實證**（be2-web 真發、be2-220 因授權 403，但 body 即真實契約）：
+`PUT /product/api/v1/items/{itemOid}/inventories/{supplierOid}/quantity`，body：
+```json
+{"inventory_data":{"remain_qty":{"1650033":{"fullday":20}},"modify_type":0},"modify_user":"<platformId>"}
+```
+- `remain_qty` **與讀取回應同形狀** `{[itemOid|skuOid]:{fullday|"HH:MM": qty}}`——讀寫對稱。
+- `modify_type`：`0`=ADD_AND_SUBTRACT（adjust）、`1`=REPLACE（set）。此發是 adjust。
+- `modify_user` = JWT platformId（再度確認）。
+- → **與源碼出土契約完全一致**（見上「2026-08-10 追加」§4），現多一層「前端實發」佐證。
+
+**(b) 官方操作手冊權威事實**（`product-team-docs/Product/系統操作手冊/12-庫存設定.md`，這份是 product team 維護的權威文件）：
+
+API endpoints（手冊列，與我方實證一致）：
+| Method | Path | 用途 |
+|---|---|---|
+| PUT | `api/v1/item-configs/{itemOid}/inventory-setting` | 更新庫存模式（`control_type`+`inventory_type`） |
+| POST | `api/v1/items/{item}/inventories/search` | **讀**位控資料（我方已攔 200） |
+| PUT | `api/v1/items/{item}/inventories/{supplierOid}/quantity` | **寫**數量（同步、我方已攔 body） |
+| PUT | `api/v1/items/{item}/inventories` | 非同步更新數量（批量變體） |
+
+5 種庫存模式（`control_type` 十位、`inventory_type` 個位；與我方 enum 推導一致）：
+| 代碼 | 中文 | control_type | inventory_type |
+|---|---|---|---|
+| `none` | 無限量 | -- | null |
+| `item_by_amount` | 套餐總量限制 | 1 | 0 |
+| `item_by_date` | 套餐總量-依日期&場次 | 1 | 1 |
+| `sku_by_amount` | SKU 總量限制 | 2 | 0 |
+| `sku_by_date` | SKU 總量-依日期&場次 | 2 | 1 |
+（我方實測 item 1650033 = `item_by_amount`(1/0)，故讀回單一 `{itemOid:{fullday}}`。）
+
+`remain_qty` 結構（權威）：`{"fullday": 50}`（無場次）或 `{"09:00": 20, "14:00": 30}`（有場次）→ **內層 key 是 `fullday` 或場次時間字串**。DB：`inventory.remain_qty` jsonb、`reference_type`(1=item/2=sku)、`reference_oid`(itemOid|skuOid)、`event_date`(null=總量)。
+
+高風險/語義事實（供 renderer 警語與 diff 邏輯）：
+- **數量修改立即生效**（正式資料直接異動）；歸零 → `InventoryEmpty` 事件清 sale-time cache + PubSub 通知搜尋（Solr/ES）→ 立即影響前台可售（Phase 3a renderer 紅字警語獲權威背書）。
+- **銷售判斷優先序：日期場次開關 > 庫存數量**（sku-date-switch 關閉會蓋過有量）。
+- 庫存 by supplier（每供應商各一份）；起訖月曆商品只能「無限量」；`none` 模式共享服務回 `MAX_QUANTITY=999`。
+
+> 🔑 **發現高價值來源**：`kkday-it/product-team-docs` 的 `Product/系統操作手冊/` 有 33 份 product team 權威手冊（含 `04-成本售價設定.md`=3b 價格、`02-套餐設定.md`、`14-商品上架狀態設定.md`、`30-組合套餐匯入模組.md` 等）——**未來各 action_type onboarding / factory 段① 探索應優先讀對應手冊**，比逆向 API 快且權威。已記入 memory。
+
 ### 2026-08-19 附帶：sku-date-switch（日期/場次可售開關）讀取形狀（同 session 一併攔到，屬痛點#2 域、非庫存數量）
 
 同頁「日期/場次銷售開關」分頁觸發（item 1650033、supplier 181）：
