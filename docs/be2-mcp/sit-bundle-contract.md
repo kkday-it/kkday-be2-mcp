@@ -1,8 +1,8 @@
 # SIT bundle 上下架契約探索報告（Module Factory 段① 產物）
 
-日期：2026-08-18　來源：SIT be2-220　標的：`shelf_toggle_bundle`（factory 首發備援標的）
+日期：2026-08-18（欄位 2026-08-19 於 stage 補齊）　標的：`shelf_toggle_bundle`（factory 首發備援標的）
 
-> ⏸️ **DEFERRED（2026-08-18）**：SIT 無組合方案商品可觀察 bundle row 欄位 → 段②/③ 暫緩，**待上 stage 環境或 SIT 補建組合方案商品後驗收**。skill 本體已完成，此標的只差真商品攔一次 200。
+> ✅ **欄位 gate 已解除（2026-08-19）**：SIT 無組合方案商品，改於 **stage be2（`api-gateway.stage.kkday.com`）商品 19513** 攔到真實 bundle row（7 筆），欄位形狀補齊（見 §6）。段②/③ 可跑。
 
 
 ## 1. 摘要
@@ -35,13 +35,20 @@ bundle（組合方案）上下架——同 product API、同 envelope（`meta.st
 
 **無授權 gate**。用 be2-mcp 的 S2S token 直打 `GET .../bundle-package-configs` 回 **HTTP 200**（不是 announcement 那種 403）——product API 對 S2S token 正常放行。
 
-## 6. item 欄位形狀（★ 欄位 gate 判定依據）→ **未填實：觸發欄位 gate**
+## 6. item 欄位形狀（★ 已填實——stage 商品 19513 實測，2026-08-19）
 
-- **列表 GET 200 的 row 欄位**：⚠️ **TBD**。SIT 上 7 個商品（9468/34133/546965/130087/135040/140011/1713281）的 `bundle-package-configs` 全回 `data: []`——SIT 未建過「組合方案」商品，無 row 可觀察。34133 wizard 顯示的「bundle」標籤是 package-configs 的 `is_bundle:true` 方案，與 `bundle-package-configs`（組合方案商品）是不同 endpoint。
-- **PUT body 必填**：TBD（推測 `{is_active, modify_user}` 類比 shelfToggle plan，但 factory 規則禁盲寫、未觀察不填）。
-- **merge-vs-replace / modify_user / 可逆性**：TBD（同上）。
+- **列表 GET 200 的 row 欄位**（`GET /products/19513/bundle-package-configs` → 200、`meta.status 100000`、7 筆 row）：
+  ```
+  { bundle_pkg_oid, name, is_active, reserve_date, reserve_status, reserve_queue, updated_by, updated_at }
+  sample: { bundle_pkg_oid: 57478, name: "展望台門票 + 大阪地鐵一日券", is_active: false,
+            reserve_date: null, reserve_status: null, reserve_queue: [], updated_by: "<uuid>", updated_at: "2025-11-11 07:02:04" }
+  ```
+- **★ 關鍵差異**：key 欄位是 **`bundle_pkg_oid`**（不是 package-configs 的 `pkg_oid`）——盲寫用 pkg_oid 會錯。item 形狀：`{ prod_oid, bundle_pkg_oid, target_is_active }`；itemKey = `prod_oid:bundle_pkg_oid`。
+- **PUT body**：`PUT /products/{prodOid}/bundle-package-configs`，read-merge-write flip `is_active`，帶 `modify_user`（=JWT platformId）；`updated_by`/`updated_at` 為 server-set 唯讀、寫時剔除（同 shelfToggle plan 的 `PLAN_PKG_READONLY` 慣例）。
+- **可逆性**：flip is_active 可逆（改回即還原）。
+- **noop**：`is_active === target_is_active` 略過。
 
-**GATE 1 判定 = 欄位 gate → 段② block**。這證明 factory 的核心防護正確：連被稱為「安全備援」的 bundle，欄位拿不到就停、不憑空補。
+**GATE 1 判定 = 無 gate（無授權 gate §5、欄位已填實）→ 段② 可全五格產**（bundle 非批次精靈型，無 ui 格）。
 
 **解 block 來源**：找一個 SIT 上真有 bundle-package-configs row 的商品（或 be2-web 搜組合方案商品）攔一次 200。
 

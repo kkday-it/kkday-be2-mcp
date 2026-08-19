@@ -53,22 +53,29 @@ description: 把「新增一個 be2 MCP action_type / 接一個新 domain」從�
 
 三個 gate 都用 `AskUserQuestion` 問人，不自動放行。
 
-## 每段執行者分工（memory `agy-work-allocation`）
+## 每段執行者分工
 
 | 段 | 動作 | 執行者 | 理由 |
 |---|---|---|---|
-| ① | curl/playwright 攔契約、bundle 逆向、寫報告 | **Claude** | agy 跑不了 shell/瀏覽器；純寫作 agy 也屢零產出 |
-| ② | 六格 module 實作 | **agy 並行**（run-agy-batch.sh），Claude 編排 | 實作類省 Claude 額度；六格獨立可平行 |
+| ① | curl/playwright 攔契約、bundle 逆向、寫報告 | **Claude** | 需 shell/瀏覽器 |
+| ② | 六格 module 實作 | **可插拔實作者**（見下） | 預設 Claude subagent；agy 為省額度選項 |
 | ② | conformance 對抗驗證 | **Claude subagent** | 需跨檔判斷 + 跑測試 |
 | ③ | ci/build-ui/e2e/PR | **Claude** | 測試、playwright、git 都要 shell |
 
-## 段② 呼叫方式
+## 段② 的可插拔實作者（後端偵測）
 
-1. 照 `references/stage2-produce.md` 模板，為六格各生一份 prompt 檔（填入契約報告、參考格路徑、action_type）。keys 格先產（其餘 import 它的 itemKey）。
-2. 組 manifest 檔，每行 `格名<TAB>prompt檔路徑<TAB>目標檔路徑`。
-3. `MAX_PARALLEL=3 bash scripts/run-agy-batch.sh manifest` → 讀每行 `RESULT <格名> OK|EMPTY`。
-4. 對 `EMPTY` 格：重派一次帶強化禁令（agy headless soft-deny 常見）；第二次仍 EMPTY → **Claude 親自寫該格**（本專案已多次這樣救場）。
-5. 全格 OK 後：改 union + 註冊 → conformance-verifier subagent → 一次 commit。
+段②要有人寫五六個檔。**這個實作者是可插拔的**，控制者（主 Claude）依環境選：
+
+- **預設 = Claude subagent**（通用、任何人可用）：每格派一個 `Agent`（subagent_type: general-purpose），模型按格複雜度選——keys/renderer 這種純轉寫用便宜模型（haiku），module/executor 整合用標準模型（sonnet）。走 `references/stage2-produce.md` 的「Claude subagent 後端」段。成本：Claude 額度。
+- **選項 = agy**（僅當 `agy` 在 PATH + 已登入 + repo 在 trustedWorkspaces + 使用者要省 Claude 額度）：`run-agy-batch.sh` 派 agy。成本：Antigravity 額度。前置見 `references/stage2-produce.md`（pwd 放行 + 絕對路徑）——**memory `agy-work-allocation` 是 lance 本機專屬，非通用**。
+
+**偵測邏輯**：`command -v agy` 有 + 使用者偏好省 Claude 額度 → agy 後端；否則 → Claude subagent 後端。不確定就用 Claude subagent（可攜性優先）。
+
+### 呼叫方式（兩後端共通尾段）
+
+1. 照 `references/stage2-produce.md` 為六格各生規格（契約報告 + 參考格 + action_type；keys 格先產、其餘 import 它的 itemKey）。
+2. **Claude subagent 後端**：keys 先派一個 subagent，收齊後其餘五格並行派（一次多個 `Agent` 於同一訊息）。**agy 後端**：組 manifest（`格名<TAB>prompt檔<TAB>絕對目標檔`）→ `MAX_PARALLEL=3 bash scripts/run-agy-batch.sh manifest` → 讀 `RESULT <格名> OK|EMPTY`，EMPTY 格 fallback 由 Claude 親寫。
+3. 全格產出後：改 union + 註冊 → conformance-verifier subagent → 一次 commit。
 
 ## 標的切換條件
 

@@ -1,18 +1,46 @@
 # 段② 產（六格並行 + 對抗驗證）
 
-Claude 編排、agy 實作六格。每格 prompt = 禁令段 + 契約報告 + 參考格 + 該格職責。
+Claude 編排，六格由**可插拔實作者**寫。每格規格 = 禁令段（agy 後端限定）+ 契約報告 + 參考格 + 該格職責。
+
+## 兩個後端（SKILL.md 的偵測決定用哪個）
+
+- **Claude subagent 後端（預設、通用）**：見下方「Claude subagent 後端」段。任何人可用，不需 agy。
+- **agy 後端（lance 本機省額度選項）**：見「agy 後端」段。需前置（pwd 放行 + 絕對路徑 + trusted workspace）。
+
+---
+
+## Claude subagent 後端（預設）
+
+主 Claude 用 `Agent` tool 派 subagent 寫每格，不需 agy、不需禁令段（subagent 有完整 shell/檔案工具）：
+
+- **派法**：keys 格先派一個 `Agent`（`subagent_type: general-purpose`），收齊後其餘五格**並行**（同一訊息多個 `Agent`）。每個 subagent 的 prompt = 該格職責 + 契約報告路徑 + 參考格路徑（下方「六格 prompt 模板」的職責描述通用，去掉 agy 禁令段即可）。
+- **模型按格選**（省成本）：keys/renderer（純轉寫、契約給足）→ `haiku`；module/executor/diff（整合、read-merge-write 慣例）→ `sonnet`。
+- **無 fallback 需求**：subagent 就是 Claude，本來就會寫；失敗即一般 subagent 除錯，非 agy 的零產出問題。
+- 產物路徑可相對可絕對（subagent 在 repo cwd）。
+
+---
+
+## agy 後端（lance 本機專屬，memory `agy-work-allocation`）
+
+### ★ 兩個前置（2026-08-19 追到底的零產出根因）
+
+agy 段② 能用，取決於兩件事**都**成立（缺一即零產出）：
+
+1. **agy allowlist 有 `pwd` + 唯讀定位指令**（`~/.gemini/antigravity-cli/settings.json` 的 `permissions.allow`）：agy 寫檔前習慣跑 `pwd`，若不在白名單即 auto-deny→零產出。已放行：pwd/which/dirname/basename/realpath/test/stat/date（寫入/執行/網路/憑證維持批准）。
+2. **目標檔用絕對路徑 + repo 在 `trustedWorkspaces`**：headless `-p` 模式 agy **無 active workspace**，相對路徑會掉進 agy 自己的 scratch 資料夾（不是 repo）；絕對路徑則需該路徑落在 trusted workspace 內才准寫。→ **prompt 與 manifest 的目標檔一律用絕對路徑**（如 `/Users/…/mcp_poc/src/modules/product/<domain>/keys.ts`），且確認 repo 已在 `trustedWorkspaces`。
 
 ## agy headless 禁令段（每個六格 prompt 都要內建，逐字）
 
 ```
 【重要環境限制——違反即整次作業報廢】headless 模式你的 shell 權限只有唯讀：
-cat/ls/head/tail/grep/rg/find/wc、git status|log|diff|show。**禁止** mkdir/mv/cp/sed/tee/
-echo重導/npm/npx/tsc/vitest/git add|commit——這些會被 auto-deny 讓你零產出。
-所有檔案的建立與修改一律用你的內建檔案編輯工具（目標目錄已存在，直接寫檔、不需 mkdir）。
-不跑測試、不 commit。prompt 內不用「先 grep」這類誘導你跑 shell 的動詞。
+cat/ls/head/tail/grep/rg/find/wc/pwd/which/dirname/basename/realpath/test/stat/date、
+git status|log|diff|show。**禁止** mkdir/mv/cp/sed/tee/echo重導/npm/npx/tsc/vitest/git add|commit
+——這些會被 auto-deny 讓你零產出。所有檔案的建立與修改一律用你的內建檔案編輯工具，
+**目標檔用絕對路徑**（相對路徑會掉進 scratch、不進 repo）。不跑測試、不 commit。
+prompt 內不用「先 grep」這類誘導你跑 shell 的動詞。
 ```
 
-> **fallback**：某格 agy 連兩次零產出（soft-deny）→ 該格改由 Claude 親自寫（本專案已多次救場）。run-agy-batch.sh 的 `EMPTY` 就是這個訊號。
+> **fallback（次要路徑，非預設）**：前置成立時 agy 段② 正常運作；若某格仍連兩次零產出 → 該格改由 Claude 親自寫。run-agy-batch.sh 的 `EMPTY` 是此訊號。bundle 首發時前置未備齊（pwd 未放行、給相對路徑），故全走 fallback——前置修好後 agy 應可直接寫（2026-08-19 實測絕對路徑 + trusted workspace + pwd 放行後 agy 成功寫 repo）。
 
 ## 六格 prompt 模板
 

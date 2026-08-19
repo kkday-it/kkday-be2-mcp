@@ -9,6 +9,7 @@ const SAMPLES: Record<string, unknown> = {
   inventory_setting: { item_oid: '1713281', supplier_oid: '0', op: 'set', quantity: 5, dates: ['2027-01-01'] },
   inventory_platform: { item_oid: '1713281', supplier_oid: '0', target: 'BE2_SCM', affected_pkgs: [{ prod_oid: '34133', pkg_oid: '1', pkg_name: 'x' }] },
   shelf_schedule: { prod_oid: '34133', pkg_oid: '1', queue: [{ reserve_date_utc: '2027-01-01 00:00:00', reserve_status: true }] },
+  shelf_toggle_bundle: { prod_oid: '19513', bundle_pkg_oid: '57478', target_is_active: false },
 }
 
 const DIFF_SAMPLES: Record<string, any[]> = {
@@ -17,6 +18,7 @@ const DIFF_SAMPLES: Record<string, any[]> = {
   inventory_setting: [{ item_oid: '1713281', supplier_oid: '0', op: 'set', quantity: 5, dates: [{ date: '2027-01-01', current: 10, target: 5, no_op: false, would_go_negative: false }] }],
   inventory_platform: [{ item_oid: '1713281', supplier_oid: '0', current: 'BE2', target: 'BE2_SCM', noop: false, affected_pkgs: [{ prod_oid: '34133', pkg_oid: '1', pkg_name: 'x' }] }],
   shelf_schedule: [{ prod_oid: '34133', pkg_oid: '1', pkg_name: 'x', current_queue: [{ reserve_date_utc: '2027-01-01 00:00:00', reserve_status: true }], new_queue: [{ reserve_date_utc: '2027-01-02 00:00:00', reserve_status: false }], noop: false }],
+  shelf_toggle_bundle: [{ prod_oid: '19513', bundle_pkg_oid: '57478', name: '展望台門票 + 大阪地鐵一日券', current_is_active: true, target_is_active: false, no_op: false }],
 }
 
 beforeAll(() => { resetRegistryForTest(); registerAllModules() })
@@ -34,12 +36,13 @@ describe('module conformance', () => {
     
     it(`${type}: itemSchema+isItem 拒絕其他 module 的樣本`, () => {
       const m = getModule(type)
+      // shelf-toggle 家族（product/plan/bundle）共用 {prod_oid, target_is_active} 基底形狀，
+      // 彼此的寬鬆 schema 會互相接受——這是設計上的重疊（executor 由 rec.actionType 明確路由，
+      // 非靠 isItem 分辨），互斥性測試對家族內豁免（原本 product↔plan，bundle 加入同家族）。
+      const shelfFamily = new Set(['shelf_toggle_product', 'shelf_toggle_plan', 'shelf_toggle_bundle'])
       for (const [otherType, otherSample] of Object.entries(SAMPLES)) {
         if (type === otherType) continue
-        if ((type === 'shelf_toggle_product' && otherType === 'shelf_toggle_plan') ||
-            (type === 'shelf_toggle_plan' && otherType === 'shelf_toggle_product')) {
-          continue
-        }
+        if (shelfFamily.has(type) && shelfFamily.has(otherType)) continue
         const parsed = m.itemSchema.safeParse(otherSample)
         const isItem = m.isItem(otherSample)
         expect(!parsed.success || !isItem).toBe(true)
@@ -74,7 +77,7 @@ describe('module conformance', () => {
       const m = getModule(type)
       const diffSample = DIFF_SAMPLES[type]
       const mutated = structuredClone(diffSample) as any
-      if (type === 'shelf_toggle_product' || type === 'shelf_toggle_plan') {
+      if (type === 'shelf_toggle_product' || type === 'shelf_toggle_plan' || type === 'shelf_toggle_bundle') {
         mutated[0].current_is_active = !mutated[0].current_is_active
       } else if (type === 'inventory_setting') {
         mutated[0].dates[0].current += 1
