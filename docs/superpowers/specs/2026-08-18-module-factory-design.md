@@ -151,3 +151,4 @@ skill 寫完後立刻拿商品公告當第一個真實案例跑三段——既�
 
 
 <!-- agy-peer-reviewed: 2026-08-19T01:44:16Z rounds=2 verdict=approved (§2/§3/§3.1/§5/§7 可攜性一致性) -->
+<!-- agy-peer-reviewed: 2026-08-19T01:45:22Z rounds=2 verdict=approved (marker 後僅刪 §4 過時 memory 交叉引用，cosmetic 非設計變更) -->
