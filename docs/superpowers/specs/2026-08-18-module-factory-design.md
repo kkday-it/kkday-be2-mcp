@@ -101,11 +101,16 @@ Factory = repo skill `.claude/skills/module-factory/`。主對話照 SKILL.md �
 
 | 段 | 動作 | 執行者 | 理由 |
 |---|---|---|---|
-| ① | curl/playwright 攔契約、bundle 逆向 | **Claude** | agy 跑不了 shell/瀏覽器（實證多次） |
-| ① | 寫契約報告 | **Claude** | agy 純寫作屢次零產出，Claude 直接寫更快 |
-| ② | 六格 module 實作 | **agy 並行**（六個 accept-edits），Claude 編排 | 實作類省 Claude 額度；六格獨立可平行 |
-| ② | conformance 對抗驗證 | **Claude subagent** | 需跨檔判斷 + 跑測試，agy 做不了 |
+| ① | curl/playwright 攔契約、bundle 逆向 | **Claude** | 需 shell/瀏覽器 |
+| ① | 寫契約報告 | **Claude** | 需 shell |
+| ② | 六格 module 實作 | **可插拔實作者**（見下） | 預設 Claude subagent（通用）；agy 為省額度選項 |
+| ② | conformance 對抗驗證 | **Claude subagent** | 需跨檔判斷 + 跑測試 |
 | ③ | ci/e2e/PR | **Claude** | 測試、playwright、git 都要 shell |
+
+**段② 實作者可插拔（可攜性設計）**：段② 要有人寫五六個檔，這個實作者不寫死成 agy——控制者依環境選：
+- **預設 = Claude subagent**（通用、任何人可用）：每格派一個 `Agent`（general-purpose），模型按格複雜度選（keys/renderer 純轉寫用便宜模型、module/executor 整合用標準模型）。成本 Claude 額度。
+- **選項 = agy**（僅當 `agy` 在 PATH + 已登入 + repo 在 trustedWorkspaces + 使用者要省 Claude 額度）：`run-agy-batch.sh` 派 agy，需下述兩前置。成本 Antigravity 額度。
+- 偵測：`command -v agy` 有 + 使用者偏好省額度 → agy；否則 → Claude subagent（不確定就走 Claude subagent，可攜性優先）。memory `agy-work-allocation` 記的「外包 agy」是**特定使用者本機的省額度策略、非 factory 本質**。
 
 **agy 段② 的兩個前置（2026-08-19 追到底、實測確認）**：agy 在 headless accept-edits 下能否寫出檔，取決於兩件事**都**成立，缺一即零產出——
 1. **allowlist 有 `pwd` + 唯讀定位指令**：agy 寫檔前習慣跑 `pwd`，不在 `~/.gemini/antigravity-cli/settings.json` 白名單即 auto-deny→零產出。放行 pwd/which/dirname/basename/realpath/test/stat/date（寫入/執行/網路/憑證維持批准，不全放行）。

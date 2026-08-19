@@ -1,8 +1,28 @@
 # 段② 產（六格並行 + 對抗驗證）
 
-Claude 編排、agy 實作六格。每格 prompt = 禁令段 + 契約報告 + 參考格 + 該格職責。
+Claude 編排，六格由**可插拔實作者**寫。每格規格 = 禁令段（agy 後端限定）+ 契約報告 + 參考格 + 該格職責。
 
-## ★ agy headless 兩個前置（2026-08-19 追到底的零產出根因）
+## 兩個後端（SKILL.md 的偵測決定用哪個）
+
+- **Claude subagent 後端（預設、通用）**：見下方「Claude subagent 後端」段。任何人可用，不需 agy。
+- **agy 後端（lance 本機省額度選項）**：見「agy 後端」段。需前置（pwd 放行 + 絕對路徑 + trusted workspace）。
+
+---
+
+## Claude subagent 後端（預設）
+
+主 Claude 用 `Agent` tool 派 subagent 寫每格，不需 agy、不需禁令段（subagent 有完整 shell/檔案工具）：
+
+- **派法**：keys 格先派一個 `Agent`（`subagent_type: general-purpose`），收齊後其餘五格**並行**（同一訊息多個 `Agent`）。每個 subagent 的 prompt = 該格職責 + 契約報告路徑 + 參考格路徑（下方「六格 prompt 模板」的職責描述通用，去掉 agy 禁令段即可）。
+- **模型按格選**（省成本）：keys/renderer（純轉寫、契約給足）→ `haiku`；module/executor/diff（整合、read-merge-write 慣例）→ `sonnet`。
+- **無 fallback 需求**：subagent 就是 Claude，本來就會寫；失敗即一般 subagent 除錯，非 agy 的零產出問題。
+- 產物路徑可相對可絕對（subagent 在 repo cwd）。
+
+---
+
+## agy 後端（lance 本機專屬，memory `agy-work-allocation`）
+
+### ★ 兩個前置（2026-08-19 追到底的零產出根因）
 
 agy 段② 能用，取決於兩件事**都**成立（缺一即零產出）：
 
