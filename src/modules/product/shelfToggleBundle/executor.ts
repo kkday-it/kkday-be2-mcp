@@ -14,9 +14,14 @@ interface BundleExecDeps { gateway: import('../../../gateway/client.js').Gateway
 // NOTE(PENDING)：PUT body 形狀（config_data keyed by bundle_pkg_oid）比照 package-configs plan 寫法，
 // 尚未對 stage 實測真 200——同 shelfToggle 的 SIT 403 先例，live 寫入標 PENDING，讀取/diff 面已驗。
 function bundleEntries(raw: unknown): Array<[string, Record<string, unknown>]> {
-  return Array.isArray(raw)
-    ? (raw as Array<Record<string, unknown>>).filter(r => r?.bundle_pkg_oid != null).map(r => [String(r.bundle_pkg_oid), r])
-    : []
+  // 雙形狀容錯（比照 shelfToggle configEntries）：array 或 {config_data:{...}} 物件皆認。
+  const r = raw as Record<string, any>
+  const cd = r?.config_data ?? r
+  if (Array.isArray(cd)) {
+    return (cd as Array<Record<string, unknown>>).filter(x => x?.bundle_pkg_oid != null).map(x => [String(x.bundle_pkg_oid), x])
+  }
+  if (cd && typeof cd === 'object') return Object.entries(cd) as Array<[string, Record<string, unknown>]>
+  return []
 }
 
 async function execBundleGroup(deps: BundleExecDeps, at: string, modifyUser: string, prodOid: string, items: BundleItem[], traceId: string): Promise<ItemResult[]> {

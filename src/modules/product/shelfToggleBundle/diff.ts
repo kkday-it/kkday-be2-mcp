@@ -7,8 +7,16 @@ import type { BundleItem, BundleDiffItem } from './types.js'
 // updated_by, updated_at }（stage 商品 19513 實測）。無現成 bundle 讀取工具，直打 gateway。
 // 依 prod_oid 分組單 GET（同 shelfToggle plan 的分組讀）；current is_active 解不出即 throw
 // DiffError（不 silently stage current_is_active:undefined）。
+// 雙形狀容錯（比照 shelfToggle configEntries）：GET 回 array，但若回 {config_data:{...}}
+// 物件形狀也認得，避免靜默退化成空 entries。
 function extractRows(raw: unknown): Array<Record<string, unknown>> {
-  return Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : []
+  const r = raw as Record<string, any>
+  const cd = r?.config_data ?? r
+  if (Array.isArray(cd)) return cd as Array<Record<string, unknown>>
+  if (cd && typeof cd === 'object') {
+    return Object.entries(cd).map(([k, v]) => ({ bundle_pkg_oid: k, ...(v as Record<string, unknown>) }))
+  }
+  return []
 }
 
 export async function computeBundleDiff(items: BundleItem[], ctx: DiffCtx): Promise<BundleDiffItem[]> {

@@ -23,10 +23,13 @@ export const shelfToggleBundleModule: ActionModule<BundleItem, BundleDiffItem> =
   actionType: 'shelf_toggle_bundle',
   itemSchema,
   authz: {
-    // bundle 上下架的 businessList 授權碼（前端 registry：product.announcement 同源逆向，
-    // bundle 屬 sale-status 類）。product API 對 S2S token 放行（契約報告 §5：無授權 gate）。
+    // bundle 上下架的 businessList 授權碼（沿用 shelf_toggle_plan 的 bundle-package 類碼）。
+    // 契約報告 §6 只驗了 bundle 的「讀取」row 形狀，寫入 action code 對 bundle 尚 PENDING 未
+    // 獨立驗證——故用 warn（ACTION_CODE_UNVERIFIED）降級，與同 factory 世代 inventory_platform/
+    // shelf_schedule 一致，把權威授權判斷交給 gateway /verify（fail-closed），不誤擋有 bundle
+    // 權限但無此確切 code 的使用者。
     codes: ['product.bundle-package-sale-status.update'],
-    onMissing: 'block',
+    onMissing: 'warn',
   },
   invalidItemsMessage: 'shelf_toggle_bundle items need {prod_oid, bundle_pkg_oid, target_is_active}.',
   scopeNotReadMessage: 'These oids were not looked up in this session; query them first before staging a bundle change.',
