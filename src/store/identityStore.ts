@@ -20,4 +20,11 @@ export class IdentityStore {
       .run({ ...rec, businessListJson: JSON.stringify(rec.businessList) })
   }
   delete(identityId: string): void { this.db.prepare('DELETE FROM be2_identities WHERE identity_id = ?').run(identityId) }
+
+  // keep-alive 跨實例防撞(spec §6):條件式 UPDATE 認領,輸方本 tick 跳過。與 casStatus 同原語。
+  claimKeepalive(identityId: string, nowMs: number, claimTtlMs: number): boolean {
+    return this.db.prepare(`UPDATE be2_identities SET keepalive_claimed_at=? WHERE identity_id=?
+      AND (keepalive_claimed_at IS NULL OR keepalive_claimed_at < ?)`)
+      .run(nowMs, identityId, nowMs - claimTtlMs).changes === 1
+  }
 }

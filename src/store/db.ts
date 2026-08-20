@@ -47,8 +47,17 @@ CREATE TABLE IF NOT EXISTS change_sets (
   note                 TEXT,
   status               TEXT NOT NULL,
   created_at           INTEGER NOT NULL,
-  decided_at           INTEGER
+  decided_at           INTEGER,
+  execute_at_utc       INTEGER,
+  schedule_wall        TEXT,
+  schedule_tz          TEXT,
+  executor_identity_id TEXT,
+  executor_label       TEXT,
+  executor_modify_user TEXT,
+  executor_session_id  TEXT,
+  schedule_claimed_at  INTEGER
 );
+CREATE INDEX IF NOT EXISTS idx_change_sets_status ON change_sets(status);
 CREATE TABLE IF NOT EXISTS change_set_results (
   changeset_id  TEXT NOT NULL,
   item_key      TEXT NOT NULL,
@@ -73,7 +82,8 @@ CREATE TABLE IF NOT EXISTS be2_identities (
   refresh_token      TEXT NOT NULL,
   business_list_json TEXT NOT NULL,
   access_expires_at  INTEGER NOT NULL,
-  updated_at         INTEGER NOT NULL
+  updated_at         INTEGER NOT NULL,
+  keepalive_claimed_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS credentials (
   cred_hash    TEXT PRIMARY KEY,
@@ -139,6 +149,21 @@ export function openDb(path: string): Database.Database {
   const cols = db.prepare('PRAGMA table_info(oauth_refresh)').all() as Array<{ name: string }>
   if (!cols.some(c => c.name === 'access_cred_hash')) {
     db.exec('ALTER TABLE oauth_refresh ADD COLUMN access_cred_hash TEXT')
+  }
+  // 塊 B(排程層):change_sets 排程欄 + be2_identities keep-alive 認領章。SQLite 無
+  // ADD COLUMN IF NOT EXISTS,沿用 access_cred_hash 的 PRAGMA 檢查 pattern。
+  const csCols2 = db.prepare('PRAGMA table_info(change_sets)').all() as Array<{ name: string }>
+  const csHave = new Set(csCols2.map(c => c.name))
+  for (const [col, typ] of [
+    ['execute_at_utc', 'INTEGER'], ['schedule_wall', 'TEXT'], ['schedule_tz', 'TEXT'],
+    ['executor_identity_id', 'TEXT'], ['executor_label', 'TEXT'], ['executor_modify_user', 'TEXT'],
+    ['executor_session_id', 'TEXT'], ['schedule_claimed_at', 'INTEGER'],
+  ] as const) {
+    if (!csHave.has(col)) db.exec(`ALTER TABLE change_sets ADD COLUMN ${col} ${typ}`)
+  }
+  const idCols = db.prepare('PRAGMA table_info(be2_identities)').all() as Array<{ name: string }>
+  if (!idCols.some(c => c.name === 'keepalive_claimed_at')) {
+    db.exec('ALTER TABLE be2_identities ADD COLUMN keepalive_claimed_at INTEGER')
   }
   return db
 }

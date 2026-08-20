@@ -1,5 +1,5 @@
 export type ActionType = 'shelf_toggle_product' | 'shelf_toggle_plan' | 'inventory_setting' | 'inventory_platform' | 'shelf_schedule' | 'shelf_toggle_bundle' | 'announcement'
-export type ChangeSetStatus = 'pending_approval' | 'approved' | 'executing' | 'done' | 'partial' | 'failed' | 'rejected' | 'expired'
+export type ChangeSetStatus = 'pending_approval' | 'approved' | 'executing' | 'done' | 'partial' | 'failed' | 'rejected' | 'expired' | 'scheduled' | 'cancelled' | 'missed'
 
 export interface ChangeSetItem {
   prod_oid: string
@@ -116,6 +116,9 @@ export interface ItemResult {
   trace_id: string
 }
 
+export interface ScheduleInfo { executeAtUtc: number; wall: string; tz: string }
+export interface ExecutorRef { identityId: string; userLabel: string; modifyUser: string; sessionId: string }
+
 export interface ChangeSetRecord {
   id: string
   creatorLabel: string
@@ -129,4 +132,7 @@ export interface ChangeSetRecord {
   status: ChangeSetStatus
   createdAt: number
   decidedAt?: number
+  schedule?: ScheduleInfo
+  executorRef?: ExecutorRef
+  scheduleClaimedAt?: number
 }

@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import type { AnyDiffItem, ChangeSetRecord, ChangeSetStatus, ItemResult } from './types.js'
+import type { AnyDiffItem, ChangeSetRecord, ChangeSetStatus, ItemResult, ExecutorRef } from './types.js'
 
 export class ChangeSetStore {
   private now: () => number
@@ -12,14 +12,17 @@ export class ChangeSetStore {
 
   create(rec: ChangeSetRecord): void {
     this.db.prepare(`
-      INSERT INTO change_sets (id, creator_label, creator_bearer_hash, session_id, action_type, items_json, diff_json, diff_version, note, status, created_at, decided_at)
-      VALUES (@id,@creatorLabel,@creatorBearerHash,@sessionId,@actionType,@itemsJson,@diffJson,@diffVersion,@note,@status,@createdAt,@decidedAt)
+      INSERT INTO change_sets (id, creator_label, creator_bearer_hash, session_id, action_type, items_json, diff_json, diff_version, note, status, created_at, decided_at, execute_at_utc, schedule_wall, schedule_tz)
+      VALUES (@id,@creatorLabel,@creatorBearerHash,@sessionId,@actionType,@itemsJson,@diffJson,@diffVersion,@note,@status,@createdAt,@decidedAt,@executeAtUtc,@scheduleWall,@scheduleTz)
     `).run({
       ...rec,
       note: rec.note ?? null,
       decidedAt: rec.decidedAt ?? null,
       itemsJson: JSON.stringify(rec.items),
       diffJson: JSON.stringify(rec.diff),
+      executeAtUtc: rec.schedule?.executeAtUtc ?? null,
+      scheduleWall: rec.schedule?.wall ?? null,
+      scheduleTz: rec.schedule?.tz ?? null,
     })
   }
 
@@ -44,6 +47,9 @@ export class ChangeSetStore {
       status,
       createdAt: r.created_at as number,
       decidedAt: (r.decided_at as number) ?? undefined,
+      schedule: r.execute_at_utc != null ? { executeAtUtc: r.execute_at_utc as number, wall: r.schedule_wall as string, tz: r.schedule_tz as string } : undefined,
+      executorRef: r.executor_identity_id != null ? { identityId: r.executor_identity_id as string, userLabel: r.executor_label as string, modifyUser: r.executor_modify_user as string, sessionId: r.executor_session_id as string } : undefined,
+      scheduleClaimedAt: r.schedule_claimed_at != null ? (r.schedule_claimed_at as number) : undefined,
     }
   }
 
@@ -111,5 +117,42 @@ export class ChangeSetStore {
       error_message: (r.error_message as string) ?? undefined,
       trace_id: r.trace_id as string,
     }))
+  }
+
+  setScheduled(id: string, executor: ExecutorRef, decidedAt: number): boolean {
+    const r = this.db.prepare(`UPDATE change_sets SET status='scheduled', decided_at=?,
+      executor_identity_id=?, executor_label=?, executor_modify_user=?, executor_session_id=?
+      WHERE id=? AND status='pending_approval'`)
+      .run(decidedAt, executor.identityId, executor.userLabel, executor.modifyUser, executor.sessionId, id)
+    return r.changes === 1
+  }
+
+  listDueScheduled(nowMs: number): string[] {
+    return (this.db.prepare(`SELECT id FROM change_sets WHERE status='scheduled' AND execute_at_utc <= ? ORDER BY execute_at_utc`)
+      .all(nowMs) as Array<{ id: string }>).map(r => r.id)
+  }
+
+  claimScheduled(id: string, nowMs: number): boolean {
+    return this.db.prepare(`UPDATE change_sets SET status='approved', schedule_claimed_at=? WHERE id=? AND status='scheduled'`)
+      .run(nowMs, id).changes === 1
+  }
+
+  releaseClaim(id: string): boolean {
+    return this.db.prepare(`UPDATE change_sets SET status='scheduled' WHERE id=? AND status='approved'`).run(id).changes === 1
+  }
+
+  listStrandedApproved(nowMs: number, staleClaimMs: number): string[] {
+    return (this.db.prepare(`SELECT id FROM change_sets WHERE status='approved' AND execute_at_utc IS NOT NULL
+      AND schedule_claimed_at IS NOT NULL AND schedule_claimed_at < ?`).all(nowMs - staleClaimMs) as Array<{ id: string }>).map(r => r.id)
+  }
+
+  listScheduledIdentityIds(): string[] {
+    return (this.db.prepare(`SELECT DISTINCT executor_identity_id AS iid FROM change_sets
+      WHERE status='scheduled' AND executor_identity_id IS NOT NULL`).all() as Array<{ iid: string }>).map(r => r.iid)
+  }
+
+  listScheduledIdsByIdentity(identityId: string): string[] {
+    return (this.db.prepare(`SELECT id FROM change_sets WHERE status='scheduled' AND executor_identity_id = ?`)
+      .all(identityId) as Array<{ id: string }>).map(r => r.id)
   }
 }
