@@ -80,6 +80,20 @@ X 與 Y 動的檔不同 → **可真並行**；唯一交會點是 wizard 的 act
 
 ---
 
+## 4.5 Session 分配 + 每個 session 的開頭資訊（貼給新 session）
+
+**依賴關係決定切法**：C 完全獨立；**A→B 耦合**（B 排的就是 A 的庫存寫入）。故不按 §2 的 X/Y，而按依賴切成 2 個可並行的 session：
+
+### Session 1 —「塊 C：商品公告進 wizard」（獨立，可先跑）
+開頭貼這段：
+> 目標：把「商品公告」接成 `be2_open_batch_wizard` 的新 action_type。先讀 `docs/be2-mcp/baa-wizard-expansion-handoff.md`（全文，尤其「塊 C」段）+ `docs/be2-mcp/sit-announcement-contract.md`（§6 契約）+ `docs/be2-mcp/module-onboarding.md`（上車 checklist）。照 CLAUDE.md 主管線走：brainstorming → spec（`docs/superpowers/specs/`）→ agy-peer-review → writing-plans → agy → subagent-driven + TDD。北極星：wizard 只是 UX、能力靠底層；公告生效時間走**原生 `startTime`/`endTime` 欄位、不做排程**。阻擋：executor live 寫入卡 svc-b2c S2S 403（build+draft 可，live 待授權）——不阻擋開發。實作外包 agy（見 memory `agy-work-allocation`）。⚠️ 會動到 wizard 的 action_type enum（`src/tools/appTools.ts`/`batchView.ts`/`src/ui/batch-wizard.ts`）——與 Session 2 的交會點，merge 前先同步。
+
+### Session 2 —「塊 A→B：庫存數量進 wizard（即時）→ 排程層」
+開頭貼這段：
+> 目標：(A) 把庫存數量（`inventory_setting`，SET/fullday）接成 `be2_open_batch_wizard` 的 action_type（即時版先做）；(B) 再疊上「到點派送」排程層。先讀 `docs/be2-mcp/baa-wizard-expansion-handoff.md`（全文，「塊 A」「塊 B」段）+ `docs/be2-mcp/sit-write-contracts.md`（§inventory：讀取形狀矩陣、寫入 body、**不鎖死 parser 原則**）+ `docs/be2-mcp/module-onboarding.md`。**先做 A 完整跑完（brainstorming→spec→agy→plan→subagent+TDD）再開 B**。A 順手做 Phase 3a `inventoryShape.ts` FINALIZE（改主形狀 `data[itemOid|skuOid].fullday`、讀取改 `POST inventories/search`）。B 第一步 probe「be2 有無原生庫存排程」→ 無則 server 端 timezone-safe 排程器（**時區一級需求**）+ 延遲執行授權模型（Option 1 token store 使可行，見 handoff「塊 B」）。阻擋：quantity PUT 卡 AU9403 + stage key 待正確（見 memory `be2-mcp-phase3-plan`）——build 可、live 待授權。實作外包 agy。⚠️ wizard action_type enum 是與 Session 1 的交會點。
+
+**協調唯一衝突點**：兩個 session 都會加 wizard 的 `action_type` enum + `batch-wizard.ts` 分頁。建議：誰先到誰先加，另一個 rebase；或各自分支、合併時人工對齊那一處。
+
 ## 5. 相關文件 / memory（新 session 先讀）
 - 契約：`sit-announcement-contract.md`、`sit-write-contracts.md`（§inventory）、`sit-price-contract.md`
 - 官方手冊（高價值）：memory `product-team-docs-manual`（`12-庫存設定.md` / `04-成本售價.md` …）
