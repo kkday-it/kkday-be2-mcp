@@ -5,8 +5,14 @@ import { sanitizeQueue } from '../modules/product/shelfSchedule/validate.js'
 import type { ScheduleEntry } from '../core/changeset/types.js'
 import { toEnvelopeError, type EnvelopeError } from './envelope.js'
 import { extractPackagesWithSupplier } from '../modules/product/common.js'
+import { parseInventoryFullday, readItemMode, isItemByAmount } from './inventoryShape.js'
 
-export type BatchViewActionType = 'inventory_platform' | 'shelf_schedule'
+const MODE_LABEL: Record<string, string> = { '1:0': 'item_by_amount', '2:0': 'sku_by_amount', '1:1': 'item_by_date', '2:1': 'sku_by_date' }
+function modeLabel(m: { control_type?: number; inventory_type?: number | null }): string | undefined {
+  return m.control_type === undefined ? undefined : (MODE_LABEL[`${m.control_type}:${m.inventory_type}`] ?? 'unsupported')
+}
+
+export type BatchViewActionType = 'inventory_platform' | 'shelf_schedule' | 'inventory_setting'
 
 export interface BatchPlan {
   pkg_oid: string
@@ -19,6 +25,7 @@ export interface BatchPlan {
   current_platform?: 'BE2' | 'BE2_SCM' | 'EXTERNAL' | null
   inventory_mode?: string
   reserve_queue?: ScheduleEntry[]
+  current_quantity?: number | null
 }
 
 export interface BatchProduct {
@@ -151,6 +158,23 @@ export async function buildBatchView(
         } else {
           plan.current_platform = null
           errors.push({ key: p.pkg_oid, code: 'SUPPLIER_UNRESOLVED', message: `pkg_oid=${p.pkg_oid} has no default supplier_mapping entry; current_platform left unknown.` })
+        }
+      }
+      if (actionType === 'inventory_setting') {
+        if (plan.item_oid && plan.supplier_oid) {
+          try {
+            const basic = await getConfigsCached(gateway, accessToken, plan.item_oid, configsCache) // basic-info, cached per item
+            const mode = readItemMode(basic)
+            plan.inventory_mode = modeLabel(mode)
+            if (isItemByAmount(mode)) {
+              const raw = await gateway.post(`/product/api/v1/items/${encodeURIComponent(plan.item_oid)}/inventories/search`, accessToken, { supplier_oid: plan.supplier_oid, page: 1 })
+              plan.current_quantity = parseInventoryFullday(raw, plan.item_oid)
+            }
+          } catch (e) {
+            errors.push({ key: `${plan.item_oid}:${plan.supplier_oid}`, code: 'INVENTORY_READ_UNAVAILABLE', message: `庫存現況讀取失敗（${(e as Error).message}）；此列顯示為未知，view 為唯讀展示不阻擋。` })
+          }
+        } else {
+          errors.push({ key: p.pkg_oid, code: 'SUPPLIER_UNRESOLVED', message: `pkg_oid=${p.pkg_oid} 無 default supplier；current_quantity 留空。` })
         }
       }
       if (plan.item_oid) readOidSet.add(plan.item_oid)

@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { AppToolDef, AppToolContext } from '../server/appPipeline.js'
 import { makeEnvelope, toEnvelopeError, type EnvelopeError } from './envelope.js'
-import { buildBatchView } from './batchView.js'
+import { buildBatchView, type BatchViewActionType } from './batchView.js'
 import { createChangesetCore, createChangesetInputShape } from '../core/changeset/tools.js'
 import { extractProductInfo } from './findProducts.js'
 import { makeAnnouncementClient } from '../modules/announcement/create/svcB2cClient.js'
@@ -122,7 +122,7 @@ export const appGetBatchViewTool: AppToolDef = {
   name: 'app_get_batch_view',
   description: 'Panel-only: load products -> plans + current state for the batch wizard (registers server-side read-scope).',
   inputShape: {
-    action_type: z.enum(['inventory_platform', 'shelf_schedule']),
+    action_type: z.enum(['inventory_platform', 'shelf_schedule', 'inventory_setting']),
     prod_oids: z.array(z.string().min(1)).min(1).max(10),
   } as never,
   annotations: {
@@ -137,7 +137,7 @@ export const appGetBatchViewTool: AppToolDef = {
     // appRateBudget 的面板輪詢節流是兩個獨立額度，見 appPipeline.ts AppToolContext 註解）。
     ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId)
     const { products, errors, read_oids } = await buildBatchView(
-      ctx.gateway, ctx.accessToken, args.action_type as 'inventory_platform' | 'shelf_schedule', args.prod_oids as string[],
+      ctx.gateway, ctx.accessToken, args.action_type as BatchViewActionType, args.prod_oids as string[],
     )
     return makeEnvelope([{ products }], errors, read_oids)
   },
