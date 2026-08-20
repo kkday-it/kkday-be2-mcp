@@ -125,4 +125,29 @@ describe('runOAuthPurge', () => {
     expect(result2.ghostIdentities).toBe(1)
     expect(identities.get('scheduled-ghost')).toBeUndefined()
   })
+
+  it('保護 claim 後短暫處於 approved(execute_at_utc 非 null) 的 ghost identity（I-1）', () => {
+    const db = openDb(':memory:')
+    const identities = new IdentityStore(db)
+    seedIdentity(identities, 'claimed-ghost')
+
+    db.prepare(`
+      INSERT INTO change_sets (id, creator_label, creator_bearer_hash, session_id, action_type, items_json, diff_json, diff_version, status, created_at, executor_identity_id, execute_at_utc)
+      VALUES (?, 'u', 'h', 's', 't', '[]', '{}', 'v1', 'scheduled', 1, ?, 9_999_999_999)
+    `).run('cs2', 'claimed-ghost')
+
+    // 排程件被 claim 後短暫進入 approved（execute_at_utc 仍非 null）——此窗內 purge 不能清
+    db.prepare("UPDATE change_sets SET status = 'approved' WHERE id = 'cs2'").run()
+
+    const result = runOAuthPurge(db, 5000)
+    expect(result.ghostIdentities).toBe(0)
+    expect(identities.get('claimed-ghost')).toBeDefined()
+
+    // 執行完轉 done 後（execute_at_utc 仍非 null，但 status 已非 scheduled/approved-with-null-check-passing case）
+    // 一旦真的不再是 scheduled 或「approved 且 execute_at_utc 非 null」的組合，就會被清
+    db.prepare("UPDATE change_sets SET status = 'done' WHERE id = 'cs2'").run()
+    const result2 = runOAuthPurge(db, 5000)
+    expect(result2.ghostIdentities).toBe(1)
+    expect(identities.get('claimed-ghost')).toBeUndefined()
+  })
 })

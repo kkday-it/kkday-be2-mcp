@@ -180,18 +180,33 @@ describe('scheduler', () => {
     expect(changeSets.get('c10')?.status).toBe('scheduled')   // transient 永不 fail 排程件
   })
 
-  it('9. keep-alive terminal 失敗:fake auth refresh 丟 AuthError 401 → 該 identity 名下排程件 fail + audit AUTH_EXPIRED', async () => {
+  it('9. keep-alive terminal 失敗:fake auth refresh 丟 AuthError 401 → 該 identity 名下排程件 fail + audit AUTH_EXPIRED,歸屬批准者(M-1)', async () => {
     seed('c9', 9_000_000, 1000 + 30_000)
     fakeAuth.refresh.mockRejectedValue(new AuthError('REVOKED', 'revoked', 401))
     const s = makeScheduler(deps, p)
     currentTime = 1000
     await s.tick()
     expect(changeSets.get('c9')?.status).toBe('failed')
-    
+
     const errKeepAlive = db.prepare('SELECT * FROM audit_log WHERE tool=? AND status=?').get('schedule.keepalive', 'error')
     expect(errKeepAlive).toBeDefined()
-    
+
     const errExec = db.prepare('SELECT * FROM audit_log WHERE tool=? AND status=?').get('schedule.execute', 'error')
     expect(errExec.error_message).toContain('AUTH_EXPIRED (keep-alive)')
+    // M-1(spec §11):歸屬批准者(seed() 的 executor userLabel='u'),不是系統標籤 'scheduler'。
+    expect(errExec.user_label).toBe('u')
+  })
+
+  it('11. I-2:啟動時對 stranded executing 記 audit 警示(schedule.stranded_executing),且不轉狀態', () => {
+    seed('c11', 2000)
+    // 模擬 process 在寫入途中崩潰:排程件卡在 executing(可能已部分寫入,不可自動復原)
+    changeSets.setStatus('c11', 'executing')
+    const s = makeScheduler(deps, p)
+    s.auditStranded()
+    expect(changeSets.get('c11')?.status).toBe('executing') // 只記 audit,不轉狀態
+    const row = db.prepare('SELECT * FROM audit_log WHERE tool=?').get('schedule.stranded_executing') as any
+    expect(row).toBeDefined()
+    expect(row.status).toBe('error')
+    expect(row.error_message).toContain('manual review required')
   })
 })

@@ -396,7 +396,7 @@ export function initWizard(app: WizardApp): void {
       const toggleLabel = document.createElement('span'); renderText(toggleLabel, '排程到點執行')
       schedInput = document.createElement('input'); schedInput.type = 'datetime-local'; schedInput.dataset.role = 'schedWall'; schedInput.hidden = true
       schedInput.className = 'bw-input'
-      const tzLabel = document.createElement('span'); renderText(tzLabel, '伺服器時區(Asia/Taipei)'); tzLabel.hidden = true; tzLabel.style.fontSize = '.8125rem'; tzLabel.style.color = 'var(--bw-muted)'
+      const tzLabel = document.createElement('span'); renderText(tzLabel, '伺服器時區'); tzLabel.hidden = true; tzLabel.style.fontSize = '.8125rem'; tzLabel.style.color = 'var(--bw-muted)'
       
       schedToggle.onchange = () => {
         if (schedInput) schedInput.hidden = !schedToggle!.checked

@@ -84,7 +84,12 @@ export function makeScheduler(deps: SchedulerDeps, opts: Partial<typeof SCHEDULE
         if (f.terminal) {
           for (const cid of deps.changeSets.listScheduledIdsByIdentity(f.identityId)) {
             if (deps.changeSets.casStatus(cid, 'scheduled', 'failed', now)) {
-              deps.audit.record({ userLabel: 'scheduler', sessionId: 'scheduler', clientInfo: 'scheduler',
+              // M-1(spec §11):AUTH_EXPIRED audit 歸屬批准者,不是 'scheduler' 這個系統標籤。
+              const rec = deps.changeSets.get(cid)
+              deps.audit.record({
+                userLabel: rec?.executorRef?.userLabel ?? 'scheduler',
+                sessionId: rec?.executorRef?.sessionId ?? 'scheduler',
+                clientInfo: 'scheduler',
                 tool: 'schedule.execute', params: { changeset_id: cid }, status: 'error',
                 errorMessage: `AUTH_EXPIRED (keep-alive): ${f.code}`, traceId: 'n/a', durationMs: 0 })
             }
@@ -94,10 +99,25 @@ export function makeScheduler(deps: SchedulerDeps, opts: Partial<typeof SCHEDULE
     }
   }
 
+  // I-2(spec §7):啟動時對 stranded executing 記 audit 警示。`executing` + execute_at_utc 非 null
+  // 代表上次 process 掛掉時這件排程件正在寫入途中——可能已部分寫入,不可自動復原,只記 audit
+  // 交給人工複核,絕不轉狀態(轉 failed 可能覆寫其實已成功的寫入;轉 done 可能虛報未完成的寫入)。
+  function auditStranded(): void {
+    for (const id of deps.changeSets.listExecutingScheduled()) {
+      deps.audit.record({
+        userLabel: 'scheduler', sessionId: 'scheduler', clientInfo: 'scheduler',
+        tool: 'schedule.stranded_executing', params: { changeset_id: id }, status: 'error',
+        errorMessage: 'stranded in executing (process crash mid-execution?); manual review required',
+        traceId: 'n/a', durationMs: 0,
+      })
+    }
+  }
+
   function start(): () => void {
     // 啟動即補跑一次(吸收停機期間到點者,spec §7)。遞迴 setTimeout 而非 setInterval——
     // tick 是 async(逐件 await 執行),積壓時單輪可能超過 tickMs;setInterval 會疊加併發 tick
     // (同 process 內重入:連線耗盡、keep-alive 交錯)。下一輪一律在上一輪 settle 後才排。
+    auditStranded()   // 只在 start() 首次執行時跑一次,不進 tick 迴圈
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | undefined
     const loop = () => {
@@ -108,5 +128,5 @@ export function makeScheduler(deps: SchedulerDeps, opts: Partial<typeof SCHEDULE
     return () => { stopped = true; if (timer) clearTimeout(timer) }
   }
 
-  return { tick, start }
+  return { tick, start, auditStranded }
 }

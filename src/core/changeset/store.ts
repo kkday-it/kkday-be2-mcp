@@ -155,4 +155,12 @@ export class ChangeSetStore {
     return (this.db.prepare(`SELECT id FROM change_sets WHERE status='scheduled' AND executor_identity_id = ?`)
       .all(identityId) as Array<{ id: string }>).map(r => r.id)
   }
+
+  // spec §7：啟動時對 stranded executing 記 audit 警示。`executing` + execute_at_utc 非 null 代表
+  // 上次 process 掛掉時，這件排程件正在寫入途中——可能已部分寫入，無法自動判斷/復原，只能留給
+  // 人工複核（見 scheduler.ts auditStranded）。
+  listExecutingScheduled(): string[] {
+    return (this.db.prepare(`SELECT id FROM change_sets WHERE status='executing' AND execute_at_utc IS NOT NULL`)
+      .all() as Array<{ id: string }>).map(r => r.id)
+  }
 }
