@@ -162,6 +162,24 @@ describe('scheduler', () => {
     expect(fakeAuth.refresh).toHaveBeenCalledTimes(1) // unchanged
   })
 
+  it('10. keep-alive 反覆 transient 失敗:claim TTL 節流,TTL 內不重打 auth-service', async () => {
+    // transient(5xx)不延壽也不終結 → identity 一直落在 window 內;若無 claim TTL,每 tick 都會
+    // hammering auth-service。此測試隔離驗 claimKeepalive 的 TTL 閘門(window 檢查兩輪都會過)。
+    seed('c10', 9_000_000, 1000 + 30_000)
+    fakeAuth.refresh.mockRejectedValue(new AppError('API_ERROR', '503', 503))
+    const s = makeScheduler(deps, p)
+    currentTime = 1000
+    await s.tick()
+    expect(fakeAuth.refresh).toHaveBeenCalledTimes(1)
+    currentTime = 1000 + 10_000   // < claimTtl(=tickMs 30s):window 仍過,但 claim 輸 → 不重打
+    await s.tick()
+    expect(fakeAuth.refresh).toHaveBeenCalledTimes(1)
+    currentTime = 1000 + 41_000   // > claimTtl:重新可認領 → 再試一次
+    await s.tick()
+    expect(fakeAuth.refresh).toHaveBeenCalledTimes(2)
+    expect(changeSets.get('c10')?.status).toBe('scheduled')   // transient 永不 fail 排程件
+  })
+
   it('9. keep-alive terminal 失敗:fake auth refresh 丟 AuthError 401 → 該 identity 名下排程件 fail + audit AUTH_EXPIRED', async () => {
     seed('c9', 9_000_000, 1000 + 30_000)
     fakeAuth.refresh.mockRejectedValue(new AuthError('REVOKED', 'revoked', 401))
