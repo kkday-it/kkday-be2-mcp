@@ -9,51 +9,38 @@ import { validateInventoryItems } from '../src/modules/product/inventorySetting/
 import type { InventoryItem } from '../src/core/changeset/types.js'
 
 const NOW = Date.parse('2026-08-10T00:00:00Z')
-const base: InventoryItem = { item_oid: 'i1', supplier_oid: 's1', op: 'adjust', quantity: 50, dates: ['2026-08-15'] }
+const base: InventoryItem = { item_oid: 'i1', supplier_oid: 's1', quantity: 50 }
 
 describe('validateInventoryItems', () => {
-  it('accepts a valid adjust item', () => {
+  it('accepts a valid set item', () => {
     expect(validateInventoryItems([base], NOW)).toBeUndefined()
   })
-  it('rejects adjust with quantity 0', () => {
-    expect(validateInventoryItems([{ ...base, quantity: 0 }], NOW)?.message).toMatch(/adjust.*non-zero/i)
-  })
   it('rejects set with negative quantity', () => {
-    expect(validateInventoryItems([{ ...base, op: 'set', quantity: -1 }], NOW)?.message).toMatch(/set.*>= 0/i)
+    expect(validateInventoryItems([{ ...base, quantity: -1 }], NOW)?.message).toMatch(/>= 0/)
   })
   it('rejects non-integer quantity', () => {
-    expect(validateInventoryItems([{ ...base, quantity: 1.5 }], NOW)?.message).toMatch(/integer/i)
+    expect(validateInventoryItems([{ ...base, quantity: 1.5 }], NOW)?.message).toMatch(/integer/)
   })
-  it('rejects past dates (UTC date compare)', () => {
-    expect(validateInventoryItems([{ ...base, dates: ['2026-08-09'] }], NOW)?.message).toMatch(/past/i)
+  it('rejects a duplicate (item, supplier) across the whole change-set', () => {
+    const dup = validateInventoryItems([base, { ...base, quantity: 9 }], NOW)
+    expect(dup?.message).toMatch(/duplicate/)
+    expect(dup?.key).toBe('i1:s1')
   })
-  it('accepts today', () => {
-    expect(validateInventoryItems([{ ...base, dates: ['2026-08-10'] }], NOW)).toBeUndefined()
-  })
-  it('rejects a duplicate (item, supplier, date) across the whole change-set', () => {
-    const dup = validateInventoryItems([base, { ...base, op: 'set', quantity: 9 }], NOW)
-    expect(dup?.message).toMatch(/duplicate/i)
-    expect(dup?.key).toBe('i1:s1:2026-08-15')
-  })
-  it('allows the same date on a different supplier', () => {
+  it('allows the same item on a different supplier', () => {
     expect(validateInventoryItems([base, { ...base, supplier_oid: 's2' }], NOW)).toBeUndefined()
-  })
-  it('rejects duplicate dates inside one item', () => {
-    expect(validateInventoryItems([{ ...base, dates: ['2026-08-15', '2026-08-15'] }], NOW)?.message).toMatch(/duplicate/i)
   })
 })
 
-// Tool-level: be2_create_changeset with action_type: 'inventory_setting'. Harness mirrors
-// mkCtx() in tests/createChangeset.test.ts (same L2ToolContext shape), renamed makeCtx here
-// and specialized for the inventory fixtures (read-oid 'i1' seeded, businessList defaults to
-// the real confirmed inventory action code, gateway.get returns a quantities-shaped fixture).
 function makeCtx(over: Partial<L2ToolContext> = {}): { ctx: L2ToolContext; store: ChangeSetStore; readOids: ReadOidStore; urls: string[] } {
   const db = openDb(':memory:')
   const store = new ChangeSetStore(db, { now: () => 1000 })
   const readOids = new ReadOidStore(db, { now: () => 1000 })
   const rateBudget = new RateBudget(db, { now: () => 1000 })
   readOids.record('s1', ['i1'])
-  const gateway = { get: async (_p: string) => ({ itemInventory: [{ date: '2026-08-15', quantity: 10 }] }) } as never
+  const gateway = {
+    get: vi.fn(async () => ({ item_config: { inventory_setting: { control_type: 1, inventory_type: 0 } } })),
+    post: vi.fn(async () => ({ 'i1': { fullday: 10 } })),
+  } as never
   const urls: string[] = []
   const emitConfirmUrl = vi.fn((_id: string, url: string) => { urls.push(url) })
   const ctx: L2ToolContext = {
@@ -67,17 +54,18 @@ function makeCtx(over: Partial<L2ToolContext> = {}): { ctx: L2ToolContext; store
 
 const invArgs = {
   action_type: 'inventory_setting',
-  items: [{ item_oid: 'i1', supplier_oid: 's1', op: 'adjust', quantity: 50, dates: ['2026-08-15'] }],
+  items: [{ item_oid: 'i1', supplier_oid: 's1', quantity: 50 }],
 }
 
 describe('be2_create_changeset (inventory_setting)', () => {
-  it('creates an inventory change-set with per-date diff and emits confirm url', async () => {
+  it('creates an inventory change-set with fullday diff and emits confirm url', async () => {
     const { ctx, urls, store } = makeCtx()
     const env = await createChangesetTool.handler(invArgs, ctx)
     expect(env.errors).toEqual([])
-    const out = env.items[0] as { changeset_id: string; diff: { items: Array<{ dates: unknown[] }> } }
-    expect(out.diff.items[0].dates).toHaveLength(1)
-    expect(urls).toHaveLength(1) // confirm url out-of-band, not in envelope
+    const out = env.items[0] as { changeset_id: string; diff: { items: Array<{ current: number; target: number }> } }
+    expect(out.diff.items[0].current).toBe(10)
+    expect(out.diff.items[0].target).toBe(50)
+    expect(urls).toHaveLength(1)
     expect(store.get(out.changeset_id)?.status).toBe('pending_approval')
   })
   it('rejects an unqueried item_oid with SCOPE_NOT_READ', async () => {
@@ -90,12 +78,6 @@ describe('be2_create_changeset (inventory_setting)', () => {
     const { ctx } = makeCtx({ businessList: ['product.product-sale-status.update'] })
     const env = await createChangesetTool.handler(invArgs, ctx)
     expect(env.errors[0].code).toBe('ACTION_NOT_ALLOWED')
-  })
-  it('rejects semantic violations with INVALID_ITEMS (zero delta)', async () => {
-    const { ctx } = makeCtx()
-    const env = await createChangesetTool.handler(
-      { ...invArgs, items: [{ ...invArgs.items[0], quantity: 0 }] }, ctx)
-    expect(env.errors[0].code).toBe('INVALID_ITEMS')
   })
   it('rejects mixed shelf/inventory item shapes for this action_type', async () => {
     const { ctx } = makeCtx()

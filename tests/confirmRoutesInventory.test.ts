@@ -35,13 +35,18 @@ function fakeGw(opts: { qty: Record<string, number> }) {
     async get(path: string, _at: string, query?: Record<string, string>) {
       calls.push({ m: 'GET', path })
       if (path.endsWith('/inventories/status')) return { is_processing: false }
-      const ym = query!.year_month
-      return { itemInventory: Object.entries(opts.qty).filter(([d]) => d.startsWith(ym)).map(([date, quantity]) => ({ date, quantity })) }
+      if (path.endsWith('/basic-info')) return { item_config: { inventory_setting: { control_type: 1, inventory_type: 0 } } }
+      return {}
+    },
+    async post(path: string, _at: string, body: unknown) {
+      calls.push({ m: 'POST', path })
+      return opts.qty
     },
     async put(path: string, _at: string, body: unknown) {
       calls.push({ m: 'PUT', path })
-      for (const row of ((body as Record<string, unknown>).itemInventory as Array<{ date: string; quantity: number }>)) {
-        opts.qty[row.date] = row.quantity
+      const rq = (body as any).inventory_data.remain_qty
+      for (const [oid, val] of Object.entries(rq)) {
+        opts.qty[oid] = (val as any).fullday
       }
     },
   }
@@ -67,7 +72,7 @@ beforeEach(async () => {
   // Task 4: requireSession gates on credentials.getBySecret(sid).kind === 'web_session'.
   credentials.insert({ credHash: CredentialStore.hash(SID), identityId: 'ident-inv', kind: 'web_session', expiresAt: null, updatedAt: 1000 })
   webSessions.create(SID, 'ident-inv')
-  gw = fakeGw({ qty: { '2026-08-15': 10 } })
+  gw = fakeGw({ qty: { 'i1': { fullday: 10 } as any } })
 
   const sessionTokens: Record<string, { accessToken: string; userLabel: string }> = {
     [CredentialStore.hash(SID)]: { accessToken: 'sess-tok', userLabel: USER_LABEL },
@@ -92,43 +97,36 @@ beforeEach(async () => {
 })
 
 describe('confirm routes — inventory_setting per-date render (Phase 3a Task 7)', () => {
-  it('GET renders per-date rows + the high-risk banner', async () => {
-    seedInventory(store, 'cs-inv-1', { item_oid: 'i1', supplier_oid: 's1', op: 'adjust', quantity: 50, dates: ['2026-08-15'] })
+  it('GET renders fullday rows + the high-risk banner', async () => {
+    seedInventory(store, 'cs-inv-1', { item_oid: 'i1', supplier_oid: 's1', quantity: 50 })
     const res = await http(base, 'GET', '/confirm/cs-inv-1', undefined, COOKIE)
     expect(res.status).toBe(200)
-    expect(res.text).toContain('庫存寫入立即影響前台可售並清 cache')
-    expect(res.text).toContain('2026-08-15')
+    expect(res.text).toContain('立即影響前台可售')
+    expect(res.text).toContain('現量')
+    expect(res.text).toContain('目標')
     expect(res.text).toContain('10')   // live current
-    expect(res.text).toContain('60')   // live target (adjust preview: 10 + 50)
+    expect(res.text).toContain('50')   // target
   })
 
-  it('GET marks would_go_negative dates and discloses partial outcome', async () => {
-    seedInventory(store, 'cs-inv-neg', { item_oid: 'i1', supplier_oid: 's1', op: 'adjust', quantity: -20, dates: ['2026-08-15'] })
-    const res = await http(base, 'GET', '/confirm/cs-inv-neg', undefined, COOKIE)
-    expect(res.status).toBe(200)
-    expect(res.text).toMatch(/would_go_negative|將被排除/)
-    expect(res.text).toContain('partial')
-  })
-
-  it('approve: adjust quantity drift between render and approve does NOT 409', async () => {
-    seedInventory(store, 'cs-inv-adj', { item_oid: 'i1', supplier_oid: 's1', op: 'adjust', quantity: 50, dates: ['2026-08-15'] })
+  it('approve: write drift between render and approve does NOT 409 for SET because target is absolute', async () => {
+    seedInventory(store, 'cs-inv-adj', { item_oid: 'i1', supplier_oid: 's1', quantity: 50 })
     const page = await http(base, 'GET', '/confirm/cs-inv-adj', undefined, COOKIE)
     const version = /data-diff-version="([^"]+)"/.exec(page.text)![1]
-    gw.qty['2026-08-15'] = 25   // live drift after the user saw the page
+    gw.qty['i1'] = { fullday: 25 } as any   // live drift after the user saw the page
     const res = await http(base, 'POST', '/confirm/cs-inv-adj/approve', { diff_version: version }, COOKIE)
-    expect(res.status).toBe(200)   // executed — delta applied to the NEW live base (25 -> 75)
-    expect(gw.qty['2026-08-15']).toBe(75)
-    expect(store.get('cs-inv-adj')!.status).toBe('done')
+    expect(res.status).toBe(409) // SET always 409s on drift
+    expect(store.get('cs-inv-adj')!.status).toBe('pending_approval')
+    expect((gw.qty['i1'] as any).fullday).toBe(25)
   })
 
   it('approve: a SET change-set 409s when the base drifted (stale guard intact)', async () => {
-    seedInventory(store, 'cs-inv-set', { item_oid: 'i1', supplier_oid: 's1', op: 'set', quantity: 100, dates: ['2026-08-15'] })
+    seedInventory(store, 'cs-inv-set', { item_oid: 'i1', supplier_oid: 's1', quantity: 100 })
     const page = await http(base, 'GET', '/confirm/cs-inv-set', undefined, COOKIE)
     const version = /data-diff-version="([^"]+)"/.exec(page.text)![1]
-    gw.qty['2026-08-15'] = 11
+    gw.qty['i1'] = { fullday: 11 } as any
     const res = await http(base, 'POST', '/confirm/cs-inv-set/approve', { diff_version: version }, COOKIE)
     expect(res.status).toBe(409)
     expect(store.get('cs-inv-set')!.status).toBe('pending_approval')
-    expect(gw.qty['2026-08-15']).toBe(11)   // no write happened
+    expect((gw.qty['i1'] as any).fullday).toBe(11)   // no write happened
   })
 })

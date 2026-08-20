@@ -7,14 +7,10 @@ export interface ChangeSetItem {
   target_is_active: boolean
 }
 
-export type InventoryOp = 'set' | 'adjust'
-
 export interface InventoryItem {
   item_oid: string
   supplier_oid: string
-  op: InventoryOp
   quantity: number
-  dates: string[]
 }
 
 export type InventoryPlatform = 'BE2' | 'BE2_SCM' | 'EXTERNAL'
@@ -61,20 +57,12 @@ export interface DiffItem {
   no_op: boolean
 }
 
-export interface InventoryDateDiff {
-  date: string
-  current?: number
-  target?: number
-  no_op: boolean
-  would_go_negative: boolean
-}
-
 export interface InventoryDiffItem {
   item_oid: string
   supplier_oid: string
-  op: InventoryOp
-  quantity: number
-  dates: InventoryDateDiff[]
+  current?: number   // undefined = 未設（null in wire）
+  target: number
+  no_op: boolean
 }
 
 export interface InventoryPlatformDiffItem {
