@@ -54,8 +54,20 @@ it('keepAlive reports terminal failures without throwing', async () => {
   expect(out.failed).toEqual([{ identityId: 'id-1', code: 'REAUTH_REQUIRED', terminal: true }])
 })
 
+it('keepAlive skips when another instance holds the claim', async () => {
+  // 直接對 DB 先搶 claim(模擬另一實例),再 keepAlive——與 window 判斷解耦,真正驗到
+  // claimKeepalive 的防撞行為(案例 2 的第二輪其實被 window 短路,走不到 claim)。
+  const { tm, identities, auth } = setup(1_000_000 + 30_000, async () =>
+    ({ accessToken: fakeJwt(1_000_000 + 3_600_000), refreshToken: 'r1', businessList: [] }))
+  expect(identities.claimKeepalive('id-1', 990_000, 30_000)).toBe(true)   // 990k > 1000k-30k → 本 process 再搶必輸
+  const out = await tm.keepAlive(['id-1'], { windowMs: 60_000, claimTtlMs: 30_000 })
+  expect(out.refreshed).toEqual([])
+  expect(out.failed).toEqual([])
+  expect(auth.refresh).not.toHaveBeenCalled()
+})
+
 it('keepAlive force-refreshes inside windowMs even beyond tokenManager skew (no spin band)', async () => {
-  // access 於 8min 後到期:> skew(5min) 但 < window(10min)——必須真的 refresh,不得空轉。
+  // access 於 8min 後到期:> skew(setup 傳 60_000=1min)但 < window(10min)——必須真的 refresh,不得空轉。
   const { tm, auth } = setup(1_000_000 + 8 * 60_000, async () =>
     ({ accessToken: fakeJwt(1_000_000 + 3_600_000), refreshToken: 'r1', businessList: [] }))
   const out = await tm.keepAlive(['id-1'], { windowMs: 10 * 60_000, claimTtlMs: 30_000 })

@@ -64,11 +64,13 @@ export class TokenManager {
     const refreshed: string[] = []
     const failed: Array<{ identityId: string; code: string; terminal: boolean }> = []
     for (const id of identityIds) {
-      const identity = this.stores.identities.get(id)
-      if (!identity) { failed.push({ identityId: id, code: 'UNKNOWN_IDENTITY', terminal: true }); continue }
-      if (identity.accessExpiresAt - this.now() >= opts.windowMs) continue
-      if (!this.stores.identities.claimKeepalive(id, this.now(), opts.claimTtlMs)) continue
+      // 整段(get/window/claim/refresh)都在 try 內——「永不 throw」涵蓋 DB 層意外拋錯,
+      // 單一 id 失敗不得中斷迴圈、遺失其餘 id 的結果。
       try {
+        const identity = this.stores.identities.get(id)
+        if (!identity) { failed.push({ identityId: id, code: 'UNKNOWN_IDENTITY', terminal: true }); continue }
+        if (identity.accessExpiresAt - this.now() >= opts.windowMs) continue
+        if (!this.stores.identities.claimKeepalive(id, this.now(), opts.claimTtlMs)) continue
         let flight = this.inflight.get(id)
         if (!flight) {
           flight = this.doRefresh(identity, id).finally(() => this.inflight.delete(id))
@@ -80,7 +82,7 @@ export class TokenManager {
       } catch (e) {
         // AuthError(REAUTH_REQUIRED / UNKNOWN_*)= terminal:identity 已死,scheduler 應立即
         // fail 其名下排程件,否則每 tick 重打 auth-service 直到 T(error 洗版 + hammering)。
-        failed.push({ identityId: id, code: (e as { code?: string }).code ?? 'REFRESH_FAILED',
+        failed.push({ identityId: id, code: (e as { code?: string }).code ?? 'KEEPALIVE_ERROR',
           terminal: e instanceof AuthError })
       }
     }
