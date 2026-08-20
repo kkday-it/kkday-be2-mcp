@@ -1,4 +1,4 @@
-export type ActionType = 'shelf_toggle_product' | 'shelf_toggle_plan' | 'inventory_setting' | 'inventory_platform' | 'shelf_schedule' | 'shelf_toggle_bundle'
+export type ActionType = 'shelf_toggle_product' | 'shelf_toggle_plan' | 'inventory_setting' | 'inventory_platform' | 'shelf_schedule' | 'shelf_toggle_bundle' | 'announcement'
 export type ChangeSetStatus = 'pending_approval' | 'approved' | 'executing' | 'done' | 'partial' | 'failed' | 'rejected' | 'expired'
 
 export interface ChangeSetItem {
@@ -38,7 +38,7 @@ export interface ShelfScheduleItem {
   queue: ScheduleEntry[]
 }
 
-export type AnyChangeSetItem = ChangeSetItem | InventoryItem | InventoryPlatformItem | ShelfScheduleItem
+export type AnyChangeSetItem = ChangeSetItem | InventoryItem | InventoryPlatformItem | ShelfScheduleItem | AnnouncementCreateItem
 
 // Task 4 (design doc §4.2): reserve_queue is a full-replace write, so the diff carries the
 // current (sanitized/sorted) live queue alongside the target queue verbatim — "noop" means the
@@ -91,7 +91,32 @@ export interface InventoryPlatformDiffItem {
   affected_pkgs_unverified?: boolean
 }
 
-export type AnyDiffItem = DiffItem | InventoryDiffItem | InventoryPlatformDiffItem | ShelfScheduleDiffItem
+export interface AnnouncementLangContent { lang: string; content: string }
+
+export interface AnnouncementCreateItem {
+  prod_oids: string[]
+  name: string
+  is_enabled: boolean
+  start_time: string          // "YYYY-MM-DD HH:mm:ss" UTC+0
+  end_time?: string | null
+  langs: string[]
+  contents: AnnouncementLangContent[]
+}
+
+export interface AnnouncementDiffItem {
+  prod_oids: string[]
+  product_names: string[]
+  name: string
+  is_enabled: boolean
+  start_time: string
+  end_time?: string | null
+  langs: string[]
+  contents: AnnouncementLangContent[]  // 帶進 diff 供確認頁預覽內文（防 blind write）
+  existing_count: number
+  noop: false
+}
+
+export type AnyDiffItem = DiffItem | InventoryDiffItem | InventoryPlatformDiffItem | ShelfScheduleDiffItem | AnnouncementDiffItem
 
 export interface ItemResult {
   item_key: string
