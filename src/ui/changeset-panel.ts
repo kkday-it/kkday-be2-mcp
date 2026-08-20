@@ -1,8 +1,7 @@
 import { connectApp, renderText, backoffPoll } from './panelShared.js'
-import { itemKey as invKey } from '../modules/product/inventorySetting/keys.js'
-import { itemKey as shelfKey } from '../modules/product/shelfToggle/keys.js'
+import { itemKeyOf } from './changesetItemKey.js'
 
-// 終態清單：抽成單一常數，refresh() 與 ontoolresult 都用它，避免兩處漏加同一狀態而導致無限輪詢。
+// 終端清單：抽成單一常數，refresh() 與 ontoolresult 都用它，避免兩處漏加同一狀態而導致無限輪詢。
 const TERMINAL_STATUSES = ['done', 'partial', 'failed', 'rejected', 'expired']
 
 // 高風險 action_type：approve 前需面板內二次確認（紅字 banner），而非直接送出。
@@ -15,16 +14,6 @@ const bannerEl = document.getElementById('banner') as HTMLDivElement
 const fallback = document.getElementById('fallback') as HTMLPreElement
 function showFallback(m: string) { fallback.hidden = false; fallback.textContent = m }
 function hideBanner() { bannerEl.hidden = true; bannerEl.textContent = '' }
-
-// itemKey 規則須與 server 端完全一致，否則 confirmed_keys 永遠對不上、approve 一律
-// CONFIRMED_KEYS_MISMATCH：
-//   - shelf：src/changeset/executor.ts#itemKey → pkg_oid ? `${prod_oid}:${pkg_oid}` : prod_oid
-//   - inventory：src/changeset/confirmService.ts#itemKeysOf → `${item_oid}:${supplier_oid}`
-// 用 diff item 是否帶 item_oid 欄位來分辨兩種形狀（跟 diff.ts 的 diffVersionHash 判斷方式一致）。
-function itemKeyOf(d: any): string {
-  if (d && typeof d === 'object' && 'item_oid' in d) return invKey(d)
-  return shelfKey(d)
-}
 
 let currentDiffItems: any[] = []
 
