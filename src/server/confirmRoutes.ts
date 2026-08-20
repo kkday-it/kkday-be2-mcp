@@ -3,6 +3,7 @@ import { getModule } from '../core/changeset/registry.js'
 import '../modules/index.js'
 import type { ExecutorDeps } from '../core/changeset/executor.js'
 import { approveAndExecute } from '../core/changeset/confirmService.js'
+import { AppError } from '../errors.js'
 import type { TokenManager } from '../auth/tokenManager.js'
 import type { WebSessionStore } from './webSessionStore.js'
 import type { CredentialStore } from '../store/credentialStore.js'
@@ -130,12 +131,24 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     // per-item checkboxes; stays whole-batch, unchanged from Phase 2a/2b). Any throw here (e.g.
     // modifyUserFrom failing) propagates to the `h()` wrapper -> 500, with the change-set left
     // 'pending_approval' (retryable, not stranded) — same as before the extraction.
-    const out = await approveAndExecute(deps, {
-      rec, who, expectedDiffVersion: String(req.body?.diff_version),
-      channel: 'confirm_page',
-      audit: { ip: req.ip, clientInfo: req.header('user-agent') },
-      expectedExecuteAtUtc: req.body?.expected_execute_at_utc !== undefined && req.body.expected_execute_at_utc !== '' ? Number(req.body.expected_execute_at_utc) : undefined,
-    })
+    let out
+    try {
+      out = await approveAndExecute(deps, {
+        rec, who, expectedDiffVersion: String(req.body?.diff_version),
+        channel: 'confirm_page',
+        audit: { ip: req.ip, clientInfo: req.header('user-agent') },
+        expectedExecuteAtUtc: req.body?.expected_execute_at_utc !== undefined && req.body.expected_execute_at_utc !== '' ? Number(req.body.expected_execute_at_utc) : undefined,
+      })
+    } catch (e) {
+      // 排程兩個新錯誤是「可預期、可自助」的 409(批准只驗仍在未來,SCHEDULE_IN_PAST 在人審久
+      // 一點的 tight schedule 上很容易發生)——不能落進 h() 的通用 500 讓訊息蒸發。其他 throw
+      // (modifyUserFrom 失敗等)維持既有慣例向上拋 → 500。
+      if (e instanceof AppError && (e.code === 'SCHEDULE_IN_PAST' || e.code === 'SCHEDULE_ECHO_MISMATCH')) {
+        res.status(409).send(`<!doctype html><meta charset=utf-8><h1>無法批准</h1><p>${esc(e.message)}</p>`)
+        return
+      }
+      throw e
+    }
     if (out.stale) {
       const { diff, version } = await liveDiff(rec, who.accessToken)
       res.status(409).send(renderShell(rec.id, getModule(rec.actionType).renderConfirm(rec, diff, version, '<p style="color:#b00">目標欄位已被改動,請重新確認。</p>'), version, rec.schedule))
@@ -143,7 +156,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     }
     if (out.casFailed) { res.status(409).send('已被處理或已過期'); return }
     if (out.scheduled) {
-      res.status(200).send(`<!doctype html><meta charset=utf-8><style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}</style><h1>已排程</h1><p>變更將於 ${esc(rec.schedule!.wall)} (${esc(rec.schedule!.tz)}) 執行。</p><p>若需取消，可回本頁點擊「拒絕」。</p>`)
+      res.status(200).send(`<!doctype html><meta charset=utf-8><style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}</style><h1>已排程</h1><p>變更將於 ${esc(rec.schedule!.wall)} (${esc(rec.schedule!.tz)}) 執行。</p><p>取消排程請透過批次精靈面板或本確認頁的排程檢視(取消功能上線後生效)。</p>`)
       return
     }
     res.status(200).send(`<!doctype html><meta charset=utf-8><h1>執行結果:${esc(out.status)}</h1><pre>${esc(JSON.stringify(out.results, null, 2))}</pre>`)
