@@ -27,6 +27,7 @@ export interface WizardRowInput {
   prod_oid: string; pkg_oid: string; pkg_name: string
   item_oid?: string; supplier_oid?: string
   queue: Array<{ reserve_date_utc: string; reserve_status: boolean }>; cleared: boolean
+  quantity?: number   // inventory_setting: per-row fullday SET target
 }
 
 export interface DomHelpers {

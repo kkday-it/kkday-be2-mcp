@@ -17,12 +17,12 @@ describe('be2_open_batch_wizard', () => {
     expect(env.items).toEqual([{ action_type: 'shelf_schedule', prod_oids: [] }])
   })
 
-  it('input schema 只收兩個合法 action_type，拒絕其他值（含既有的 shelf/inventory_setting action_type）', () => {
+  it('input schema 只收三個合法 batch action_type（inventory_platform/shelf_schedule/inventory_setting），拒絕其他值', () => {
     const schema = z.object(openBatchWizardTool.inputShape)
     expect(schema.safeParse({ action_type: 'inventory_platform' }).success).toBe(true)
     expect(schema.safeParse({ action_type: 'shelf_schedule', prod_oids: ['1', '2'] }).success).toBe(true)
+    expect(schema.safeParse({ action_type: 'inventory_setting' }).success).toBe(true)
     expect(schema.safeParse({ action_type: 'shelf_toggle_product' }).success).toBe(false)
-    expect(schema.safeParse({ action_type: 'inventory_setting' }).success).toBe(false)
     expect(schema.safeParse({}).success).toBe(false)
   })
 

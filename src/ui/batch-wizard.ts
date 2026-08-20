@@ -10,13 +10,15 @@
 import { connectApp, renderText } from './panelShared.js'
 import { inventoryPlatformWizard } from '../modules/product/inventoryPlatform/ui.js'
 import { shelfScheduleWizard } from '../modules/product/shelfSchedule/ui.js'
+import { inventorySettingWizard } from '../modules/product/inventorySetting/ui.js'
 import type { WizardDescriptor, WizardRowInput, DomHelpers } from '../core/changeset/module.js'
 
-type ActionType = 'inventory_platform' | 'shelf_schedule'
+type ActionType = 'inventory_platform' | 'shelf_schedule' | 'inventory_setting'
 
 const WIZARDS: Record<ActionType, WizardDescriptor> = {
   inventory_platform: inventoryPlatformWizard,
-  shelf_schedule: shelfScheduleWizard
+  shelf_schedule: shelfScheduleWizard,
+  inventory_setting: inventorySettingWizard
 }
 
 interface ScheduleEntry { reserve_date_utc: string; reserve_status: boolean }
@@ -235,6 +237,7 @@ interface RowState {
   inventory_mode?: string
   queue: ScheduleEntry[]
   cleared?: boolean
+  quantityInput?: HTMLInputElement
 }
 
 function showFallback(el: HTMLElement, m: string): void { el.hidden = false; el.textContent = m }
@@ -625,19 +628,38 @@ export function initWizard(app: WizardApp): void {
           // 歸屬字串,故不套用「綠=上架/紅=下架」這組語意(那組留給真的有 boolean 狀態的欄位)。
           const statusWrap = document.createElement('span')
           statusWrap.className = 'bw-status-badge'
-          const dot = document.createElement('span')
-          const statusSpan = document.createElement('span')
-          if (actionType === 'inventory_platform') {
-            const hasPlatform = plan.current_platform != null
-            dot.className = `bw-dot ${hasPlatform ? 'bw-dot-green' : 'bw-dot-gray'}`
-            renderText(statusSpan, hasPlatform ? String(plan.current_platform) : '—')
+          if (actionType === 'inventory_setting') {
+            if (plan.inventory_mode !== 'item_by_amount') {
+              cb.disabled = true
+              renderText(statusWrap, '目前不支援（僅套餐總量模式）')
+              statusWrap.style.fontSize = '0.6875rem'
+              statusWrap.style.color = 'var(--bw-muted)'
+            } else {
+              const input = document.createElement('input')
+              input.type = 'number'
+              input.min = '0'
+              input.step = '1'
+              input.className = 'bw-input'
+              input.style.width = '100%'
+              input.placeholder = plan.current_quantity != null ? String(plan.current_quantity) : '未設'
+              rs.quantityInput = input
+              statusWrap.appendChild(input)
+            }
           } else {
-            const queueLen = Array.isArray(plan.reserve_queue) ? plan.reserve_queue.length : 0
-            dot.className = `bw-dot ${isBundle ? 'bw-dot-gray' : queueLen > 0 ? 'bw-dot-green' : 'bw-dot-gray'}`
-            renderText(statusSpan, isBundle ? '(bundle，不可個別排程)' : queueLen > 0 ? `現有 ${queueLen} 筆排程` : '（無排程）')
+            const dot = document.createElement('span')
+            const statusSpan = document.createElement('span')
+            if (actionType === 'inventory_platform') {
+              const hasPlatform = plan.current_platform != null
+              dot.className = `bw-dot ${hasPlatform ? 'bw-dot-green' : 'bw-dot-gray'}`
+              renderText(statusSpan, hasPlatform ? String(plan.current_platform) : '—')
+            } else {
+              const queueLen = Array.isArray(plan.reserve_queue) ? plan.reserve_queue.length : 0
+              dot.className = `bw-dot ${isBundle ? 'bw-dot-gray' : queueLen > 0 ? 'bw-dot-green' : 'bw-dot-gray'}`
+              renderText(statusSpan, isBundle ? '(bundle，不可個別排程)' : queueLen > 0 ? `現有 ${queueLen} 筆排程` : '（無排程）')
+            }
+            statusWrap.appendChild(dot)
+            statusWrap.appendChild(statusSpan)
           }
-          statusWrap.appendChild(dot)
-          statusWrap.appendChild(statusSpan)
           row.appendChild(statusWrap)
 
           row.appendChild(badge)
@@ -798,7 +820,8 @@ export function initWizard(app: WizardApp): void {
         checked: r.checkbox.checked, is_bundle: r.is_bundle ?? false,
         prod_oid: r.prod_oid, pkg_oid: r.pkg_oid, pkg_name: r.pkg_name,
         item_oid: r.item_oid, supplier_oid: r.supplier_oid,
-        queue: r.queue, cleared: r.cleared ?? false
+        queue: r.queue, cleared: r.cleared ?? false,
+        quantity: r.quantityInput ? (Number.isNaN(r.quantityInput.valueAsNumber) ? undefined : r.quantityInput.valueAsNumber) : undefined
       }))
       const items = WIZARDS[actionType].buildItems(rowInputs, { target }) as Array<Record<string, unknown>>
       if (items.length === 0) {
@@ -916,6 +939,9 @@ export function initWizard(app: WizardApp): void {
     }
 
     if (actionType === 'shelf_schedule' && Array.isArray(d.new_queue)) {
+      return WIZARDS[actionType].renderDiffCard(d, domHelpers)
+    }
+    if (actionType === 'inventory_setting') {
       return WIZARDS[actionType].renderDiffCard(d, domHelpers)
     }
     if (actionType === 'inventory_platform' && 'target' in d) {
@@ -1194,6 +1220,10 @@ export function initWizard(app: WizardApp): void {
           const plan = livePlans.get(String(v.res.item_key))
           if (actionType === 'inventory_platform') {
             if (plan && plan.current_platform != null && plan.current_platform === diff.target) {
+              verified = true
+            }
+          } else if (actionType === 'inventory_setting') {
+            if (plan && plan.current_quantity === diff.target) {
               verified = true
             }
           } else {
