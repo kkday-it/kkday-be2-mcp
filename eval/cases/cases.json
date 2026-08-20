@@ -94,8 +94,8 @@
     }
   },
   {
-    "id": "inv-adjust-read-first",
-    "prompt": "item 289001 供應商 5566 的 8/15 到 8/20 庫存每天加 50",
+    "id": "inv-set-read-first",
+    "prompt": "把 item 289001 供應商 5566 的套餐總量庫存數量設成 100",
     "expect": {
       "kind": "tool",
       "tool": "be2_get_inventory_settings",
