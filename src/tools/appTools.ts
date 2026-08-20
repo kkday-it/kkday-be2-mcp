@@ -24,11 +24,15 @@ export const appGetChangesetViewTool: AppToolDef = {
   async handler(args, ctx: AppToolContext) {
     const rec = ctx.changeSets.get(args.changeset_id)
     if (!rec || rec.creatorLabel !== ctx.userLabel) return NOT_FOUND(args.changeset_id)
-    const results = ['pending_approval', 'approved'].includes(rec.status) ? undefined : ctx.changeSets.getResults(rec.id)
+    const results = ['pending_approval', 'approved', 'scheduled'].includes(rec.status) ? undefined : ctx.changeSets.getResults(rec.id)
     const view: Record<string, unknown> = { changeset_id: rec.id, status: rec.status, action_type: rec.actionType, note: rec.note, diff: { items: rec.diff } }
     if (rec.status === 'pending_approval') {
       // nonce 只在 app-only tool 回傳裡發放（model 讀不到，見 T6）；面板批准操作（Task 11）需帶
       // 這個 nonce + diff_version，把「按下批准」綁到一個 model 拿不到的一次性密碼。
+      view.diff_version = rec.diffVersion
+      view.nonce = ctx.nonces.issue({ changesetId: rec.id, diffVersion: rec.diffVersion, sessionId: ctx.sessionId })
+    } else if (rec.status === 'scheduled') {
+      view.schedule = rec.schedule
       view.diff_version = rec.diffVersion
       view.nonce = ctx.nonces.issue({ changesetId: rec.id, diffVersion: rec.diffVersion, sessionId: ctx.sessionId })
     } else if (results) {
@@ -72,7 +76,7 @@ export const appConfirmChangesetTool: AppToolDef = {
   description: 'Panel-only: approve or reject a change-set the caller created (requires the panel-issued nonce).',
   inputShape: {
     changeset_id: z.string().min(1),
-    decision: z.enum(['approve', 'reject']),
+    decision: z.enum(['approve', 'reject', 'cancel']),
     nonce: z.string().min(1),
     diff_version: z.string().min(1),
     confirmed_keys: z.array(z.string()),
@@ -91,6 +95,11 @@ export const appConfirmChangesetTool: AppToolDef = {
     // nonce 先驗（單次消耗）—— 這是防 model 自我批准的主防線。
     const ok = ctx.nonces.verifyAndConsume(args.nonce, { changesetId: rec.id, diffVersion: args.diff_version, sessionId: ctx.sessionId })
     if (!ok) return makeEnvelope([], [{ key: rec.id, code: 'NONCE_INVALID', message: 'Approval token invalid/expired; reopen the panel to refresh.' }])
+    if (args.decision === 'cancel') {
+      const won = ctx.changeSets.casStatus(rec.id, 'scheduled', 'cancelled', ctx.now())
+      if (!won) return makeEnvelope([], [{ key: rec.id, code: 'NOT_CANCELLABLE', message: 'Only a scheduled change-set can be cancelled.' }])
+      return makeEnvelope([{ changeset_id: rec.id, status: 'cancelled' }])
+    }
     if (args.decision === 'reject') {
       // Finding 2（Task 11 review）: 不可無條件 setStatus——若此 change-set 已透過確認頁(confirm
       // page)以外的路徑批准/執行完畢,面板帶著仍有效的 nonce 按「拒絕」會把已執行結果覆寫成
