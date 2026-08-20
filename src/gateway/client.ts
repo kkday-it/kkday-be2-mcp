@@ -61,4 +61,24 @@ export class GatewayClient {
     }
     return (b as { data?: unknown }).data ?? b
   }
+
+  async post(path: string, accessToken: string, body: unknown): Promise<unknown> {
+    let res: Response
+    try {
+      res = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json', 'content-type': 'application/json', 'x-auth-id': 'be2' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      })
+    } catch (e) {
+      throw new GatewayError('GATEWAY_UNREACHABLE', `POST ${path} failed: ${(e as Error).name}`, 502)
+    }
+    const b = (await res.json().catch(() => ({}))) as Record<string, unknown>
+    if (!res.ok) {
+      const { code, message } = gatewayErrorParts(b, res.status)
+      throw new GatewayError(code, `POST ${path} -> ${res.status}: ${message}`, res.status)
+    }
+    return (b as { data?: unknown }).data ?? b
+  }
 }
