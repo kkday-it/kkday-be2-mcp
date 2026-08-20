@@ -1,8 +1,10 @@
 import { z } from 'zod'
 import type { AppToolDef, AppToolContext } from '../server/appPipeline.js'
-import { makeEnvelope, toEnvelopeError } from './envelope.js'
+import { makeEnvelope, toEnvelopeError, type EnvelopeError } from './envelope.js'
 import { buildBatchView } from './batchView.js'
 import { createChangesetCore, createChangesetInputShape } from '../core/changeset/tools.js'
+import { extractProductInfo } from './findProducts.js'
+import { makeAnnouncementClient } from '../modules/announcement/create/svcB2cClient.js'
 
 // 無 existence leak：找不到 id 與「id 存在但非自己建立」回同一種錯誤，讓外部觀察者無法用
 // error 差異探測他人 change-set 是否存在。
@@ -174,6 +176,33 @@ export const appCreateChangesetTool: AppToolDef = {
   },
 }
 
+export const appGetAnnouncementViewTool: AppToolDef = {
+  name: 'app_get_announcement_view',
+  description: 'Panel-only: load products (names + existing announcement count) for the announcement wizard (registers server-side read-scope for prod_oids).',
+  inputShape: { prod_oids: z.array(z.string().min(1)).min(1).max(10) } as never,
+  annotations: { title: 'Get announcement view', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  async handler(args, ctx: AppToolContext) {
+    ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId)
+    const prodOids = args.prod_oids as string[]
+    const errors: EnvelopeError[] = []
+    const products: Array<{ prod_oid: string; name?: string; existing_count: number }> = []
+    // existing_count 是 best-effort context（live 讀取卡 svc-b2c S2S 403、且 dev/test 可能無
+    // SIT_ANNOUNCE_API_KEY）。client 建不起來或 list 失敗一律靜默降級（existing_count = -1 未知），
+    // 不 push error——scope-gate 只需 read_oids + 商品名；既有公告數讀不到不該讓整個 view 報錯。
+    let client: ReturnType<typeof makeAnnouncementClient> | undefined
+    try { client = makeAnnouncementClient() } catch { /* announcement client unavailable → existing_count 留 -1 */ }
+    for (const oid of prodOids) {
+      let name: string | undefined
+      try { name = extractProductInfo(await ctx.gateway.get(`/product/api/v1/drafts/products/${encodeURIComponent(oid)}/info`, ctx.accessToken)).name }
+      catch (e) { errors.push(toEnvelopeError(oid, e)) }
+      let existing = -1
+      if (client) { try { existing = (await client.listByProdOids(ctx.accessToken, [oid])).length } catch { /* 既有公告數讀不到 → -1 未知，不報錯 */ } }
+      products.push({ prod_oid: oid, name, existing_count: existing })
+    }
+    return makeEnvelope([{ products }], errors, prodOids)
+  },
+}
+
 export const APP_TOOLS: AppToolDef[] = [
-  appGetChangesetViewTool, appGetConfirmLinkTool, appConfirmChangesetTool, appGetBatchViewTool, appCreateChangesetTool,
+  appGetChangesetViewTool, appGetConfirmLinkTool, appConfirmChangesetTool, appGetBatchViewTool, appCreateChangesetTool, appGetAnnouncementViewTool,
 ]
