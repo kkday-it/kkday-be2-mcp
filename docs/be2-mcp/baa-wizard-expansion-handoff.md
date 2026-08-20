@@ -56,7 +56,14 @@ X 與 Y 動的檔不同 → **可真並行**；唯一交會點是 wizard 的 act
 
 ## 4. 每塊接力包
 
-### 塊 C — 商品公告進 wizard 【建議第一塊】
+### 塊 C — 商品公告進 wizard 【✅ 已完成 2026-08-20，Session 1】
+> **DONE**：spec + plan 皆 agy-approved（各 rounds=2），13 tasks TDD 全綠（`feat/bundle-followup` 上 `daa36ae..HEAD` 13 commits）。`npm run ci` **560 passed / 0 skipped**、typecheck clean、build:ui 4 面板、dev `/healthz` 200。final whole-branch review（agy/Gemini）**READY TO MERGE**（1 Critical 已修：`makeAnnouncementClient()` 無 key 時同步 throw 會擋 staging/crash 執行 → 改 try/catch 降級）。
+> 產出：`announcement` module（首個非 product domain，`src/modules/announcement/create/*`）+ module-local svc-b2c client（不碰 core GatewayClient）+ 獨立入口 `be2_open_announcement_wizard` + `announcement-wizard.html` 專用建立表單面板。**不碰 core DoD 達標**（core/changeset 僅 `types.ts` union）。首發=create 全欄位、生效走原生 startTime/endTime、無排程。
+> **未竟（非阻擋）**：live 寫入卡 svc-b2c S2S 403（build+draft 可，live 200 待授權）；POST wire body 為 §6.2 best-guess（UNVERIFIED，待一次真 create 攔）。
+> **Session 2 協調**：本塊走 sibling 面板、**完全沒碰** `batch-wizard.ts`/`batchView.ts`/`openBatchWizard.ts`（Session 2 主戰場）；唯一共用 `types.ts`（不同行、可自動 merge）、`src/modules/index.ts`/`src/server/app.ts`/`appResources.ts`/`devPanelRoutes.ts` 行級小衝突人工對齊。
+> **merge 待使用者拍板**。
+
+### 塊 C — 商品公告進 wizard（原接力包，留存）
 - **契約**：`docs/be2-mcp/sit-announcement-contract.md`（§6 list row + create 必填欄位；envelope `metadata.status "0000"`；header `x-api-key`(已在 `.env` `SIT_ANNOUNCE_API_KEY`) + `user-uuid`=JWT platformId）。
 - **做什麼**：仿 `module-onboarding.md` 建 `announcement` module（svc-b2c 域，非 product 形狀——正好驗 `ActionModule` 介面通用性）；接 wizard 分頁；**生效時間走原生 `startTime`/`endTime` 欄位，不碰 B**。
 - **阻擋**：executor live 寫入卡 svc-b2c 的 **S2S token 403**（`sit-announcement-contract.md` §5）——可 build + 到 draft/staging；live 200 待授權釐清。**POST wire body 確切格式**待一次真 create 攔（list row + create 欄位已足以產 schema/renderer）。
