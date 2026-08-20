@@ -117,6 +117,7 @@ export interface AnnouncementDiffItem {
   start_time: string
   end_time?: string | null
   langs: string[]
+  contents: AnnouncementLangContent[]  // 帶進 diff 供確認頁預覽內文（防 blind write）
   existing_count: number
   noop: false
 }
@@ -573,7 +574,8 @@ export async function computeAnnouncementDiff(
       prod_oids: it.prod_oids,
       product_names: names.every((n, i) => n === it.prod_oids[i]) ? [] : names, // 全部退回 oid 即視為讀取失敗，回空陣列
       name: it.name, is_enabled: it.is_enabled, start_time: it.start_time,
-      end_time: it.end_time ?? null, langs: it.langs, existing_count: existing, noop: false,
+      end_time: it.end_time ?? null, langs: it.langs, contents: it.contents,
+      existing_count: existing, noop: false,
     })
   }
   return out
@@ -621,7 +623,8 @@ const item: AnnouncementCreateItem = {
 }
 const diff: AnnouncementDiffItem = {
   prod_oids: ['7781'], product_names: ['A'], name: '公告', is_enabled: true,
-  start_time: '2026-09-01 00:00:00', end_time: null, langs: ['zh-tw'], existing_count: 0, noop: false,
+  start_time: '2026-09-01 00:00:00', end_time: null, langs: ['zh-tw'],
+  contents: [{ lang: 'zh-tw', content: 'hi' }], existing_count: 0, noop: false,
 }
 
 describe('announcementCreateModule', () => {
@@ -639,10 +642,11 @@ describe('announcementCreateModule', () => {
   })
   it('scopeOids = prod_oids', () => { expect(m.scopeOids(item)).toEqual(['7781']) })
   it('itemKey (item and diff) agree', () => { expect(m.itemKey(item)).toBe(m.itemKey(diff as any)) })
-  it('diffVersion stable + sensitive to name', () => {
+  it('diffVersion stable + sensitive to name and content', () => {
     const v1 = m.diffVersion([diff])
     expect(v1).toBe(m.diffVersion([{ ...diff, existing_count: 99 }])) // existing_count NOT in hash
     expect(v1).not.toBe(m.diffVersion([{ ...diff, name: '別的' }]))
+    expect(v1).not.toBe(m.diffVersion([{ ...diff, contents: [{ lang: 'zh-tw', content: 'changed' }] }]))
   })
 })
 ```
@@ -699,10 +703,12 @@ export const announcementCreateModule: ActionModule<AnnouncementCreateItem, Anno
   validate: (items) => validateAnnouncementItems(items),
   computeDiff: (ctx: DiffCtx, items) => computeAnnouncementDiff(items, ctx, makeAnnouncementClient()),
   diffVersion: (diff) => {
-    // create = target-only（無 live current 需綁）。hash 目標 payload；existing_count 是 context、不納入。
-    const canon = diff.map(d =>
-      `announce:${d.name}:${[...d.prod_oids].sort().join(',')}:${d.start_time}:${d.end_time ?? ''}:${d.is_enabled}:${[...d.langs].sort().join(',')}`
-    ).sort().join('|')
+    // create = target-only（無 live current 需綁）。hash 目標 payload（含 contents，內文改動要使批准 stale）；
+    // existing_count 是 context、不納入。contents 依 lang 排序後序列化，順序無關。
+    const canon = diff.map(d => {
+      const contents = [...d.contents].sort((a, b) => (a.lang < b.lang ? -1 : 1)).map(c => `${c.lang}=${c.content}`).join('§')
+      return `announce:${d.name}:${[...d.prod_oids].sort().join(',')}:${d.start_time}:${d.end_time ?? ''}:${d.is_enabled}:${[...d.langs].sort().join(',')}:${contents}`
+    }).sort().join('|')
     return createHash('sha256').update(canon).digest('hex')
   },
   itemKey: itemKey as ActionModule<AnnouncementCreateItem, AnnouncementDiffItem>['itemKey'],
@@ -886,7 +892,8 @@ import type { AnnouncementDiffItem, ChangeSetRecord } from '../../src/core/chang
 
 const diff: AnnouncementDiffItem = {
   prod_oids: ['7781'], product_names: ['<商品A>'], name: '<b>颱風</b>', is_enabled: true,
-  start_time: '2026-09-01 00:00:00', end_time: null, langs: ['zh-tw'], existing_count: 3, noop: false,
+  start_time: '2026-09-01 00:00:00', end_time: null, langs: ['zh-tw'],
+  contents: [{ lang: 'zh-tw', content: '颱風<script>期間暫停' }], existing_count: 3, noop: false,
 }
 const rec = { id: 'cs1', actionType: 'announcement' } as unknown as ChangeSetRecord
 
@@ -894,6 +901,7 @@ describe('announcement renderConfirm', () => {
   it('escapes untrusted values (no raw HTML injection)', () => {
     const v = renderConfirm(rec, [diff], 'ver1', '')
     expect(v.tableHtml).not.toContain('<b>颱風</b>')
+    expect(v.tableHtml).not.toContain('<script>期間')
     expect(v.tableHtml).toContain('&lt;b&gt;')
     expect(v.tableHtml).toContain('data-diff-version="ver1"')
   })
@@ -901,6 +909,16 @@ describe('announcement renderConfirm', () => {
     const v = renderConfirm(rec, [diff], 'ver1', '')
     expect(v.intro).toMatch(/前台/)
     expect(v.tableHtml).toContain('3')
+  })
+  it('shows per-lang content preview (escaped)', () => {
+    const v = renderConfirm(rec, [diff], 'ver1', '')
+    expect(v.tableHtml).toContain('zh-tw')
+    expect(v.tableHtml).toContain('期間暫停')
+  })
+  it('shows dual timezone (UTC + GMT+8) for start_time', () => {
+    const v = renderConfirm(rec, [diff], 'ver1', '')
+    expect(v.tableHtml).toContain('2026-09-01 00:00:00 UTC')
+    expect(v.tableHtml).toContain('2026-09-01 08:00:00 (GMT+8)')
   })
 })
 ```
@@ -918,27 +936,43 @@ import { esc } from '../../../core/changeset/html.js'
 import type { ChangeSetRecord, AnnouncementDiffItem } from '../../../core/changeset/types.js'
 import type { ConfirmView } from '../../../core/changeset/module.js'
 
+// 伺服器端雙時區顯示（無外部庫、固定 GMT+8；be2 operator 多在台北）。start/end 存 UTC+0 字串，
+// 加 8h 顯示台北時間，避免排程時間看錯（spec §5.7/§10「時間雙時區」）。DST 不適用（台北無 DST）。
+function dualTz(utcStr: string): string {
+  const ms = Date.parse(utcStr.replace(' ', 'T') + 'Z')
+  if (Number.isNaN(ms)) return `${utcStr} UTC`
+  const l = new Date(ms + 8 * 3600_000)
+  const p = (n: number) => String(n).padStart(2, '0')
+  const local = `${l.getUTCFullYear()}-${p(l.getUTCMonth() + 1)}-${p(l.getUTCDate())} ${p(l.getUTCHours())}:${p(l.getUTCMinutes())}:${p(l.getUTCSeconds())}`
+  return `${utcStr} UTC / ${local} (GMT+8)`
+}
+
 export function renderConfirm(_rec: ChangeSetRecord, diff: AnnouncementDiffItem[], diffVersion: string, banner: string): ConfirmView {
   const intro = `
-<p><strong style="color:#b00">商品公告會即時對前台顯示</strong>;請確認內容與生效時間（Start/End Time 為 UTC+0）。</p>${banner}`
+<p><strong style="color:#b00">商品公告會即時對前台顯示</strong>;請確認內容與生效時間。</p>${banner}`
 
   const rows = diff.map(d => {
     const prods = d.product_names.length
       ? d.product_names.map(esc).join('、')
       : d.prod_oids.map(esc).join('、')
     const existing = d.existing_count < 0 ? '未知' : String(d.existing_count)
+    const time = esc(dualTz(d.start_time)) + (d.end_time ? '<br>~ ' + esc(dualTz(d.end_time)) : '')
+    // per-lang 內文預覽（untrusted → esc；換行保留）。
+    const contentPreview = d.contents.map(c =>
+      `<div><strong>${esc(c.lang)}</strong>: <span style="white-space:pre-wrap">${esc(c.content)}</span></div>`).join('')
     return `<tr>` +
       `<td>${esc(d.name)}</td>` +
       `<td>${prods}<br><small>${d.prod_oids.map(esc).join(',')}</small></td>` +
       `<td>${d.is_enabled ? '啟用' : '停用'}</td>` +
-      `<td>${esc(d.start_time)}${d.end_time ? ' ~ ' + esc(d.end_time) : ''} (UTC+0)</td>` +
+      `<td>${time}</td>` +
       `<td>${d.langs.map(esc).join(', ')}</td>` +
+      `<td>${contentPreview}</td>` +
       `<td>${existing}</td>` +
       `</tr>`
   }).join('')
 
   const tableHtml = `<table data-diff-version="${esc(diffVersion)}">` +
-    `<tr><th>公告</th><th>商品</th><th>狀態</th><th>生效時間</th><th>語系</th><th>既有公告數</th></tr>${rows}</table>`
+    `<tr><th>公告</th><th>商品</th><th>狀態</th><th>生效時間</th><th>語系</th><th>內文預覽</th><th>既有公告數</th></tr>${rows}</table>`
   return { intro, tableHtml }
 }
 ```
@@ -1067,7 +1101,13 @@ Expected: FAIL — export 不存在。
 
 - [ ] **Step 3: Implement**
 
-在 `src/tools/appTools.ts` 加（import 區加 `extractProductInfo`、`makeAnnouncementClient`）：
+在 `src/tools/appTools.ts` 頂部 import 區加：
+```ts
+import { extractProductInfo } from './findProducts.js'
+import { makeAnnouncementClient } from '../modules/announcement/create/svcB2cClient.js'
+import { type EnvelopeError } from './envelope.js'   // 若尚未 import；toEnvelopeError 該檔已有
+```
+再加 tool：
 ```ts
 export const appGetAnnouncementViewTool: AppToolDef = {
   name: 'app_get_announcement_view',
@@ -1365,3 +1405,5 @@ git commit -m "test(announcement): scope-gate security + eval cases"
 - 唯一共用檔 `src/core/changeset/types.ts`（Session 2 動 inventory union、本 session 動 announcement union）— 不同行、可自動 merge。
 - `src/modules/index.ts`、`src/server/app.ts`、`src/server/appResources.ts` 若兩邊都加行 → 人工對齊那幾行。
 - 本 session **不碰** `batch-wizard.ts`/`batchView.ts`/`openBatchWizard.ts`（Session 2 主戰場）。
+
+<!-- agy-peer-reviewed: 2026-08-20T07:16:41Z rounds=2 verdict=approved -->

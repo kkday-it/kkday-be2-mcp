@@ -21,6 +21,8 @@
 - `2026-08-20-be2-mcp-announcement-wizard-design.md`（全檔，新建）/ 商品公告進 wizard 設計：新 `announcement` domain module（首個非 product 形狀）+ module-local svc-b2c client（不碰 core GatewayClient）+ 獨立入口 `be2_open_announcement_wizard` + 專用建立表單面板 / 把 BAA 塊 C（公告）補進 MCP，驗 `ActionModule` 介面對非 product domain 的通用性。首發動作=create 全欄位；生效走原生 startTime/endTime、不做排程；live 寫入卡 svc-b2c S2S 403（build+draft 可）。3 個關鍵決策經使用者拍板：(1) create 全欄位 (2) 專用建立表單面板 (3) 獨立入口 sibling tool（因 uiResourceUri 一 tool 綁一面板、無法動態切，且避 Session 2 衝突）。
 - 同檔 §4.3/§5.1/§5.9/§8/§10（agy review round 1 兩修一納）/ (1) **§4.3**：user-uuid header 改由 accessToken 自解 platformId（讀 diff/view/寫 executor 三處統一），原設計「從 ExecCtx 拿 modifyUser」對讀取路徑不成立（DiffCtx/AppToolContext 刻意不含 modifyUser、只含 accessToken）；(2) **§5.9**：通用 changeset-panel.ts 的 itemKeyOf 硬寫只認 inv/shelf，announcement diff（僅 prod_oids[]）會 fallback 回 "undefined" → CONFIRMED_KEYS_MISMATCH 永遠無法批准 → 加 announcement 分支；(3) §5.1 itemKey 用 [...prod_oids].sort() 非就地 mutate / agy 抓到讀取路徑無 modifyUser、通用面板 itemKey fall-through（rounds=2 APPROVED）。
 
+- 同檔 §5.2/§5.7（plan 的 agy review round 1 兩修，回頭補齊 spec 內部一致性）/ (1) §5.2 `AnnouncementDiffItem` 補 `contents` 欄位——原本 §5.5 hash 與 §5.7 renderer 都引用 contents 但 diff item 沒帶 → 確認頁看不到內文 = blind write；(2) §5.7 renderer 明訂 start/end 走**伺服器端雙時區**（UTC + GMT+8 固定偏移）/ agy 審 plan 時抓到 diff item 缺 contents（內部矛盾）與確認頁只顯示 UTC 單時區（§5.7/§10 要雙時區）。
+
 ## 2026-08-19
 
 - 建立本 CHANGELOG（追溯補記上述 2026-08-16/18 的 spec 異動）/ 落實新增的「規格變更」規則。

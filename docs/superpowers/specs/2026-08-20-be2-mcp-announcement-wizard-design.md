@@ -101,6 +101,7 @@ export interface AnnouncementDiffItem {
   start_time: string
   end_time?: string | null
   langs: string[]
+  contents: AnnouncementLangContent[] // 帶進 diff 供確認頁 per-lang 內文預覽（防 blind write；改自 agy plan review）
   existing_count: number              // 這些商品上既有公告數（context，非 blocker）
   noop: false                         // create 永不 noop
 }
@@ -128,7 +129,7 @@ create 為 target-only（無 live current 需綁）。hash 目標 payload（name
 成功 = HTTP 200 且 `metadata.status==='0000'` → `ItemResult{status:'done', after:createdRow}`。S2S 403 → `status:'failed', error_code`（預期，直到授權 grant）。`modify_user` = `ExecCtx.modifyUser`（= JWT platformId，通則）。多筆 item 逐筆序列化（announcement 無跨筆批次端點）。
 
 ### 5.7 `renderer.ts` — renderConfirm（確認頁）
-呈現將建立的公告：name、商品清單（product_names + prod_oids）、is_enabled、start/end（雙時區顯示）、langs、per-lang content 預覽、`existing_count` context。**高風險紅字 banner**：公告會即時對前台顯示（customer-facing）。
+呈現將建立的公告：name、商品清單（product_names + prod_oids）、is_enabled、start/end（**伺服器端雙時區** UTC + GMT+8，固定偏移、無外部庫；防排程時間看錯）、langs、per-lang content 預覽（來自 diff item 的 `contents`，untrusted → esc）、`existing_count` context。**高風險紅字 banner**：公告會即時對前台顯示（customer-facing）。
 
 ### 5.8 `ui.ts` + `module.ts`
 `module.ts` 拼裝 `ActionModule`（actionType `announcement`、itemSchema zod、authz `{codes:['product.announcement.update'], onMissing:'warn'}`、scopeOids=`prod_oids`、scopeErrorKey、invalidItemsMessage、scopeNotReadMessage、validate/computeDiff/diffVersion/itemKey/execute/renderConfirm）。announcement 面板為專用 UI（見 §7），故 `wizard` descriptor（grid 型）**不設**；面板走自訂 flow。
