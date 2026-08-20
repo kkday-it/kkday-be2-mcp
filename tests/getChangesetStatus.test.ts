@@ -30,4 +30,26 @@ describe('be2_get_changeset_status', () => {
     expect(env.items).toEqual([])
     expect(env.errors[0]?.code).toBe('NOT_FOUND')
   })
+  it('scheduled change-set returns schedule info and omits results', async () => {
+    const store = new ChangeSetStore(openDb(':memory:'), { now: () => 1000 })
+    store.create({ id: 'cs2', creatorLabel: 'owner@kkday.com', creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_product',
+      items: [{ prod_oid: '1', target_is_active: false }], diff: [{ prod_oid: '1', target_is_active: false, no_op: false, current_is_active: true }],
+      diffVersion: 'v1', status: 'scheduled', createdAt: 1000,
+      schedule: { executeAtUtc: 2000, wall: '2026-08-20 12:00:00', tz: 'Asia/Taipei' }
+    })
+    const env = await getChangesetStatusTool.handler({ changeset_id: 'cs2' }, ctxFor(store, 'owner@kkday.com'))
+    const item = env.items[0] as any
+    expect(item.status).toBe('scheduled')
+    expect(item.schedule).toEqual({ execute_at_utc: 2000, wall: '2026-08-20 12:00:00', tz: 'Asia/Taipei' })
+    expect(item.results).toBeUndefined()
+  })
+  it('cancelled change-set returns cancelled status', async () => {
+    const store = new ChangeSetStore(openDb(':memory:'), { now: () => 1000 })
+    store.create({ id: 'cs3', creatorLabel: 'owner@kkday.com', creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_product',
+      items: [{ prod_oid: '1', target_is_active: false }], diff: [{ prod_oid: '1', target_is_active: false, no_op: false, current_is_active: true }],
+      diffVersion: 'v1', status: 'cancelled', createdAt: 1000 })
+    const env = await getChangesetStatusTool.handler({ changeset_id: 'cs3' }, ctxFor(store, 'owner@kkday.com'))
+    const item = env.items[0] as any
+    expect(item.status).toBe('cancelled')
+  })
 })

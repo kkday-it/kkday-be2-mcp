@@ -32,6 +32,8 @@ export function runOAuthPurge(db: Database.Database, now: number): OAuthPurgeRes
   const ghostRes = db.prepare(`
     DELETE FROM be2_identities
     WHERE identity_id NOT IN (SELECT DISTINCT identity_id FROM credentials)
+    -- spec §6 purge 保護
+    AND identity_id NOT IN (SELECT executor_identity_id FROM change_sets WHERE status='scheduled' AND executor_identity_id IS NOT NULL)
   `).run()
   return {
     expiredAuthCodes: codeRes.changes,

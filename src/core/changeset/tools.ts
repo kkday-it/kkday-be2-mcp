@@ -161,7 +161,7 @@ export const createChangesetTool: L2ToolDef = {
 
 export const getChangesetStatusTool: L2ToolDef = {
   name: 'be2_get_changeset_status',
-  description: 'Query a change-set you created: its approval/execution status and per-item before/after results. Read-only.',
+  description: 'Query a change-set you created: its approval/execution status and per-item before/after results. Read-only. Scheduled change-sets report { schedule } with the dispatch time.',
   inputShape: { changeset_id: z.string().min(1) },
   uiResourceUri: 'ui://be2/changeset-panel.html',
   annotations: {
@@ -174,7 +174,9 @@ export const getChangesetStatusTool: L2ToolDef = {
   async handler(args, ctx) {
     const rec = ctx.changeSets.get(args.changeset_id as string)
     if (!rec || rec.creatorLabel !== ctx.userLabel) return makeEnvelope([], [{ key: args.changeset_id as string, code: 'NOT_FOUND', message: 'No such change-set for this user.' }])
-    const results = ['pending_approval', 'approved'].includes(rec.status) ? undefined : ctx.changeSets.getResults(rec.id)
-    return makeEnvelope([{ changeset_id: rec.id, status: rec.status, action_type: rec.actionType, note: rec.note, diff: { items: rec.diff }, ...(results ? { results } : {}) }])
+    const results = ['pending_approval', 'approved', 'scheduled'].includes(rec.status) ? undefined : ctx.changeSets.getResults(rec.id)
+    return makeEnvelope([{ changeset_id: rec.id, status: rec.status, action_type: rec.actionType, note: rec.note,
+      ...(rec.schedule ? { schedule: { execute_at_utc: rec.schedule.executeAtUtc, wall: rec.schedule.wall, tz: rec.schedule.tz } } : {}),
+      diff: { items: rec.diff }, ...(results ? { results } : {}) }])
   },
 }

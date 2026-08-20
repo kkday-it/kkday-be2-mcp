@@ -101,4 +101,28 @@ describe('runOAuthPurge', () => {
 
     expect(second).toEqual({ expiredAuthCodes: 0, expiredRefresh: 0, ghostIdentities: 0 })
   })
+
+  it('保護 scheduled change-set 引用的 ghost identity，轉 cancelled 後再 purge 會清', () => {
+    const db = openDb(':memory:')
+    const identities = new IdentityStore(db)
+    seedIdentity(identities, 'scheduled-ghost')
+
+    db.prepare(`
+      INSERT INTO change_sets (id, creator_label, creator_bearer_hash, session_id, action_type, items_json, diff_json, diff_version, status, created_at, executor_identity_id)
+      VALUES (?, 'u', 'h', 's', 't', '[]', '{}', 'v1', 'scheduled', 1, ?)
+    `).run('cs1', 'scheduled-ghost')
+
+    // 第一次：雖然無 credential，但被 scheduled 的 executor 引用 → 不能清
+    const result1 = runOAuthPurge(db, 5000)
+    expect(result1.ghostIdentities).toBe(0)
+    expect(identities.get('scheduled-ghost')).toBeDefined()
+
+    // 轉 cancelled
+    db.prepare("UPDATE change_sets SET status = 'cancelled' WHERE id = 'cs1'").run()
+
+    // 第二次：已經不是 scheduled → 被清
+    const result2 = runOAuthPurge(db, 5000)
+    expect(result2.ghostIdentities).toBe(1)
+    expect(identities.get('scheduled-ghost')).toBeUndefined()
+  })
 })
