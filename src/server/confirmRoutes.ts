@@ -116,7 +116,12 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     if (!rec || !sameUser(rec.creatorLabel, who.userLabel) || (rec.status !== 'pending_approval' && rec.status !== 'scheduled')) { res.status(404).send('not found'); return }
     
     if (rec.status === 'scheduled') {
-      const banner = `<p style="color:#2a2;font-weight:bold;margin-bottom:1rem">已排程:將於 ${esc(rec.schedule!.wall)}(${esc(rec.schedule!.tz)})執行(登出不影響執行)</p>`
+      // 倒數（spec §8：wall+tz+倒數）——頁面載入當下的快照（server-rendered，非 live tick）。用 deps.now()
+      // 以利測試；批准已綁定、倒數僅資訊性。
+      const remainMs = rec.schedule!.executeAtUtc - deps.now()
+      const mins = Math.round(remainMs / 60_000)
+      const countdown = remainMs <= 0 ? '即將執行' : mins < 1 ? '不到 1 分鐘後執行' : `約 ${mins} 分鐘後執行`
+      const banner = `<p style="color:#2a2;font-weight:bold;margin-bottom:1rem">已排程:將於 ${esc(rec.schedule!.wall)}(${esc(rec.schedule!.tz)})執行 —— ${esc(countdown)}(登出不影響執行)</p>`
       const view = getModule(rec.actionType).renderConfirm(rec, rec.diff, rec.diffVersion, banner)
       const shellHtml = `<!doctype html><meta charset=utf-8><title>確認變更 ${esc(rec.id)}</title>
 <style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}button{padding:8px 16px;font-size:1rem}</style>

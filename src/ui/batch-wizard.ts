@@ -388,6 +388,7 @@ export function initWizard(app: WizardApp): void {
 
     let schedToggle: HTMLInputElement | undefined
     let schedInput: HTMLInputElement | undefined
+    let schedTzLabel: HTMLElement | undefined   // §9：載入後填入實際 BE2_TZ（app_get_batch_view.schedule_tz）
     if (WIZARDS[actionType].schedulable) {
       const schedWrap = document.createElement('label')
       schedWrap.className = 'bw-row-inline'
@@ -397,6 +398,7 @@ export function initWizard(app: WizardApp): void {
       schedInput = document.createElement('input'); schedInput.type = 'datetime-local'; schedInput.dataset.role = 'schedWall'; schedInput.hidden = true
       schedInput.className = 'bw-input'
       const tzLabel = document.createElement('span'); renderText(tzLabel, '伺服器時區'); tzLabel.hidden = true; tzLabel.style.fontSize = '.8125rem'; tzLabel.style.color = 'var(--bw-muted)'
+      schedTzLabel = tzLabel   // 由 doLoad 於載入後改成實際時區值
       
       schedToggle.onchange = () => {
         if (schedInput) schedInput.hidden = !schedToggle!.checked
@@ -425,7 +427,10 @@ export function initWizard(app: WizardApp): void {
         const r = await app.callServerTool({ name: 'app_get_batch_view', arguments: { action_type: actionType, prod_oids: prodOids } })
         if (r.isError) { showFallback(fallbackEl, '載入失敗'); return }
         const structuredContent = r.structuredContent as { items?: unknown[], errors?: Array<{code?: string, message?: string}> } | undefined
-        const products = (structuredContent?.items?.[0] as { products?: unknown[] } | undefined)?.products ?? []
+        const item0 = structuredContent?.items?.[0] as { products?: unknown[]; schedule_tz?: string } | undefined
+        const products = item0?.products ?? []
+        // §9：把排程時區標籤從通用「伺服器時區」換成實際 BE2_TZ 值（若後端有帶）。
+        if (item0?.schedule_tz && schedTzLabel) renderText(schedTzLabel, `時區：${item0.schedule_tz}`)
         
         const nfErrors = (structuredContent?.errors ?? []).filter(e => e.code === 'PRODUCT_NOT_FOUND')
         if (nfErrors.length > 0) {

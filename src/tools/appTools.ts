@@ -152,7 +152,9 @@ export const appGetBatchViewTool: AppToolDef = {
     const { products, errors, read_oids } = await buildBatchView(
       ctx.gateway, ctx.accessToken, args.action_type as BatchViewActionType, args.prod_oids as string[],
     )
-    return makeEnvelope([{ products }], errors, read_oids)
+    // schedule_tz（spec §9：面板須標示實際 BE2_TZ 而非通用「伺服器時區」）——由 ctx 帶出給面板 step-1
+    // 顯示。排程輸入的 wall-clock 即以此 tz 於 server 端換算 UTC。
+    return makeEnvelope([{ products, schedule_tz: ctx.scheduleTz }], errors, read_oids)
   },
 }
 

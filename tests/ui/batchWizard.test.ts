@@ -1276,6 +1276,7 @@ describe('batch-wizard panel: inventory_setting 排程(塊 B)', () => {
         { pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', inventory_mode: 'item_by_amount', current_quantity: 10 },
       ],
     }],
+    schedule_tz: 'Asia/Taipei',
   }])
 
   it('schedulable 分頁(inventory_setting)顯示排程切換,勾選才露出 datetime;shelf_schedule 不顯示', async () => {
@@ -1291,6 +1292,9 @@ describe('batch-wizard panel: inventory_setting 排程(塊 B)', () => {
     schedToggle.checked = true
     schedToggle.onchange!()
     expect(schedWall.hidden).toBe(false)
+    // §9：時區標籤顯示實際 BE2_TZ 值（來自 app_get_batch_view.schedule_tz），非通用「伺服器時區」
+    expect(wizardEl.textContent).toContain('時區：Asia/Taipei')
+    expect(wizardEl.textContent).not.toContain('伺服器時區')
 
     // 對照組:非 schedulable(shelf_schedule)不渲染切換
     wizardEl.children.length = 0

@@ -88,6 +88,9 @@ describe('scheduleCancel (confirm routes)', () => {
     expect(res.status).toBe(200)
     const text = await res.text()
     expect(text).toContain('已排程:將於 2026-09-01T09:00(Asia/Taipei)執行')
+    // §8：banner 含倒數區段（值視 now 而定：約 N 分鐘後 / 即將 / 不到 1 分鐘）
+    expect(text).toContain('執行 —— ')
+    expect(text).toMatch(/分鐘後執行|即將執行/)
     expect(text).toContain('取消排程')
     expect(text).toContain('action="/confirm/cs-1/cancel"')
 

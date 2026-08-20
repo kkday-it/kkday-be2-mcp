@@ -142,7 +142,7 @@ export const createChangesetTool: L2ToolDef = {
     'and approve or reject it there; only then does the write execute. You CANNOT approve or execute this change-set ' +
     'yourself — report the changeset_id and the diff to the user and tell them to open the confirm page to decide. ' +
     'Only pass oids you already looked up this session. ' +
-    'inventory_setting stages a套餐總量 (item_by_amount) fullday inventory SET ({item_oid, supplier_oid, quantity}) — overwrites the plan\'s fullday remaining quantity; only item_by_amount mode is supported (SKU / by-date modes are rejected). Read the item inventory first. ' +
+    'inventory_setting stages an item-total (套餐總量, item_by_amount) fullday inventory SET ({item_oid, supplier_oid, quantity}) — overwrites the plan\'s fullday remaining quantity; only item_by_amount mode is supported (SKU / by-date modes are rejected). Read the item inventory first. ' +
     'Before staging, you MUST confirm 3 things with the user: (1) explicit plan list (confirm each pkg_oid, no vague "all"); ' +
     '(2) whether to apply immediately (shelf_toggle_plan) or schedule (shelf_schedule); ' +
     '(3) if scheduling, the exact date, time, and TIMEZONE (ask if not provided, do not guess). ' +
