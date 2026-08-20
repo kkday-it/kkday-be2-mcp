@@ -1313,10 +1313,17 @@ describe('batch-wizard panel: inventory_setting 排程(塊 B)', () => {
     }])
     // 真實 server 對排程批准只回 {changeset_id, status:'scheduled'}——無 results(面板需自行合成列)
     const confirmResult = envelope([{ changeset_id: 'cs-s', status: 'scheduled' }])
+    // 仿真 server:每次 view 發「新鮮」nonce(單次消耗語意)——取消流程必須重新 view 拿新 nonce,
+    // 不得複用批准時已消耗的那顆(review Critical 2a)。
+    let viewCalls = 0
     const { app, calls, fireLaunch } = makeFakeApp({
       app_get_batch_view: () => invBatchView,
       app_create_changeset: () => createResult,
-      app_get_changeset_view: () => viewResult,
+      app_get_changeset_view: () => {
+        viewCalls++
+        const items = (viewResult.items as Array<Record<string, unknown>>)
+        return envelope([{ ...items[0], nonce: `n-${viewCalls}`, status: viewCalls === 1 ? 'pending_approval' : 'scheduled' }])
+      },
       app_confirm_changeset: () => confirmResult,
     })
     initWizard(app as never)
@@ -1348,6 +1355,7 @@ describe('batch-wizard panel: inventory_setting 排程(塊 B)', () => {
     await flush()
     const confirmCall = calls.find(c => c.name === 'app_confirm_changeset')!
     expect(confirmCall.arguments.expected_execute_at_utc).toBe(1756717200000)
+    expect(confirmCall.arguments.nonce).toBe('n-1')
 
     // Step 4:合成的 scheduled 列 + 取消按鈕
     const rows = wizardEl.querySelectorAll('.bw-ledger-row')
@@ -1357,8 +1365,69 @@ describe('batch-wizard panel: inventory_setting 排程(塊 B)', () => {
     expect(cancelBtn).toBeDefined()
     cancelBtn.onclick!()
     await flush()
+    // 取消前先重新 view 取新鮮 nonce(n-2),不重用批准時已消耗的 n-1
+    expect(viewCalls).toBe(2)
     const cancelCall = calls.find(c => c.name === 'app_confirm_changeset' && c.arguments.decision === 'cancel')!
-    expect(cancelCall.arguments).toMatchObject({ changeset_id: 'cs-s', decision: 'cancel', confirmed_keys: [] })
+    expect(cancelCall.arguments).toMatchObject({ changeset_id: 'cs-s', decision: 'cancel', confirmed_keys: [], nonce: 'n-2' })
     expect(rows[0].textContent).toContain('取消排程')
+  })
+
+  it('取消失敗(server 回錯誤信封)不得假成功:顯示錯誤、按鈕恢復可按', async () => {
+    const { app, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => invBatchView,
+      app_create_changeset: () => envelope([{ changeset_id: 'cs-e' }]),
+      app_get_changeset_view: () => envelope([{
+        changeset_id: 'cs-e', status: 'pending_approval', nonce: 'n-x', diff_version: 'dv-1',
+        schedule: { execute_at_utc: 1756717200000, wall: '2026-09-01T09:00', tz: 'Asia/Taipei' },
+        diff: { items: [{ item_oid: 'I1', supplier_oid: 'S1', current: 10, target: 20, no_op: false }] },
+      }]),
+      app_confirm_changeset: (args: Record<string, unknown>) =>
+        args.decision === 'cancel'
+          ? envelope([], [{ key: 'cs-e', code: 'NOT_CANCELLABLE', message: 'Only a scheduled change-set can be cancelled.' }])
+          : envelope([{ changeset_id: 'cs-e', status: 'scheduled' }]),
+    })
+    initWizard(app as never)
+    fireLaunch('inventory_setting', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    const cbA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    cbA.checked = true
+    cbA.onclick!()
+    ;(wizardEl.querySelectorAll('input[type=number]')[0] as unknown as { valueAsNumber: number }).valueAsNumber = 20
+    const schedToggle = findByRole(wizardEl, 'schedToggle')
+    schedToggle.checked = true
+    schedToggle.onchange!()
+    findByRole(wizardEl, 'schedWall').value = '2026-09-01T09:00'
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+    findByRole(wizardEl, 'toApproveBtn').onclick!()
+    findByRole(wizardEl, 'approveBtn').onclick!()
+    await flush()
+    const rows = wizardEl.querySelectorAll('.bw-ledger-row')
+    const cancelBtn = findByRole(rows[0], 'cancelBtn')
+    cancelBtn.onclick!()
+    await flush()
+    // 假成功防線:狀態藥丸仍是「已排程」、按鈕未隱藏且恢復可按
+    expect(rows[0].textContent).toContain('已排程')
+    expect(cancelBtn.hidden).not.toBe(true)
+    expect(cancelBtn.disabled).toBe(false)
+  })
+
+  it('勾排程但未填時間:doNext 擋下,不建立 change-set(不靜默轉立即執行)', async () => {
+    const { app, calls, fireLaunch } = makeFakeApp({ app_get_batch_view: () => invBatchView })
+    initWizard(app as never)
+    fireLaunch('inventory_setting', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    const cbA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    cbA.checked = true
+    cbA.onclick!()
+    ;(wizardEl.querySelectorAll('input[type=number]')[0] as unknown as { valueAsNumber: number }).valueAsNumber = 20
+    const schedToggle = findByRole(wizardEl, 'schedToggle')
+    schedToggle.checked = true
+    schedToggle.onchange!()
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+    expect(calls.some(c => c.name === 'app_create_changeset')).toBe(false)
   })
 })

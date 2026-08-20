@@ -860,6 +860,12 @@ export function initWizard(app: WizardApp): void {
         }
         return
       }
+      // 勾了排程但沒填時間:必須擋下,不能靜默轉「立即執行」——那正是使用者勾排程想避開的
+      // 最危險路徑(庫存立即生效並清快取)。(Task 10 review Important)
+      if (schedToggle?.checked && !schedInput?.value) {
+        showFallback(fallbackEl, '已勾選排程但未填時間——請填寫排程時間,或取消排程勾選改為立即執行')
+        return
+      }
       clearFallback(fallbackEl)
       statusEl.textContent = '建立變更中…'
       const schedule = schedToggle?.checked && schedInput?.value ? { wall: schedInput.value } : undefined
@@ -1030,7 +1036,7 @@ export function initWizard(app: WizardApp): void {
     const card = document.createElement('div')
     card.className = 'bw-card'
     const desc = document.createElement('p')
-    const currentSchedule = lastViewRec?.schedule as { execute_at_utc: string; wall: string; tz: string } | undefined
+    const currentSchedule = lastViewRec?.schedule as { execute_at_utc: number; wall: string; tz: string } | undefined
     if (currentSchedule) {
       renderText(desc, `將於 ${currentSchedule.wall} (${currentSchedule.tz}) 執行。按下後將送出批准。`)
     } else {
@@ -1185,14 +1191,35 @@ export function initWizard(app: WizardApp): void {
         const cancelBtn = secondaryBtn('取消排程', 'cancelBtn', async () => {
           cancelBtn.disabled = true
           try {
-            await app.callServerTool({
+            // 批准時的 nonce 已被單次消耗——取消前必須重新 view 取新鮮 nonce(scheduled 狀態
+            // 的 view 會 issue 新 nonce)。(Task 10 review Critical 2a)
+            const vr = await app.callServerTool({ name: 'app_get_changeset_view', arguments: { changeset_id: changesetId! } })
+            const vEnv = vr.structuredContent
+            const vRec = vEnv?.items?.[0] as { nonce?: string; diff_version?: string } | undefined
+            if (vr.isError || vEnv?.errors?.[0] || !vRec?.nonce) {
+              showFallback(fallbackEl, `取消失敗:${vEnv?.errors?.[0]?.code ?? '無法取得取消憑證'}`)
+              cancelBtn.disabled = false
+              return
+            }
+            const r = await app.callServerTool({
               name: 'app_confirm_changeset',
-              arguments: { changeset_id: changesetId!, decision: 'cancel', nonce: currentNonce!, diff_version: currentDiffVersion!, confirmed_keys: [] }
+              arguments: { changeset_id: changesetId!, decision: 'cancel', nonce: vRec.nonce, diff_version: vRec.diff_version ?? currentDiffVersion!, confirmed_keys: [] }
             })
+            // callServerTool 對錯誤信封是正常 resolve——必須驗 isError/errors,否則 server 取消
+            // 失敗(NONCE_INVALID/NOT_CANCELLABLE)時 UI 仍宣稱已取消 = 假陽性,排程照跑。
+            // (Task 10 review Critical 2b)
+            const env = r.structuredContent
+            const err = env?.errors?.[0]
+            if (r.isError || err) {
+              showFallback(fallbackEl, `取消失敗:${err?.code ?? ''} ${err?.message ?? ''}`)
+              cancelBtn.disabled = false
+              return
+            }
             renderText(statusSpan, '取消排程')
             statusSpan.className = 'bw-ledger-status bw-ledger-status-skip'
             cancelBtn.hidden = true
           } catch(e) {
+            showFallback(fallbackEl, '取消失敗:' + String(e))
             cancelBtn.disabled = false
           }
         })
