@@ -37,7 +37,7 @@ describe('Dev Panel Harness (BE2_MCP_DEV_PANEL flag)', () => {
   })
 
   async function startApp() {
-    const config: Config = { authsvcUrl: 'http://a', gatewayUrl: 'http://g', serviceKey: 'sk', port: 0, dbPath: ':memory:', otelMode: 'off' }
+    const config: Config = { authsvcUrl: 'http://a', gatewayUrl: 'http://g', serviceKey: 'sk', port: 0, dbPath: ':memory:', otelMode: 'off', scheduleTz: 'Asia/Taipei' }
     const app = buildApp({ config, db })
     server = app.listen(0)
     await new Promise(r => server.on('listening', r as () => void))

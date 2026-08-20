@@ -61,7 +61,7 @@ describe('DNS-Rebinding and Host Header Guard', () => {
       serviceKey: 'sk',
       port: 0,
       dbPath: ':memory:',
-      otelMode: 'off',
+      otelMode: 'off', scheduleTz: 'Asia/Taipei',
     }
     const app = buildApp({ config, db })
     http = createServer(app)
@@ -144,7 +144,7 @@ describe('DNS-Rebinding and Host Header Guard', () => {
       serviceKey: 'sk',
       port: 0,
       dbPath: ':memory:',
-      otelMode: 'off',
+      otelMode: 'off', scheduleTz: 'Asia/Taipei',
     }
 
     const prevEnv = process.env.BE2_MCP_ALLOWED_HOSTS

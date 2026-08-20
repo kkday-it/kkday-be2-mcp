@@ -16,6 +16,7 @@ import { RateBudget } from '../limits/rateBudget.js'
 import { AppRateBudget } from '../limits/appRateBudget.js'
 import { ChangeSetStore } from '../core/changeset/store.js'
 import { ApprovalNonceStore } from '../core/changeset/approvalNonce.js'
+import { makeScheduler } from '../core/schedule/scheduler.js'
 import { WebSessionStore } from './webSessionStore.js'
 import { requestContext } from './requestContext.js'
 import { wrapTool, wrapL2Tool, type PipelineDeps, type L2PipelineDeps } from './toolPipeline.js'
@@ -158,7 +159,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     genId: randomUUID,
     now: Date.now,
     emitConfirmUrl,
-    scheduleTz: 'Asia/Taipei',
+    scheduleTz: config.scheduleTz,
   }
 
   // 面板輪詢（app-only tools）獨立限流，見 src/limits/appRateBudget.ts 的說明——與 rateBudget
@@ -175,7 +176,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     baseUrl,
     emitConfirmUrl,
     modifyUserFrom: modifyUserFromToken,
-    scheduleTz: 'Asia/Taipei',
+    scheduleTz: config.scheduleTz,
   }
 
   const transports = new Map<string, StreamableHTTPServerTransport>()
@@ -346,6 +347,9 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
       console.error('mcp request failed:', (err as Error).message)
     })
   })
+
+  const scheduler = makeScheduler({ changeSets, gateway, audit, now: Date.now, tokenManager })
+  app.locals.startScheduler = scheduler.start
 
   return app
 }

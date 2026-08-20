@@ -72,7 +72,7 @@ function seedSession(sid: string, userLabel: string) {
 async function startApp(gatewayUrl = 'https://gw.invalid'): Promise<void> {
   const config: Config = {
     authsvcUrl: 'https://auth.invalid', gatewayUrl,
-    serviceKey: 'sk', port: 0, dbPath: ':memory:', otelMode: 'off',
+    serviceKey: 'sk', port: 0, dbPath: ':memory:', otelMode: 'off', scheduleTz: 'Asia/Taipei',
   }
   const app = buildApp({ config, db })
   httpServer = createServer(app)

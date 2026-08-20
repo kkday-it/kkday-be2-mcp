@@ -126,7 +126,7 @@ describe('Tool Annotations - Integration through tools/list', () => {
       serviceKey: 'sk',
       port: 0,
       dbPath: ':memory:',
-      otelMode: 'off',
+      otelMode: 'off', scheduleTz: 'Asia/Taipei',
     }
 
     const app = buildApp({ config, db })
