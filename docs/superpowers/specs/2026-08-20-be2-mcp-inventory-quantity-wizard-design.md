@@ -125,11 +125,18 @@ Phase 3a 的 `inventory_setting` module（per-date `dates[]` + `op:set|adjust`�
 - `itemKey`：`inv:{item_oid}:{supplier_oid}`（isomorphic，UI 共用）。
 - `diffVersion`：canonical `inv:{item}:{sup}=fullday:{current ?? 'null'}→{target}` 排序後 sha256。SET 綁「現況→目標」；現況變動即 stale 重算（沿用 Phase 3a 對 set 綁現況的紀律）。
 
+### 5.7 硬編工具描述同步（防靜默資料破壞——agy review round 1）
+
+item schema 拿掉 `op`/`dates` 後，**zod 預設 strip 未知欄位**：若某工具的 description 仍叫 agent 傳 `dates`/`op`（per-date 語義），agent 送出的 `dates` 會被靜默丟棄，變成「以為改某幾天、實際覆寫整個 fullday」的意圖-執行不符（沉默破壞）。必須同步三處硬編描述：
+- **`src/core/changeset/tools.ts`**（`createChangesetTool` description，現 `:118`）：`'inventory_setting stages per-date inventory quantity changes ({item_oid, supplier_oid, op: set|adjust, quantity, dates})'` → 改為 fullday-SET 語義：`{item_oid, supplier_oid, quantity}`，覆寫該方案（item_by_amount）的 fullday 總量；明說僅支援套餐總量模式。
+- **`src/tools/inventorySettings.ts`**（`inventorySettingsTool`，現 `:33-34,:39-40`）：拿掉 `year_month` 參數與「per-date quantities for one month」描述（POST search fullday 無 month 維度）；`supplier_oid` 描述改為「provide to read the item_by_amount fullday quantity for that supplier」。
+- **`src/tools/openBatchWizard.ts`**（`openBatchWizardTool` description，現 `:25-26`）：補上 `inventory_setting`（設定套餐總量庫存數量）為支援的 action_type，否則新能力對 agent 隱形。
+
 ## 6. `inventoryShape.ts` FINALIZE（`src/tools/inventoryShape.ts`）
 
 以 2026-08-19/20 實攔樣本 + 官方手冊 `12-庫存設定.md` 收斂：
 
-- **新增主解析** `parseInventoryFullday(raw, l1Key): number | undefined`：讀 `raw.data[l1Key].fullday`（number 回傳；`null`/缺→ undefined）。這是 `item_by_amount` 快樂路徑。
+- **新增主解析** `parseInventoryFullday(raw, l1Key): number | undefined`：讀 `raw.data[l1Key].fullday`（number 直接回傳；數字字串以 `Number()` 轉換後回傳；`null`/缺/`NaN`→ undefined）。這是 `item_by_amount` 快樂路徑；數字字串容錯屬不鎖死原則（後端型別可能漂移）。
 - **不鎖死原則**（使用者 2026-08-20 提醒）：主形狀為快樂路徑、**非唯一路徑**。保留 defensive fallback：`data` 非物件 / L1 key 缺 / 內層無 `fullday` → 回 undefined（優雅降級，不拋錯），供未見過的商品類型（飯店/F&B/GYG 動態價等變體）不致 crash；遇未知結構記錄樣本、後續擴解析。
 - **淘汰**與真實形狀全不符的舊容錯常數（`ROWS_KEYS`/`DATE_KEYS`/`QTY_KEYS` 的 array-wrapper 與 `quantity/qty/stock` 猜測）+ 舊 `parseQuantities`/`findRows`/`groupDatesByMonth` 中僅 per-date 版用到者。**保留** by-date 矩陣所需的解析骨架僅在 §11 擴充時再加，本版不預先實作（YAGNI）。
 - **補 fixture** `tests/fixtures/inventory-quantities.json`：以 item 1650033 真實 200 樣本 `{data:{"1650033":{fullday:32}},meta:{status:"100000"}}`，加一支 fixture 測試釘住主解析。
@@ -142,6 +149,7 @@ Phase 3a 的 `inventory_setting` module（per-date `dates[]` + `op:set|adjust`�
   - `BatchViewActionType` 加 `'inventory_setting'`。
   - `BatchPlan` 加 `current_quantity?: number | null`、`inventory_mode?: string`（後者既有於 inventory_platform 分支，沿用）。
   - `inventory_setting` 分支：每方案有 `item_oid`+`supplier_oid` 時，`GET basic-info` 判模式 + `POST search` 取 fullday（同 item 的 basic-info 用 `configsCache` 共用，避免重讀）；non-item_by_amount 標 mode、`current_quantity` 留 undefined。登記 `read_oids`（item_oid + pkg_oid，供 §6.2 scope-gate）。
+  - **錯誤邊界（agy review round 1）**：basic-info / POST search 的讀取必須包在 `try/catch`，比照既有 `resolveCurrentPlatform` 的降級模式 —— 單一方案讀取失敗（403/網路）**回一筆 warning envelope（如 `INVENTORY_READ_UNAVAILABLE`），該方案 `current_quantity`/`inventory_mode` 留空、其餘方案照常顯示**；**不得**讓 unhandled rejection 打掉整個 batch view（view 是唯讀展示、非 diff，降級不阻擋）。
 - **`src/ui/batch-wizard.ts`**：加 `inventory_setting` 分頁 —— 每方案一格數字輸入（顯示現況 fullday → 輸入目標）；非 `item_by_amount` 方案 gray-out + 「目前不支援（僅套餐總量模式）」；勾選+填值產出 `inventory_setting` change-set items（`{item_oid, supplier_oid, quantity}`）。itemKey 與 server 同一份 `keys.ts`（單一事實來源，Phase 5 紀律）。
 - **`src/tools/openBatchWizard.ts`**（`be2_open_batch_wizard`）：action_type enum 加 `'inventory_setting'`。
 
@@ -153,6 +161,7 @@ Phase 3a 的 `inventory_setting` module（per-date `dates[]` + `op:set|adjust`�
 - **fixture 測試**：`inventoryShape` 主解析 + defensive 降級（未知結構回 undefined 不拋）。
 - **eval**：draft-only（拒絕直接寫、須經批准）、scope-gate（未讀 item 拒建）、注入抵抗（工具輸出注入不改變寫入）。
 - 既有 Phase 3a 庫存測試中依賴 dates[]/adjust/per-month 的案例：隨 module 改寫調整或刪除（不保留死碼測試）。
+- **過時註解清理（agy review round 1）**：`src/core/changeset/confirmService.ts:59-60` 的「Task 12 review Finding 1」註解宣稱 inventory change-set「合法允許兩項目共用 (item_oid, supplier_oid) 但 dates 不相交」。本塊拿掉 dates、(item, supplier) 全域唯一後此宣稱不再成立 —— multiset 比對邏輯本身仍安全，但註解須更新/刪除，避免誤導未來讀者。
 
 ## 9. 與 Session 1（公告）的檔案衝突分析
 
@@ -183,3 +192,5 @@ Phase 3a 的 `inventory_setting` module（per-date `dates[]` + `op:set|adjust`�
 4. **依日期 / 場次**（`item_by_date`/`sku_by_date`）：加回 `dates[]`/場次 + search 帶 rrules；BY_DATETIME 樣本已備（`{key:{date:{fullday|"HH:MM":N}}}`）。
 </content>
 </invoke>
+
+<!-- agy-peer-reviewed: 2026-08-20T07:01:00Z rounds=2 verdict=approved -->

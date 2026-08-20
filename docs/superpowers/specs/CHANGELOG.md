@@ -30,3 +30,5 @@
 
 
 
+
+<!-- agy-peer-reviewed: 2026-08-20T07:01:00Z rounds=2 verdict=approved -->
