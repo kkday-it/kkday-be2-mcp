@@ -79,12 +79,14 @@ const WALL_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/
 
 // 指定 tz 在 utcMs 這一刻的 UTC offset(ms)。用 formatToParts 反推——Node 內建 ICU,無需新依賴。
 function tzOffsetMs(tz: string, utcMs: number): number {
+  // hourCycle:'h23' 而非 hour12:false——後者在 en-US 走 h24,午夜會格式化成「前一天 24:00」,
+  // day 部件差一天 → offset 差 24h(排在整點午夜的排程全錯)。h23 強制 00-23,day 對齊當日。
   const dtf = new Intl.DateTimeFormat('en-US', {
     timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
   })
   const p = Object.fromEntries(dtf.formatToParts(new Date(utcMs)).map(x => [x.type, x.value]))
-  const asUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second)
+  const asUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second)
   return asUtc - utcMs
 }
 
@@ -312,7 +314,13 @@ store.ts:`create()` 寫 schedule 三欄(無 schedule 時 null);`get()` 映射 `s
     return (this.db.prepare(`SELECT DISTINCT executor_identity_id AS iid FROM change_sets
       WHERE status='scheduled' AND executor_identity_id IS NOT NULL`).all() as Array<{ iid: string }>).map(r => r.iid)
   }
+  listScheduledIdsByIdentity(identityId: string): string[] {
+    return (this.db.prepare(`SELECT id FROM change_sets WHERE status='scheduled' AND executor_identity_id = ?`)
+      .all(identityId) as Array<{ id: string }>).map(r => r.id)
+  }
 ```
+
+(`listScheduledIdsByIdentity` 供 Task 7:keep-alive terminal 失敗時立即 fail 該 identity 名下所有排程件,不留到 T 才爆。測試在 Task 2 的 `listScheduledIdentityIds` 案例旁加一條:同 identity 兩件 scheduled → 回兩個 id;非 scheduled 不回。)
 
 identityStore.ts:
 
@@ -393,7 +401,7 @@ it('getFreshAccessToken returns the identityId backing the credential', async ()
   ```ts
   getFreshByIdentityId(identityId: string): Promise<UserAuthContext>            // 查無 identity → AuthError('UNKNOWN_IDENTITY', …, 401)
   keepAlive(identityIds: string[], opts: { windowMs: number; claimTtlMs: number }):
-    Promise<{ refreshed: string[]; failed: Array<{ identityId: string; code: string }> }>
+    Promise<{ refreshed: string[]; failed: Array<{ identityId: string; code: string; terminal: boolean }> }>
   ```
 - Consumes: Task 2 `IdentityStore.claimKeepalive`。
 
@@ -454,7 +462,16 @@ it('keepAlive reports terminal failures without throwing', async () => {
   })
   const out = await tm.keepAlive(['id-1'], { windowMs: 60_000, claimTtlMs: 30_000 })
   expect(out.refreshed).toEqual([])
-  expect(out.failed).toEqual([{ identityId: 'id-1', code: 'REAUTH_REQUIRED' }])
+  expect(out.failed).toEqual([{ identityId: 'id-1', code: 'REAUTH_REQUIRED', terminal: true }])
+})
+
+it('keepAlive force-refreshes inside windowMs even beyond tokenManager skew (no spin band)', async () => {
+  // access 於 8min 後到期:> skew(5min) 但 < window(10min)——必須真的 refresh,不得空轉。
+  const { tm, auth } = setup(1_000_000 + 8 * 60_000, async () =>
+    ({ accessToken: fakeJwt(1_000_000 + 3_600_000), refreshToken: 'r1', businessList: [] }))
+  const out = await tm.keepAlive(['id-1'], { windowMs: 10 * 60_000, claimTtlMs: 30_000 })
+  expect(out.refreshed).toEqual(['id-1'])
+  expect(auth.refresh).toHaveBeenCalledTimes(1)
 })
 ```
 
@@ -469,30 +486,43 @@ it('keepAlive reports terminal failures without throwing', async () => {
     return this.freshFromIdentity(identity, identityId)
   }
 
-  /** 排程 keep-alive(spec §6):只對「將於 windowMs 內到期」者 refresh;到期判斷留在本類內,
-   *  scheduler 只給名單。DB claim(claimKeepalive)防多實例重複 refresh 撞 rotation。
-   *  永不 throw——失敗逐一回報,由 scheduler 決定 audit;執行時刻的失敗仍由 getFreshByIdentityId 把關。 */
+  /** 排程 keep-alive(spec §6):只對「將於 windowMs 內到期」者**強制** refresh;到期判斷留在
+   *  本類內,scheduler 只給名單。DB claim(claimKeepalive)防多實例重複 refresh 撞 rotation。
+   *  永不 throw——失敗逐一回報(terminal=4xx 撤權類,由 scheduler 據以 fail 排程件),
+   *  執行時刻的失敗仍由 getFreshByIdentityId 把關。
+   *  ⚠️ 不走 freshFromIdentity——它只在 skewMs 內才 refresh,windowMs>skewMs 的區間會空轉
+   *  (claim 了卻沒 refresh、下 tick 再 claim,假成功 audit 洗版)。這裡直接進 doRefresh,
+   *  但沿用同一 inflight single-flight map,與 lazy 路徑互不重複 refresh。 */
   async keepAlive(identityIds: string[], opts: { windowMs: number; claimTtlMs: number }):
-      Promise<{ refreshed: string[]; failed: Array<{ identityId: string; code: string }> }> {
+      Promise<{ refreshed: string[]; failed: Array<{ identityId: string; code: string; terminal: boolean }> }> {
     const refreshed: string[] = []
-    const failed: Array<{ identityId: string; code: string }> = []
+    const failed: Array<{ identityId: string; code: string; terminal: boolean }> = []
     for (const id of identityIds) {
       const identity = this.stores.identities.get(id)
-      if (!identity) { failed.push({ identityId: id, code: 'UNKNOWN_IDENTITY' }); continue }
+      if (!identity) { failed.push({ identityId: id, code: 'UNKNOWN_IDENTITY', terminal: true }); continue }
       if (identity.accessExpiresAt - this.now() >= opts.windowMs) continue
       if (!this.stores.identities.claimKeepalive(id, this.now(), opts.claimTtlMs)) continue
       try {
-        await this.freshFromIdentity(identity, id)
-        refreshed.push(id)
+        let flight = this.inflight.get(id)
+        if (!flight) {
+          flight = this.doRefresh(identity, id).finally(() => this.inflight.delete(id))
+          this.inflight.set(id, flight)
+        }
+        const updated = await flight
+        // transient 分支會回舊 identity(未 rotate)——只有真的延壽才算 refreshed,避免假成功 audit。
+        if (updated.accessExpiresAt > identity.accessExpiresAt) refreshed.push(id)
       } catch (e) {
-        failed.push({ identityId: id, code: (e as { code?: string }).code ?? 'REFRESH_FAILED' })
+        // AuthError(REAUTH_REQUIRED / UNKNOWN_*)= terminal:identity 已死,scheduler 應立即
+        // fail 其名下排程件,否則每 tick 重打 auth-service 直到 T(error 洗版 + hammering)。
+        failed.push({ identityId: id, code: (e as { code?: string }).code ?? 'REFRESH_FAILED',
+          terminal: e instanceof AuthError })
       }
     }
     return { refreshed, failed }
   }
 ```
 
-(註:`freshFromIdentity` 內部的 skew 判斷與 keepAlive 的 windowMs 判斷並存——windowMs 應 ≥ skewMs 才會真的觸發 refresh;`SCHEDULE_POLICY.keepAliveWindowMs` 已設為 2×tick+5min 滿足此條件。)
+(註:doRefresh 的 transient 分支(5xx 且 access 未過期)回舊 identity 不 rotate——keepAlive 會把它記為 refreshed 但實際未延壽;下 tick access 仍在 window 內會再試,行為正確(transient 本來就該重試)。測試 Task 4 案例 2 的「不重複 refresh」靠 claim TTL 擋,約束不變。)
 
 - [ ] **Step 4: Run** — 新測試 PASS + `npm run ci` 全綠
 - [ ] **Step 5: Commit** — `git commit -m "feat(schedule): TokenManager 公開 getFreshByIdentityId + keepAlive(DB claim 防撞)"`
@@ -512,7 +542,7 @@ it('keepAlive reports terminal failures without throwing', async () => {
 **Interfaces:**
 - Produces: `createChangesetInputShape` 加 `schedule: z.object({ wall: z.string() }).optional()`;建立時驗證+換算+persist。
 - Consumes: Task 1 `wallToUtcEpoch`/`SCHEDULE_POLICY`,Task 2 `ScheduleInfo`。
-- 依賴注入:`L2ToolContext` 需能取得 `BE2_TZ`——在 `src/server/l2Context.ts` 的 context 介面加 `scheduleTz: string`,由 `app.ts` 組裝時從 config 傳入(Task 8 一併接 config;本 task 先加介面欄位並在測試 ctx 直給 `'Asia/Taipei'`,`app.ts` 暫以字面值 `'Asia/Taipei'` 傳入,Task 8 換成 config)。
+- 依賴注入:`L2ToolContext` 需能取得 `BE2_TZ`——在 `src/server/l2Context.ts` 的 context 介面加 `scheduleTz: string`。**同步必改(agy plan-review round 1)**:`src/server/appPipeline.ts` 的 `AppToolContext` 介面、`AppPipelineDeps` 與 `wrapAppTool` 的 ctx 組裝(`appPipeline.ts:113-119` 附近)也要各加/傳 `scheduleTz`——`app_create_changeset` 走 `createChangesetCore(args, ctx)` 時傳的是 `AppToolContext`,漏接會 typecheck 失敗(或 runtime `wallToUtcEpoch(wall, undefined)` 炸面板排程)。由 `app.ts` 組裝時從 config 傳入(Task 7 接 config;本 task 先加介面欄位並在測試 ctx 直給 `'Asia/Taipei'`,`app.ts` 兩處 deps(L2 toolPipeline 與 appPipeline)暫以字面值 `'Asia/Taipei'` 傳入,Task 7 換成 config)。Task 5 測試需加一條:走 `appCreateChangesetTool.handler`(fake AppToolContext 含 scheduleTz)建排程成功——證面板路徑接通。
 
 - [ ] **Step 1: Write the failing test**
 
@@ -661,7 +691,7 @@ confirmService.ts(在 modifyUser 解析後、CAS 之前插入):
   if (!deps.changeSets.casStatus(changesetId, 'approved', 'executing')) return null
 ```
 
-(取代 `:37` 的 `setStatus`;函式簽名改 `Promise<{…} | null>`。)confirmService 即時路徑收尾:
+(取代 `:37` 的 `setStatus`;函式簽名改 `Promise<{…} | null>`。同檔 `ExecutorIdentity.channel` 與 `module.ts` 的 `ExecCtx.channel` union 各加 `'scheduler'`,`clientInfoFor` 加分支 `who.channel === 'scheduler' ? 'scheduler' : …`——排程執行的 per-item audit 不得偽裝成面板/確認頁動作,audit 必須反映真實觸發面。)confirmService 即時路徑收尾:
 
 ```ts
   const out = await executeChangeSet(deps, rec.id, { … })
@@ -715,6 +745,9 @@ appTools.ts `app_confirm_changeset`:inputShape 加 `expected_execute_at_utc: z.n
 // 7. 併發認領:兩個 makeScheduler 共用同一 db,同 tick 併發 → PUT 僅一次(CAS 去重)。
 // 8. keep-alive:scheduled 未到點 + identity 將於 window 內到期 → tick 觸發 refresh(fake auth
 //    refresh 被呼叫一次)且 audit 記 schedule.keepalive;第二 tick 不重複(claim TTL)。
+// 9. keep-alive terminal 失敗:fake auth refresh 丟 AuthError 401(identity 將到期)→ 該 identity
+//    名下所有 scheduled 件立即 'failed' + audit AUTH_EXPIRED (keep-alive);後續 tick 不再打
+//    auth-service(listScheduledIdentityIds 已不含該 identity)。
 ```
 
 - [ ] **Step 2: Run to verify FAIL**
@@ -741,17 +774,21 @@ export function makeScheduler(deps: SchedulerDeps, opts: Partial<typeof SCHEDULE
     try {
       const u = await deps.tokenManager.getFreshByIdentityId(rec.executorRef.identityId)
       who = { accessToken: u.accessToken, userLabel: rec.executorRef.userLabel,
-        modifyUser: rec.executorRef.modifyUser, sessionId: rec.executorRef.sessionId, channel: 'panel' as const }
+        modifyUser: rec.executorRef.modifyUser, sessionId: rec.executorRef.sessionId, channel: 'scheduler' as const }
     } catch (e) {
       // spec §7 步驟 3:refresh 失敗分流。terminal(4xx 撤權/identity 消失)→ failed;
       // transient(5xx/網路)→ 放回 scheduled 下 tick 重試(來不來得及由 grace 判準決定)。
       const terminal = e instanceof AuthError
       if (terminal) {
-        deps.changeSets.setStatus(id, 'failed', deps.now())
-        deps.audit.record({ userLabel: rec.executorRef.userLabel, sessionId: rec.executorRef.sessionId,
-          clientInfo: 'scheduler', tool: 'schedule.execute',
-          params: { changeset_id: id }, status: 'error',
-          errorMessage: `AUTH_EXPIRED: ${(e as Error).message}`, traceId: 'n/a', durationMs: 0 })
+        // CAS 而非 setStatus:若本實例網路卡頓期間,別的實例已透過 stranded 回收把這件放回、
+        // 重新認領甚至執行完,無條件寫 failed 會覆寫 executing/done——exactly-once 破功。
+        // 只有 claim 仍屬於我(仍在 approved)才允許標 failed。
+        if (deps.changeSets.casStatus(id, 'approved', 'failed', deps.now())) {
+          deps.audit.record({ userLabel: rec.executorRef.userLabel, sessionId: rec.executorRef.sessionId,
+            clientInfo: 'scheduler', tool: 'schedule.execute',
+            params: { changeset_id: id }, status: 'error',
+            errorMessage: `AUTH_EXPIRED: ${(e as Error).message}`, traceId: 'n/a', durationMs: 0 })
+        }
       } else {
         deps.changeSets.releaseClaim(id)
       }
@@ -764,14 +801,18 @@ export function makeScheduler(deps: SchedulerDeps, opts: Partial<typeof SCHEDULE
     const now = deps.now()
     // (4) stranded-approved 回收(先於認領,放回的件同 tick 即可重拾)
     for (const id of deps.changeSets.listStrandedApproved(now, p.staleClaimMs)) {
-      deps.changeSets.releaseClaim(id)
-      deps.audit.record({ userLabel: 'scheduler', sessionId: 'scheduler', clientInfo: 'scheduler',
-        tool: 'schedule.reclaim', params: { changeset_id: id }, status: 'ok', traceId: 'n/a', durationMs: 0 })
+      // 只有真的贏了 releaseClaim 的 CAS 才記 audit——多實例/重疊處理同一件時,輸方不得留下
+      // 假的 reclaim 紀錄。
+      if (deps.changeSets.releaseClaim(id)) {
+        deps.audit.record({ userLabel: 'scheduler', sessionId: 'scheduler', clientInfo: 'scheduler',
+          tool: 'schedule.reclaim', params: { changeset_id: id }, status: 'ok', traceId: 'n/a', durationMs: 0 })
+      }
     }
     // (1)(2)(3) 到期處理
     for (const id of deps.changeSets.listDueScheduled(now)) {
       if (now - (deps.changeSets.get(id)?.schedule?.executeAtUtc ?? 0) > p.graceMs) {
-        if (deps.changeSets.casStatus(id, 'scheduled', 'missed', now)) {
+        // 不帶 decidedAt——missed 是機器事件,保留人工批准時刻(agy plan-review advisory)。
+        if (deps.changeSets.casStatus(id, 'scheduled', 'missed')) {
           deps.audit.record({ userLabel: 'scheduler', sessionId: 'scheduler', clientInfo: 'scheduler',
             tool: 'schedule.missed', params: { changeset_id: id }, status: 'error',
             errorMessage: 'missed: server was down past the grace window; re-create the schedule',
@@ -794,16 +835,34 @@ export function makeScheduler(deps: SchedulerDeps, opts: Partial<typeof SCHEDULE
         deps.audit.record({ userLabel: 'scheduler', sessionId: 'scheduler', clientInfo: 'scheduler',
           tool: 'schedule.keepalive', params: { identity: f.identityId }, status: 'error',
           errorMessage: f.code, traceId: 'n/a', durationMs: 0 })
+        // terminal(撤權/identity 消失):identity 已死,到 T 也必失敗——立即 fail 其名下所有
+        // 排程件(fail-closed 提早浮現)。否則 claim TTL 一過,每 tick 重打 auth-service 直到 T
+        // (error 洗版 + hammering,agy plan-review round 1)。transient 不動,下 tick 重試。
+        if (f.terminal) {
+          for (const cid of deps.changeSets.listScheduledIdsByIdentity(f.identityId)) {
+            if (deps.changeSets.casStatus(cid, 'scheduled', 'failed', now)) {
+              deps.audit.record({ userLabel: 'scheduler', sessionId: 'scheduler', clientInfo: 'scheduler',
+                tool: 'schedule.execute', params: { changeset_id: cid }, status: 'error',
+                errorMessage: `AUTH_EXPIRED (keep-alive): ${f.code}`, traceId: 'n/a', durationMs: 0 })
+            }
+          }
+        }
       }
     }
   }
 
   function start(): () => void {
-    // 啟動即補跑一次(吸收停機期間到點者,spec §7);tick 內部自捕獲,不讓例外殺掉 interval。
-    const safeTick = () => { void tick().catch(err => console.error('scheduler tick error:', (err as Error).message)) }
-    safeTick()
-    const h = setInterval(safeTick, p.tickMs)
-    return () => clearInterval(h)
+    // 啟動即補跑一次(吸收停機期間到點者,spec §7)。遞迴 setTimeout 而非 setInterval——
+    // tick 是 async(逐件 await 執行),積壓時單輪可能超過 tickMs;setInterval 會疊加併發 tick
+    // (同 process 內重入:連線耗盡、keep-alive 交錯)。下一輪一律在上一輪 settle 後才排。
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const loop = () => {
+      void tick().catch(err => console.error('scheduler tick error:', (err as Error).message))
+        .finally(() => { if (!stopped) timer = setTimeout(loop, p.tickMs) })
+    }
+    loop()
+    return () => { stopped = true; if (timer) clearTimeout(timer) }
   }
 
   return { tick, start }
@@ -968,3 +1027,5 @@ Run: `npm run ci` → 全 pass/0 skipped;`npm run build:ui` → 綠;`npm run dev
 - Spec 覆蓋:§3(Task 2)、§4(Task 1/2)、§5(Task 5/6)、§6(Task 3/4/7/9)、§7(Task 2/6/7)、§8(Task 8)、§9(Task 6/8/10)、§10(Task 6/8 測試)、§11(各 task 測試 + Task 10 eval)、§12(Task 10 docs)。無缺。
 - 型別一致性:`setScheduled/claimScheduled/releaseClaim/listDueScheduled/listStrandedApproved/listScheduledIdentityIds`(Task 2 定義,Task 6/7 消費)、`getFreshByIdentityId/keepAlive`(Task 4 定義,Task 7 消費)、`ScheduleInfo/ExecutorRef`(Task 2 定義,Task 5/6/7/8/9 消費)、`executeChangeSet → | null`(Task 6 定義,Task 7 消費)已互相對齊。
 - 已知留白(刻意,非 placeholder):Task 3/6/7/8 的測試 deps builder 指示「仿既有測試檔」——該 repo 的 fixture 佈置(fake gateway/auth client/ctx builder)已存在多份先例,重抄進 plan 反而會與現碼漂移;implementer 開工第一步是讀對應既有測試檔。
+
+<!-- agy-peer-reviewed: 2026-08-20T13:18:17Z rounds=4 verdict=approved -->
