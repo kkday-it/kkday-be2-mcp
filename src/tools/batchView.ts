@@ -5,12 +5,7 @@ import { sanitizeQueue } from '../modules/product/shelfSchedule/validate.js'
 import type { ScheduleEntry } from '../core/changeset/types.js'
 import { toEnvelopeError, type EnvelopeError } from './envelope.js'
 import { extractPackagesWithSupplier } from '../modules/product/common.js'
-import { readCurrentFullday, readItemMode, isItemByAmount } from './inventoryShape.js'
-
-const MODE_LABEL: Record<string, string> = { '1:0': 'item_by_amount', '2:0': 'sku_by_amount', '1:1': 'item_by_date', '2:1': 'sku_by_date' }
-function modeLabel(m: { control_type?: number; inventory_type?: number | null }): string | undefined {
-  return m.control_type === undefined ? undefined : (MODE_LABEL[`${m.control_type}:${m.inventory_type}`] ?? 'unsupported')
-}
+import { readCurrentFullday, readItemMode, isItemByAmount, modeLabel } from './inventoryShape.js'
 
 export type BatchViewActionType = 'inventory_platform' | 'shelf_schedule' | 'inventory_setting'
 

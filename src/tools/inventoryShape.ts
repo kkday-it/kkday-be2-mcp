@@ -38,3 +38,11 @@ export function readItemMode(basicInfoRaw: unknown): { control_type?: number; in
 export function isItemByAmount(mode: { control_type?: number; inventory_type?: number | null }): boolean {
   return mode.control_type === 1 && mode.inventory_type === 0
 }
+
+// control_type:inventory_type 的 1/0 編碼 → 人話標籤。與 readItemMode/isItemByAmount 同擁一組 1/0 語義，
+// 故 label 版也放這裡當單一事實來源（原本 batchView.ts 另編一份 MODE_LABEL，code-review Standards 軸
+// Duplicated domain knowledge）。control_type 未讀到 → undefined；已知但非四種組合 → 'unsupported'。
+const MODE_LABEL: Record<string, string> = { '1:0': 'item_by_amount', '2:0': 'sku_by_amount', '1:1': 'item_by_date', '2:1': 'sku_by_date' }
+export function modeLabel(mode: { control_type?: number; inventory_type?: number | null }): string | undefined {
+  return mode.control_type === undefined ? undefined : (MODE_LABEL[`${mode.control_type}:${mode.inventory_type}`] ?? 'unsupported')
+}
