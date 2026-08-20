@@ -230,6 +230,20 @@ be2-220 真人登入 + playwright，商品 2247、item 1677495（**sku_by_date**
   - 此域 `fullday: 1=可售 / 0=關閉`（是**可售開關**、不是數量）。→ 供未來「日期/場次可售」action_type 參考；SKU_BY_DATETIME 的庫存**數量**形狀應同結構、但 `fullday` 值為數量。
 - **transient 觀察**：同 body 先 403（#75）後 200（#78）——第一發撞 token refresh race，重試即過，非授權/契約問題。
 
+### 2026-08-20 追加（塊 A brainstorm 期 live 重測）：**quantity PUT 在 stage 首次真 200**；SIT be2-220 仍 403（RD grant 未生效）
+
+塊 A（庫存數量進 wizard）brainstorm 定案後，以正確契約（basic-info + `POST inventories/search` + `PUT .../{sup}/quantity`）對 SIT 與 stage 各跑一次**可逆 net-zero** 寫入（讀現況 fullday → PUT 同值回寫，觀察 HTTP status，無資料異動）。用 repo `AuthServiceClient` 登入→換碼→`GatewayClient`-等價 PUT，`modify_type:1`、`modify_user=platformId`、header 帶 `x-auth-id: be2`。
+
+| 環境 | 登入 | POST search | quantity PUT（net-zero） | 結論 |
+|---|---|---|---|---|
+| SIT be2-220 | OK（businessList 含 `product.product-inventory.query/.update`，691 筆） | 200，item 1650033/sup 181（item_by_amount 1/0），fullday=32 | **403**（裸 body、無 JSON envelope＝verify 層擋，未達 product-service） | **仍卡**，與上節 AU9403 同簽章，RD grant 未生效 |
+| **stage** | **OK**（stage 憑證 `STAGE_email/pwd/AUTHSVC_SERVICE_KEY` 現已補齊、可登入，非過去 AU9997） | 200，item 1650033/sup 181 同存在同模式，fullday=20 | **200**，envelope `meta.status 100000 成功`，回寫後 fullday 仍 20（net-zero 乾淨） | **通了** ✅ |
+
+**結論（durable）**：
+1. **這是庫存數量寫入路徑的第一次真 200**——用我方程式（正確契約）在 **stage** 端到端達成，**契約 e2e 驗證完成**（先前只有 be2-web 前端實發 body / stage curl 佐證，未由我方程式跑出）。→ 塊 A 的 live 綠寫入**可在 stage 達成**，非長期 PENDING。
+2. **SIT be2-220 仍卡** auth-service verify v2 per-URI 規則（403，與上節同），RD 授權 grant 尚未生效。要 SIT 也綠，仍需該 URI 規則綁的 business action 加進帳號群組（解卡請求見上節）。
+3. per-環境授權差異（stage 有該 action、be2-220 沒有）與 Phase 2a shelf-toggle 同構，再次確認。
+
 ## inventory-platform read (Phase 4a Task 1, 2026-08-14)
 
 目的:為 `inventory_platform` change-set(切換方案的庫存管理平台:BE2／BE2_SCM／EXTERNAL)定案「以 `(item_oid, supplier_oid)` 為鍵讀兩布林 `is_external_inventory`/`is_inventory_mgmt`」的讀取端點,供 Task 3 `readSupplierInventorySetting()` 實作依據。已知寫入契約(design doc §4.1,未在本次驗證):`PUT items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting` body `{is_external_inventory, is_inventory_mgmt, modify_user}`。

@@ -56,8 +56,10 @@
 
 **高風險語義（供 renderer 警語 + diff）**：數量修改**立即生效**（正式資料直接異動）；**歸零 → `InventoryEmpty` 事件清 sale-time cache + PubSub 通知搜尋 → 立即影響前台可售**。庫存 by supplier（每供應商各一份）。
 
-**未解 gate（非阻擋開發，RD 處理中）**
-- **quantity PUT 卡 `AU9403`**：auth-service verify v2 的 per-URI 規則（`uri_pattern: api/v1/items/{*}/inventories/{*}/quantity`）綁的 business action 帳號群組沒有（`product.product-inventory.update` 帳號有、但不是 verify 要的那顆）。RD 正在處理授權 grant；stage 路線需補 `.env` `STAGE_pwd`/`STAGE_AUTHSVC_SERVICE_KEY`。→ **讀取（basic-info + search）live 200 可用**，故選商品/diff/確認頁 live 全流程可跑；**只有批准後 execute 的 PUT 會 403**，build/單元測試/draft 全綠，live 綠寫入待授權接上。
+**授權 gate 現況（2026-08-20 live 重測，見 `sit-write-contracts.md` §inventory 2026-08-20 追加）**
+- **SIT be2-220：quantity PUT 仍卡 `AU9403`**：auth-service verify v2 的 per-URI 規則（`uri_pattern: api/v1/items/{*}/inventories/{*}/quantity`）綁的 business action 帳號群組沒有（`product.product-inventory.update` 帳號有、但不是 verify 要的那顆）。RD 授權 grant **尚未生效**（2026-08-20 net-zero 重測仍 403）。
+- **stage：已用我方程式跑出真 200** ✅：`.env` `STAGE_email/pwd/AUTHSVC_SERVICE_KEY` 現已補齊；以正確契約 net-zero 寫入 stage（item 1650033/sup 181，item_by_amount）回 `200 / meta.status 100000 成功`，契約 e2e 驗證完成。
+- → **讀取（basic-info + search）在 SIT/stage 皆 live 200**，選商品/diff/確認頁 live 全流程可跑；**批准後 execute 的 PUT 在 SIT 仍 403、在 stage 200**。故 **live 綠寫入驗收走 stage**（§10、§8），非長期 PENDING；SIT 端待 RD grant 生效即同步可綠。
 
 ## 4. 架構決策
 
@@ -71,9 +73,9 @@ Phase 3a 的 `inventory_setting` module（per-date `dates[]` + `op:set|adjust`�
 1. **UI 層（友善）**：`batchView` 回傳每方案的 `inventory_mode`；`batch-wizard.ts` 對非 `item_by_amount` 的方案 **gray-out 勾選框 + 明確註記「目前不支援（僅套餐總量模式）」**。使用者選商品當下即看得到邊界，不必等建 change-set 才知。
 2. **diff 層（硬擋）**：`computeInventoryDiff` 讀 `basic-info` 判模式，非 `1/0` 一律 `throw DiffError`（fail-closed，嚴禁盲寫）。UI gray-out 不可信賴為安全邊界——真正的閘門在 diff。
 
-### 4.3 (c) live 寫入 PENDING（RD 處理中，不阻擋 build）
+### 4.3 (c) live 寫入：stage 已證可綠、SIT 待 grant（不阻擋 build）
 
-見 §3 未解 gate。本 spec 交付＝ build 綠 + 單元測試綠 + draft/diff/確認頁 live 可跑；批准→真 200 寫入待 RD 授權 grant 或 stage key 補齊即接上。與 Phase 2a/2b/3a 同型卡點。
+見 §3 授權 gate 現況。本 spec 交付＝ build 綠 + 單元測試綠 + draft/diff/確認頁 live 可跑 + **stage 真 200 寫入 live 驗收**（2026-08-20 已用正確契約在 stage 跑出 200）。SIT be2-220 端待 RD 授權 grant 生效即同步可綠。相較 Phase 2a/2b/3a 一律 PENDING，本塊 live 綠寫入路徑（stage）**已打通**。
 
 ### 4.4 折進 `be2_open_batch_wizard`（與 Session 1 不同路線）
 
@@ -162,6 +164,7 @@ item schema 拿掉 `op`/`dates` 後，**zod 預設 strip 未知欄位**：若某
 - **eval**：draft-only（拒絕直接寫、須經批准）、scope-gate（未讀 item 拒建）、注入抵抗（工具輸出注入不改變寫入）。
 - 既有 Phase 3a 庫存測試中依賴 dates[]/adjust/per-month 的案例：隨 module 改寫調整或刪除（不保留死碼測試）。
 - **過時註解清理（agy review round 1）**：`src/core/changeset/confirmService.ts:59-60` 的「Task 12 review Finding 1」註解宣稱 inventory change-set「合法允許兩項目共用 (item_oid, supplier_oid) 但 dates 不相交」。本塊拿掉 dates、(item, supplier) 全域唯一後此宣稱不再成立 —— multiset 比對邏輯本身仍安全，但註解須更新/刪除，避免誤導未來讀者。
+- **live 驗收 exit gate（走 stage）**：以本塊程式（wizard → app_create_changeset → 確認頁/面板批准 → executor）對 **stage** 一個 item_by_amount 商品跑一次**可逆 net-zero**（讀現況 fullday → SET 同值 → 驗證無漂移）的真 200 寫入，證明 executor 端到端可綠（契約已於 2026-08-20 以獨立 probe 在 stage 驗過真 200）。SIT be2-220 因 `AU9403` 仍會 403，待 RD grant；SIT 端 exit gate 標 PENDING-on-grant，不阻擋交付。
 
 ## 9. 與 Session 1（公告）的檔案衝突分析
 
@@ -180,8 +183,8 @@ item schema 拿掉 `op`/`dates` 後，**zod 預設 strip 未知欄位**：若某
 
 | 項 | 狀態 | 影響 |
 |---|---|---|
-| quantity PUT `AU9403`（per-URI verify 缺 action） | 🟡 RD 處理中 | 只擋批准後 execute 的真 200；build/測試/draft/diff/確認頁不受影響 |
-| stage key（`.env` `STAGE_pwd`/`STAGE_AUTHSVC_SERVICE_KEY` 空） | ⬜ | 替代 live 路線；補齊可在 stage 驗真 200 |
+| quantity PUT `AU9403`（SIT be2-220 per-URI verify 缺 action） | 🟡 RD 處理中，2026-08-20 重測仍 403 | 只擋 SIT 批准後 execute 的真 200；build/測試/draft/diff/確認頁不受影響 |
+| stage 憑證（`.env` `STAGE_email/pwd/AUTHSVC_SERVICE_KEY`） | ✅ 已補齊、stage 寫入 200 已驗（2026-08-20） | **live 綠寫入驗收走 stage**；契約 e2e 已通 |
 | BY_DATETIME wire 樣本 | ✅ 已攔（2026-08-20） | 不阻擋本版（本版不做 by-date）；供 §11 擴充 |
 
 ## 11. 未來（明確非本 spec，接續順序）
@@ -194,3 +197,4 @@ item schema 拿掉 `op`/`dates` 後，**zod 預設 strip 未知欄位**：若某
 </invoke>
 
 <!-- agy-peer-reviewed: 2026-08-20T07:01:00Z rounds=2 verdict=approved -->
+<!-- agy-peer-reviewed: 2026-08-20T07:20:00Z rounds=3 verdict=approved (post-approval factual gate update: stage 200 verified) -->

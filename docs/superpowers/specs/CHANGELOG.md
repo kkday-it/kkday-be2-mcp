@@ -18,6 +18,7 @@
 ## 2026-08-20
 
 - `2026-08-20-be2-mcp-inventory-quantity-wizard-design.md`（全檔，新建）/ 庫存數量進 wizard 設計（塊 A，即時 SET/fullday）：**就地改寫** Phase 3a `inventory_setting` module 為 fullday-SET 形狀（拿掉 dates[]/adjust/per-month）、**只支援 item_by_amount（1/0）其餘 fail-closed 擋 + 面板標示**、`inventoryShape.ts` FINALIZE（讀取改 `POST inventories/search`、主形狀 `data[itemOid].fullday`、保留 defensive、補 fixture）、折進既有 `be2_open_batch_wizard` grid 面板 / 對齊獨立版 BAA 庫存能力（原版僅 item_by_amount/fullday）。3 個關鍵決策經使用者拍板：(a) 砍掉重寫（舊 module 從未上線、讀取端點壞的，無相容包袱）(b) 只做 item_by_amount、其餘擋掉但 UI 標「目前不支援」(c) live 寫入 PENDING（quantity PUT AU9403，RD 處理中）。與 Session 1（公告，走 sibling 面板）幾乎零檔案衝突，剩 types.ts union / index.ts 行級小衝突。塊 B（排程）另 session。
+- `2026-08-20-be2-mcp-inventory-quantity-wizard-design.md` §3/§4.3/§8/§10（授權 gate 現況更新）/ live 重測（塊 A brainstorm 期）發現 **stage quantity PUT 首次真 200**（正確契約 e2e 驗完）、SIT be2-220 仍 403（AU9403，RD grant 未生效）、stage 憑證已補齊；spec 從「live 寫入一律 PENDING」改為「live 綠寫入走 stage、SIT 待 grant」，§8 加 stage net-zero live 驗收 exit gate / 反映真實可寫路徑，讓 writing-plans 能放真的 live-acceptance 步驟。同步 `sit-write-contracts.md` §inventory + memory `be2-mcp-phase3-plan`。
 - `2026-08-20-be2-mcp-announcement-wizard-design.md`（全檔，新建）/ 商品公告進 wizard 設計：新 `announcement` domain module（首個非 product 形狀）+ module-local svc-b2c client（不碰 core GatewayClient）+ 獨立入口 `be2_open_announcement_wizard` + 專用建立表單面板 / 把 BAA 塊 C（公告）補進 MCP，驗 `ActionModule` 介面對非 product domain 的通用性。首發動作=create 全欄位；生效走原生 startTime/endTime、不做排程；live 寫入卡 svc-b2c S2S 403（build+draft 可）。3 個關鍵決策經使用者拍板：(1) create 全欄位 (2) 專用建立表單面板 (3) 獨立入口 sibling tool（因 uiResourceUri 一 tool 綁一面板、無法動態切，且避 Session 2 衝突）。
 - 同檔 §4.3/§5.1/§5.9/§8/§10（agy review round 1 兩修一納）/ (1) **§4.3**：user-uuid header 改由 accessToken 自解 platformId（讀 diff/view/寫 executor 三處統一），原設計「從 ExecCtx 拿 modifyUser」對讀取路徑不成立（DiffCtx/AppToolContext 刻意不含 modifyUser、只含 accessToken）；(2) **§5.9**：通用 changeset-panel.ts 的 itemKeyOf 硬寫只認 inv/shelf，announcement diff（僅 prod_oids[]）會 fallback 回 "undefined" → CONFIRMED_KEYS_MISMATCH 永遠無法批准 → 加 announcement 分支；(3) §5.1 itemKey 用 [...prod_oids].sort() 非就地 mutate / agy 抓到讀取路徑無 modifyUser、通用面板 itemKey fall-through（rounds=2 APPROVED）。
 
@@ -31,3 +32,5 @@
 - `2026-08-18-module-factory-design.md` §4（段② 實作者可插拔）/ 分工表「② 六格 = agy 並行」改為「可插拔實作者：預設 Claude subagent（通用），agy 為 lance 本機省額度選項」/ **可攜性**——skill 不該把 agy 寫死（agy 是特定使用者本機設定，別人用 Claude subagent）。同步改 SKILL.md 後端偵測、stage2-produce.md 加 Claude subagent 後端段、memory agy-work-allocation 標 lance 專屬。
 
 
+
+<!-- agy-peer-reviewed: 2026-08-20T07:20:00Z rounds=3 verdict=approved -->
