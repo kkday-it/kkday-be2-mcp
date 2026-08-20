@@ -17,6 +17,7 @@
 
 ## 2026-08-20
 
+- `2026-08-20-be2-mcp-inventory-quantity-wizard-design.md`（全檔，新建）/ 庫存數量進 wizard 設計（塊 A，即時 SET/fullday）：**就地改寫** Phase 3a `inventory_setting` module 為 fullday-SET 形狀（拿掉 dates[]/adjust/per-month）、**只支援 item_by_amount（1/0）其餘 fail-closed 擋 + 面板標示**、`inventoryShape.ts` FINALIZE（讀取改 `POST inventories/search`、主形狀 `data[itemOid].fullday`、保留 defensive、補 fixture）、折進既有 `be2_open_batch_wizard` grid 面板 / 對齊獨立版 BAA 庫存能力（原版僅 item_by_amount/fullday）。3 個關鍵決策經使用者拍板：(a) 砍掉重寫（舊 module 從未上線、讀取端點壞的，無相容包袱）(b) 只做 item_by_amount、其餘擋掉但 UI 標「目前不支援」(c) live 寫入 PENDING（quantity PUT AU9403，RD 處理中）。與 Session 1（公告，走 sibling 面板）幾乎零檔案衝突，剩 types.ts union / index.ts 行級小衝突。塊 B（排程）另 session。
 - `2026-08-20-be2-mcp-announcement-wizard-design.md`（全檔，新建）/ 商品公告進 wizard 設計：新 `announcement` domain module（首個非 product 形狀）+ module-local svc-b2c client（不碰 core GatewayClient）+ 獨立入口 `be2_open_announcement_wizard` + 專用建立表單面板 / 把 BAA 塊 C（公告）補進 MCP，驗 `ActionModule` 介面對非 product domain 的通用性。首發動作=create 全欄位；生效走原生 startTime/endTime、不做排程；live 寫入卡 svc-b2c S2S 403（build+draft 可）。3 個關鍵決策經使用者拍板：(1) create 全欄位 (2) 專用建立表單面板 (3) 獨立入口 sibling tool（因 uiResourceUri 一 tool 綁一面板、無法動態切，且避 Session 2 衝突）。
 
 ## 2026-08-19
