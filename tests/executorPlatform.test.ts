@@ -81,7 +81,7 @@ describe('execInventoryPlatform', () => {
 // undefined on InventoryPlatformItem) and would make itemKeysOf() always produce [undefined,...],
 // permanently mismatching any real confirmedKeys and locking the panel approval path.
 describe('itemKeysOf — inventory_platform key rule (Task 3 review pin)', () => {
-  const WHO = { accessToken: 'tok', userLabel: 'owner@kkday.com', sessionId: 's1' }
+  const WHO = { accessToken: 'tok', userLabel: 'owner@kkday.com', sessionId: 's1', identityId: 'id-test' }
 
   function makeDeps(gateway: { get: Function; put: Function }): { store: ChangeSetStore; deps: ConfirmServiceDeps } {
     const db = openDb(':memory:')

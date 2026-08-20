@@ -5,7 +5,7 @@ import type { AuthServiceClient } from './authServiceClient.js'
 import { decodeJwtExpMs } from './jwt.js'
 import { AppError, AuthError } from '../errors.js'
 
-export interface UserAuthContext { accessToken: string; userLabel: string; businessList: unknown[] }
+export interface UserAuthContext { accessToken: string; userLabel: string; businessList: unknown[]; identityId: string }
 
 export interface TokenManagerStores { identities: IdentityStore; credentials: CredentialStore }
 
@@ -54,7 +54,7 @@ export class TokenManager {
       }
       identity = await flight
     }
-    return { accessToken: identity.accessToken, userLabel: identity.userLabel, businessList: identity.businessList }
+    return { accessToken: identity.accessToken, userLabel: identity.userLabel, businessList: identity.businessList, identityId }
   }
 
   private async doRefresh(identity: Identity, identityId: string): Promise<Identity> {

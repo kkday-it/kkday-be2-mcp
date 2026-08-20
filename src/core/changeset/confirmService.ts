@@ -13,7 +13,7 @@ import type { ChangeSetRecord, ChangeSetItem, InventoryItem, InventoryPlatformIt
 // decision": that sequence is security-critical (it is what makes approval execute-exactly-once
 // and immune to a stale/replayed diff) and a copy would silently drift from the original.
 
-export interface ApproveWho { accessToken: string; userLabel: string; sessionId: string }
+export interface ApproveWho { accessToken: string; userLabel: string; sessionId: string; identityId: string }
 
 export interface ApproveParams {
   rec: ChangeSetRecord

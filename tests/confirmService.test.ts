@@ -15,7 +15,7 @@ import type { ChangeSetRecord, InventoryItem } from '../src/core/changeset/types
 // memory sqlite, same harness as tests/confirmRoutes*.test.ts) with a fake gateway, so the actual
 // itemKeysOf + Set-equality code path is what runs.
 
-const WHO = { accessToken: 'tok', userLabel: 'owner@kkday.com', sessionId: 's1' }
+const WHO = { accessToken: 'tok', userLabel: 'owner@kkday.com', sessionId: 's1', identityId: 'id-test' }
 
 function makeDeps(gateway: { get: Function; put: Function; post?: Function }): { store: ChangeSetStore; audit: AuditLog; deps: ConfirmServiceDeps } {
   const db = openDb(':memory:')

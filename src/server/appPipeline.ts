@@ -123,7 +123,7 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
           // — or fail on — modify_user resolution.
           approveAndExecute: p => approveAndExecuteService(
             { changeSets: deps.changeSets, gateway: deps.gateway, audit: deps.audit, now: deps.now, modifyUserFrom: deps.modifyUserFrom },
-            { ...p, who: { accessToken: user.accessToken, userLabel, sessionId: reqCtx.sessionId } },
+            { ...p, who: { accessToken: user.accessToken, userLabel, sessionId: reqCtx.sessionId, identityId: user.identityId } },
           ),
         })
         // Task 5: mirrors toolPipeline.ts's runWrapped — same substrate, same generic recording —

@@ -59,7 +59,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
       if (!res.headersSent) res.status(500).send('internal error')
     }) }
 
-  async function requireSession(req: express.Request): Promise<{ sessionId: string; userLabel: string; accessToken: string } | undefined> {
+  async function requireSession(req: express.Request): Promise<{ sessionId: string; userLabel: string; accessToken: string; identityId: string } | undefined> {
     const sid = parseCookies(req.header('cookie'))['be2mcp_sid']
     if (!sid) return undefined
     const sess = deps.webSessions.get(sid)   // undefined if idle-expired (row deleted)
@@ -92,7 +92,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     // discriminating power for audit purposes, but its preimage (the cookie itself) cannot be
     // recovered from it. `who.sessionId` has no consumer besides audit labeling (grep-verified:
     // confirmService.ts, executor.ts, confirmRoutes.ts's own reject handler) so this swap is safe.
-    return { sessionId: cred.credHash, userLabel: user.userLabel, accessToken: user.accessToken }
+    return { sessionId: cred.credHash, userLabel: user.userLabel, accessToken: user.accessToken, identityId: cred.identityId }
   }
   function loginRedirect(res: express.Response, next: string) { res.redirect(302, `/confirm/login?next=${encodeURIComponent(next)}`) }
 
