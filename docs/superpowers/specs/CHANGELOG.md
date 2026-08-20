@@ -30,6 +30,9 @@
 
 - 同檔 §5.2/§5.3/§5.5/假設#4（code-review 收尾兩修）/ (1) `en-default` warn 明訂放在**確認頁 renderer + 面板 step-3**（validate 是 error-or-null 無 warn 通道）——實作前漏了這條 warn，code-review Spec 軸抓到；(2) `AnnouncementDiffItem.existing_count` 由 `number`(用 -1 當未知哨兵) 改為 `number | null`（null=未知），去除 primitive-obsession 哨兵（code-review Standards 軸）/ agy 雙軸 code-review（PR #19）發現的 2 個塊 C 真落差。
 
+- `2026-08-20-be2-mcp-inventory-quantity-wizard-design.md` §5.3（code-review 收尾）/ `would_go_negative` 欄位：SET-only 改寫後恆 false=死欄位，spec 從「欄位保留供 renderer/型別一致」改為「刻意移除，YAGNI；重引入 adjust 再加回」——對齊實作已移除的事實（code-review Spec 軸發現 spec 說留、code 沒留）/ agy 雙軸 code-review（PR #19）發現的塊 A 落差。
+- 跨模組（code-review Standards 軸 Duplicated Code 收斂，非 spec 檔異動，附記）/ 抽 `src/gateway/httpJson.ts` 共用 HTTP-JSON 原語（fetch+timeout+json+unreachable→502），`GatewayClient`(get/put/post) 與 announcement `svcB2cClient`(list/create) 皆改用之，消除各自手刻 fetch 骨架的重複；行為不變（gatewayClient/svcB2cClient 測試 15/15 綠）。
+
 ## 2026-08-19
 
 - 建立本 CHANGELOG（追溯補記上述 2026-08-16/18 的 spec 異動）/ 落實新增的「規格變更」規則。

@@ -1,4 +1,5 @@
 import { GatewayError } from '../errors.js'
+import { fetchJson } from './httpJson.js'
 
 // be2 錯誤回應有兩種 envelope（2026-08-16 彩排實測 + sit-contracts）：
 // `{data:null, meta:{status,desc}}`（product-service 直達）與 `{metadata:{status,desc}, data}`
@@ -12,6 +13,8 @@ function gatewayErrorParts(body: Record<string, unknown>, status: number): { cod
   return { code: String(code ?? `HTTP_${status}`), message: String(message ?? 'gateway error') }
 }
 
+const BE2_HEADERS = { accept: 'application/json', 'x-auth-id': 'be2' } as const
+
 export class GatewayClient {
   private baseUrl: string
   private fetchImpl: typeof fetch
@@ -23,62 +26,35 @@ export class GatewayClient {
     this.timeoutMs = opts.timeoutMs ?? 15_000
   }
 
+  // 成功語義（data envelope 解包）與錯誤碼萃取（meta/metadata/error）留在此層；HTTP 底層
+  // （fetch/timeout/json/unreachable→502）委派 fetchJson（src/gateway/httpJson.ts），與 announcement
+  // 的 svc-b2c client 共用同一原語（code-review Standards 軸 Duplicated Code 收斂）。行為不變。
+  private unwrap(path: string, method: string, r: { ok: boolean; status: number; body: Record<string, unknown> }): unknown {
+    if (!r.ok) {
+      const { code, message } = gatewayErrorParts(r.body, r.status)
+      throw new GatewayError(code, `${method} ${path} -> ${r.status}: ${message}`, r.status)
+    }
+    return (r.body as { data?: unknown }).data ?? r.body
+  }
+
   async get(path: string, accessToken: string, query?: Record<string, string>): Promise<unknown> {
     const qs = query && Object.keys(query).length ? `?${new URLSearchParams(query)}` : ''
-    let res: Response
-    try {
-      res = await this.fetchImpl(`${this.baseUrl}${path}${qs}`, {
-        headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json', 'x-auth-id': 'be2' },
-        signal: AbortSignal.timeout(this.timeoutMs),
-      })
-    } catch (e) {
-      throw new GatewayError('GATEWAY_UNREACHABLE', `GET ${path} failed: ${(e as Error).name}`, 502)
-    }
-    const body = (await res.json().catch(() => ({}))) as Record<string, unknown>
-    if (!res.ok) {
-      const { code, message } = gatewayErrorParts(body, res.status)
-      throw new GatewayError(code, `GET ${path} -> ${res.status}: ${message}`, res.status)
-    }
-    return (body as { data?: unknown }).data ?? body
+    const r = await fetchJson(this.fetchImpl, `${this.baseUrl}${path}${qs}`,
+      { headers: { authorization: `Bearer ${accessToken}`, ...BE2_HEADERS } }, this.timeoutMs, `GET ${path}`)
+    return this.unwrap(path, 'GET', r)
   }
 
   async put(path: string, accessToken: string, body: unknown): Promise<unknown> {
-    let res: Response
-    try {
-      res = await this.fetchImpl(`${this.baseUrl}${path}`, {
-        method: 'PUT',
-        headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json', 'content-type': 'application/json', 'x-auth-id': 'be2' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      })
-    } catch (e) {
-      throw new GatewayError('GATEWAY_UNREACHABLE', `PUT ${path} failed: ${(e as Error).name}`, 502)
-    }
-    const b = (await res.json().catch(() => ({}))) as Record<string, unknown>
-    if (!res.ok) {
-      const { code, message } = gatewayErrorParts(b, res.status)
-      throw new GatewayError(code, `PUT ${path} -> ${res.status}: ${message}`, res.status)
-    }
-    return (b as { data?: unknown }).data ?? b
+    const r = await fetchJson(this.fetchImpl, `${this.baseUrl}${path}`,
+      { method: 'PUT', headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json', ...BE2_HEADERS }, body: JSON.stringify(body) },
+      this.timeoutMs, `PUT ${path}`)
+    return this.unwrap(path, 'PUT', r)
   }
 
   async post(path: string, accessToken: string, body: unknown): Promise<unknown> {
-    let res: Response
-    try {
-      res = await this.fetchImpl(`${this.baseUrl}${path}`, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${accessToken}`, accept: 'application/json', 'content-type': 'application/json', 'x-auth-id': 'be2' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      })
-    } catch (e) {
-      throw new GatewayError('GATEWAY_UNREACHABLE', `POST ${path} failed: ${(e as Error).name}`, 502)
-    }
-    const b = (await res.json().catch(() => ({}))) as Record<string, unknown>
-    if (!res.ok) {
-      const { code, message } = gatewayErrorParts(b, res.status)
-      throw new GatewayError(code, `POST ${path} -> ${res.status}: ${message}`, res.status)
-    }
-    return (b as { data?: unknown }).data ?? b
+    const r = await fetchJson(this.fetchImpl, `${this.baseUrl}${path}`,
+      { method: 'POST', headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json', ...BE2_HEADERS }, body: JSON.stringify(body) },
+      this.timeoutMs, `POST ${path}`)
+    return this.unwrap(path, 'POST', r)
   }
 }

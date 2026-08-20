@@ -106,7 +106,8 @@ Phase 3a 的 `inventory_setting` module（per-date `dates[]` + `op:set|adjust`�
 1. `GET basic-info` → 判 `control_type/inventory_type`；非 `1/0` → `throw DiffError([item:supplier], '此商品非「套餐總量限制」模式，即時庫存數量版僅支援套餐總量；SKU/依日期模式尚未支援')`。
 2. `POST .../inventories/search` body `{supplier_oid, page:1}` → `parseInventoryFullday(raw, itemOid)` 取 current（number | undefined，null→undefined）。
 3. 讀取失敗（throw）→ `DiffError`（fail-closed）。
-4. 產出 `InventoryDiffItem`：`{item_oid, supplier_oid, current, target: quantity, no_op: current === quantity, would_go_negative: false}`（SET≥0 恆非負；欄位保留供 renderer/型別一致）。
+4. 產出 `InventoryDiffItem`：`{item_oid, supplier_oid, current, target: quantity, no_op: current === quantity}`。
+   > **`would_go_negative` 欄位：SET-only 改寫後刻意移除（code-review 收尾，2026-08-20）。** 舊版（Phase 3a 含 `adjust` 相對加減）需要它標記「會壓到負數」；本版只做 SET 且 validate 強制 `quantity ≥ 0`，該旗標**恆為 false = 死欄位**，故不再保留（YAGNI，非「型別一致」理由所能支撐）。若日後重新引入 `adjust`，再一併加回。
 - current 為 `undefined`（未設）＝合法：SET 是完全定義的寫入；確認頁顯示「未設 → N」。
 
 ### 5.4 `executor.ts`（`execInventory` 就地簡化）

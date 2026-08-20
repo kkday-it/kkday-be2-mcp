@@ -1,4 +1,5 @@
 import { GatewayError } from '../../../errors.js'
+import { fetchJson } from '../../../gateway/httpJson.js'
 import { decodePlatformId } from './userUuid.js'
 
 // svc-b2c 成功 = HTTP 200 且 metadata.status '0000'（§3 契約）。與 core GatewayClient 不同 host/header/
@@ -35,40 +36,28 @@ export class AnnouncementClient {
     }
   }
 
+  // HTTP 底層（fetch/timeout/json/unreachable→502）委派共用 fetchJson（src/gateway/httpJson.ts）；
+  // 本 client 只保留 svc-b2c 專屬語義：0000 成功判定 + metadata 錯誤碼萃取 + 特有 header。
+  private check(label: string, r: { ok: boolean; status: number; body: Record<string, unknown> }): Record<string, unknown> {
+    if (!r.ok || !ok0000(r.body)) {
+      const { code, message } = errParts(r.body, r.status)
+      throw new GatewayError(code, `${label} -> ${r.status}: ${message}`, r.ok ? 502 : r.status)
+    }
+    return r.body
+  }
+
   async listByProdOids(accessToken: string, prodOids: string[]): Promise<unknown[]> {
     const qs = new URLSearchParams({ page: '1', perPage: '100', prodOids: prodOids.join(',') })
-    let r: Response
-    try {
-      r = await this.fetchImpl(`${this.baseUrl}/admin/product/announcement?${qs}`, {
-        method: 'GET', headers: this.headers(accessToken), signal: AbortSignal.timeout(this.timeoutMs),
-      })
-    } catch (e) {
-      throw new GatewayError('GATEWAY_UNREACHABLE', `GET announcement failed: ${(e as Error).name}`, 502)
-    }
-    const body = (await r.json().catch(() => ({}))) as Record<string, unknown>
-    if (!r.ok || !ok0000(body)) {
-      const { code, message } = errParts(body, r.status)
-      throw new GatewayError(code, `GET announcement -> ${r.status}: ${message}`, r.ok ? 502 : r.status)
-    }
-    const data = (body as { data?: unknown }).data
+    const r = await fetchJson(this.fetchImpl, `${this.baseUrl}/admin/product/announcement?${qs}`,
+      { method: 'GET', headers: this.headers(accessToken) }, this.timeoutMs, 'GET announcement')
+    const data = (this.check('GET announcement', r) as { data?: unknown }).data
     return Array.isArray(data) ? data : []
   }
 
   async create(accessToken: string, body: Record<string, unknown>): Promise<unknown> {
-    let r: Response
-    try {
-      r = await this.fetchImpl(`${this.baseUrl}/admin/product/announcement`, {
-        method: 'POST', headers: this.headers(accessToken), body: JSON.stringify(body),
-        signal: AbortSignal.timeout(this.timeoutMs),
-      })
-    } catch (e) {
-      throw new GatewayError('GATEWAY_UNREACHABLE', `POST announcement failed: ${(e as Error).name}`, 502)
-    }
-    const b = (await r.json().catch(() => ({}))) as Record<string, unknown>
-    if (!r.ok || !ok0000(b)) {
-      const { code, message } = errParts(b, r.status)
-      throw new GatewayError(code, `POST announcement -> ${r.status}: ${message}`, r.ok ? 502 : r.status)
-    }
+    const r = await fetchJson(this.fetchImpl, `${this.baseUrl}/admin/product/announcement`,
+      { method: 'POST', headers: this.headers(accessToken), body: JSON.stringify(body) }, this.timeoutMs, 'POST announcement')
+    const b = this.check('POST announcement', r)
     return (b as { data?: unknown }).data ?? b
   }
 }
