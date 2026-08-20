@@ -22,19 +22,27 @@ export interface ExecutorDeps {
 // hardcoded 'confirm-page' every branch used to write regardless of caller. Defaults to
 // 'confirm_page' semantics (via clientInfoFor's fallback) for any pre-existing direct caller that
 // doesn't pass it — see clientInfoFor below.
-export interface ExecutorIdentity { accessToken: string; userLabel: string; modifyUser: string; sessionId: string; channel?: 'panel' | 'confirm_page' }
+export interface ExecutorIdentity { accessToken: string; userLabel: string; modifyUser: string; sessionId: string; channel?: 'panel' | 'confirm_page' | 'scheduler' }
 
 // Same channel->label mapping as confirmService.ts's clientInfoPrefix, but for the PER-ITEM
 // changeset.execute audit rows (as opposed to confirmService's single changeset.approve decision
 // row) — intentionally a DIFFERENT literal ('app-panel', not 'panel') so the two audit surfaces
 // stay visually distinguishable when scanning audit_log by clientInfo.
-function clientInfoFor(who: ExecutorIdentity): string { return who.channel === 'panel' ? 'app-panel' : 'confirm-page' }
+function clientInfoFor(who: ExecutorIdentity): string { return who.channel === 'scheduler' ? 'scheduler' : who.channel === 'panel' ? 'app-panel' : 'confirm-page' }
 
-export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, who: ExecutorIdentity): Promise<{ status: 'done' | 'partial' | 'failed'; results: ItemResult[] }> {
+export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, who: ExecutorIdentity): Promise<{ status: 'done' | 'partial' | 'failed'; results: ItemResult[] } | null> {
   const rec = deps.changeSets.get(changesetId)
   if (!rec) throw new AppError('NOT_FOUND', 'change-set not found', 404)
-  if (rec.status !== 'approved') throw new AppError('BAD_STATE', `change-set is ${rec.status}, not approved`, 409)
-  deps.changeSets.setStatus(changesetId, 'executing')
+  // 塊 B(spec §7):執行起點改 CAS——排程回收方與「還活著只是慢」的實例最多一方能贏,
+  // exactly-once 執行的結構性保證。即時批准路徑不受影響(caller 先贏 pending→approved 才進來)。
+  // CAS 輸時分流:executing/終態 = 輸掉競態(別的實例在跑/已跑完)→ null 靜默讓行;
+  // 其餘狀態(pending/scheduled/rejected/…)= 呼叫端誤用 → BAD_STATE(read-then-throw 不可
+  // 當防線——併發輸方讀到 executing 若 throw,scheduler tick 會被整輪打斷)。
+  if (!deps.changeSets.casStatus(changesetId, 'approved', 'executing')) {
+    const cur = deps.changeSets.get(changesetId)?.status
+    if (cur === 'executing' || cur === 'done' || cur === 'partial' || cur === 'failed') return null
+    throw new AppError('BAD_STATE', `change-set is ${cur}, not approved`, 409)
+  }
   const mod = getModule(rec.actionType)
   const tracer = trace.getTracer('be2-mcp')
   const ctx: ExecCtx = {

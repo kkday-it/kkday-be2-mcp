@@ -10,7 +10,7 @@ export interface ExecCtx {
   modifyUser: string
   userLabel: string
   sessionId: string
-  channel?: 'panel' | 'confirm_page'
+  channel?: 'panel' | 'confirm_page' | 'scheduler'
   span<T>(name: string, fn: (traceId: string) => Promise<T>): Promise<T>
   now: () => number
 }

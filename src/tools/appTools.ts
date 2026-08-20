@@ -76,6 +76,7 @@ export const appConfirmChangesetTool: AppToolDef = {
     nonce: z.string().min(1),
     diff_version: z.string().min(1),
     confirmed_keys: z.array(z.string()),
+    expected_execute_at_utc: z.number().int().optional(),
   } as never,
   annotations: {
     title: 'Confirm and execute change-set',
@@ -103,9 +104,10 @@ export const appConfirmChangesetTool: AppToolDef = {
     // executeChangeSet → audit（channel:'panel'）。confirmed_keys 必須與 change-set items 完全一致，
     // 否則 service throw CONFIRMED_KEYS_MISMATCH（面板取消勾選不能讓後端仍全量執行 —— spec §4.3）。
     try {
-      const out = await ctx.approveAndExecute({ rec, expectedDiffVersion: args.diff_version, confirmedKeys: args.confirmed_keys, channel: 'panel' })
+      const out = await ctx.approveAndExecute({ rec, expectedDiffVersion: args.diff_version, confirmedKeys: args.confirmed_keys, channel: 'panel', expectedExecuteAtUtc: args.expected_execute_at_utc as number | undefined })
       if (out.stale) return makeEnvelope([], [{ key: rec.id, code: 'DIFF_STALE', message: 'Change-set state moved; panel will reload the new diff.' }])
       if (out.casFailed) return makeEnvelope([], [{ key: rec.id, code: 'ALREADY_PROCESSED', message: 'This change-set was already approved/executed (possibly via the confirm page).' }])
+      if (out.scheduled) return makeEnvelope([{ changeset_id: rec.id, status: 'scheduled' }])
       return makeEnvelope([{ changeset_id: rec.id, status: out.status, results: out.results }])
     } catch (e) {
       return makeEnvelope([], [toEnvelopeError(rec.id, e)])   // CONFIRMED_KEYS_MISMATCH 等

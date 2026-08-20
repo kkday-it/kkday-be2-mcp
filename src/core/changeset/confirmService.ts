@@ -28,6 +28,7 @@ export interface ApproveParams {
   confirmedKeys?: string[]
   channel: 'panel' | 'confirm_page'
   audit?: { ip?: string; clientInfo?: string }
+  expectedExecuteAtUtc?: number
 }
 
 // The three failure modes are mutually exclusive with success: exactly one of stale/casFailed is
@@ -35,6 +36,7 @@ export interface ApproveParams {
 export interface ApproveResult {
   stale?: true
   casFailed?: true
+  scheduled?: true
   status?: 'done' | 'partial' | 'failed'
   results?: ItemResult[]
 }
@@ -94,6 +96,36 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
   // the whole call while the change-set is still 'pending_approval' — retryable, not stranded.
   const modifyUser = deps.modifyUserFrom(who.accessToken)
 
+  // Finding 3（Task 11 review）: 沿用抽出前 confirmRoutes.ts 原本的 'confirm-page:'（連字號）字首,
+  // 不可讓 channel 字面值('confirm_page',底線)直接滲入可觀察的 audit 紀錄——那是這次抽取造成的
+  // clientInfo 漂移,不是刻意設計。面板(panel)沒有「原本」可沿用,取一個獨立字首。
+  const clientInfoPrefix = channel === 'confirm_page' ? 'confirm-page' : 'panel'
+
+  // 塊 B(spec §5):時間回聲綁定——人看到的時間必須等於將執行的時間(同 confirmed_keys 綁
+  // items、diff_version 綁內容)。有 schedule 必帶回聲、無 schedule 不得帶,錯配一律 409。
+  if (rec.schedule || params.expectedExecuteAtUtc !== undefined) {
+    if (!rec.schedule || params.expectedExecuteAtUtc !== rec.schedule.executeAtUtc) {
+      throw new AppError('SCHEDULE_ECHO_MISMATCH', 'expected_execute_at_utc does not match this change-set schedule', 409)
+    }
+    // 批准閾值刻意與建立不同(spec §5):只驗「仍在未來」——若也用 minLead,建立時剛好
+    // minLead 後的排程在人審完 diff 點批准的瞬間必然 409,tight schedule 永遠批不過。
+    if (rec.schedule.executeAtUtc <= deps.now()) {
+      throw new AppError('SCHEDULE_IN_PAST', 'scheduled time has passed — cancel and re-create with a new time', 409)
+    }
+    const won = deps.changeSets.setScheduled(rec.id, {
+      identityId: who.identityId, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId,
+    }, deps.now())
+    if (!won) return { casFailed: true }
+    deps.audit.record({
+      userLabel: who.userLabel, sessionId: who.sessionId,
+      clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
+      tool: 'changeset.approve',
+      params: { changeset_id: rec.id, ip: audit?.ip, channel, scheduled_for: rec.schedule.executeAtUtc },
+      status: 'ok', traceId: 'n/a', durationMs: 0,
+    })
+    return { scheduled: true }
+  }
+
   // (3) atomic compare-and-swap: only the caller that wins the pending_approval -> approved
   // transition may proceed to executeChangeSet. This is what guarantees execute-exactly-once
   // under concurrent approvals — including the cross-channel case now possible post-Task-11 (one
@@ -106,10 +138,6 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
   // tool='changeset.execute'. Preserves the confirm-page's original ip/clientInfo audit fields
   // (params.audit) verbatim — dropping IP audit here was an explicitly called-out regression risk
   // during this extraction.
-  // Finding 3（Task 11 review）: 沿用抽出前 confirmRoutes.ts 原本的 'confirm-page:'（連字號）字首,
-  // 不可讓 channel 字面值('confirm_page',底線)直接滲入可觀察的 audit 紀錄——那是這次抽取造成的
-  // clientInfo 漂移,不是刻意設計。面板(panel)沒有「原本」可沿用,取一個獨立字首。
-  const clientInfoPrefix = channel === 'confirm_page' ? 'confirm-page' : 'panel'
   deps.audit.record({
     userLabel: who.userLabel, sessionId: who.sessionId,
     clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
@@ -120,5 +148,6 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
 
   // (4) execute.
   const out = await executeChangeSet(deps, rec.id, { accessToken: who.accessToken, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId, channel })
+  if (!out) return { casFailed: true }
   return { status: out.status, results: out.results }
 }

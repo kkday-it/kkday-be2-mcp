@@ -32,7 +32,7 @@ describe('executeChangeSet', () => {
   it('product toggle: writes, records before/after, status done', async () => {
     const { deps: d, store } = deps({ '/product/api/v1/product-configs/p1/switch': { is_active: true, is_locked_for_active: false } })
     seedProduct(store, false)
-    const out = await executeChangeSet(d, 'cs1', WHO)
+    const out = (await executeChangeSet(d, 'cs1', WHO))!
     expect(out.status).toBe('done')
     expect(out.results[0]).toMatchObject({ item_key: 'p1', status: 'done', before: { is_active: true }, after: { is_active: false } })
     expect(store.get('cs1')!.status).toBe('done')
@@ -48,7 +48,7 @@ describe('executeChangeSet', () => {
     const audit = new AuditLog(db, () => 1000)
     const d: ExecutorDeps = { changeSets: store, gateway, audit, now: () => 1000 }
     seedProduct(store, false)
-    const out = await executeChangeSet(d, 'cs1', WHO)
+    const out = (await executeChangeSet(d, 'cs1', WHO))!
     expect(out.status).toBe('done')
     expect(putToken).toBe('sess-token')
     const rows = audit.recent()
@@ -58,7 +58,7 @@ describe('executeChangeSet', () => {
   it('no-op is skipped (no write) when already in target', async () => {
     const { deps: d, store } = deps({ '/product/api/v1/product-configs/p1/switch': { is_active: false } })
     seedProduct(store, false)
-    const out = await executeChangeSet(d, 'cs1', WHO)
+    const out = (await executeChangeSet(d, 'cs1', WHO))!
     expect(out.results[0].status).toBe('skipped_noop')
   })
   it('plan read-merge-write preserves other pkgs', async () => {
@@ -126,7 +126,7 @@ describe('executeChangeSet', () => {
       ],
       diff: [], diffVersion: 'v', status: 'approved', createdAt: 1000,
     })
-    const out = await executeChangeSet(d, 'cs-multi', WHO)
+    const out = (await executeChangeSet(d, 'cs-multi', WHO))!
     expect(maxInFlight).toBe(1)
     expect(out.status).toBe('partial')
     const byKey = Object.fromEntries(out.results.map(r => [r.item_key, r.status]))
@@ -152,7 +152,7 @@ describe('executeChangeSet', () => {
       id: 'cs-inv-fail', creatorLabel: 'owner@kkday.com', creatorBearerHash: 'bh', sessionId: 's', actionType: 'inventory_setting',
       items: [item], diff: [], diffVersion: 'v', status: 'approved', createdAt: 1000,
     })
-    const out = await executeChangeSet(d, 'cs-inv-fail', WHO)
+    const out = (await executeChangeSet(d, 'cs-inv-fail', WHO))!
     expect(out.results[0].status).toBe('failed')
     const row = audit.recent().find(r => r.tool === 'changeset.execute' && (r.params as { item?: string }).item === 'i1:s1')
     expect(row?.status).toBe('error')

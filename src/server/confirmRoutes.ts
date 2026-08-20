@@ -33,14 +33,17 @@ export interface ConfirmDeps extends ExecutorDeps {
 // otherwise 404 a change-set's own creator on their own approval page). Normalize defensively.
 const sameUser = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase()
 
-function renderShell(id: string, view: ConfirmView, diffVersion: string): string {
+function renderShell(id: string, view: ConfirmView, diffVersion: string, schedule?: { executeAtUtc: number; wall: string; tz: string }): string {
+  const scheduleIntro = schedule ? `<p style="opacity:0.8;font-size:0.9em;margin-top:0">將於 ${esc(schedule.wall)} (${esc(schedule.tz)}) 執行；現況為批准當下快照，執行時庫存可能已因銷售變動，將以 SET 目標值覆寫</p>` : ''
+  const hiddenInputs = `<input type=hidden name=diff_version value="${esc(diffVersion)}">${schedule ? `\n  <input type=hidden name=expected_execute_at_utc value="${schedule.executeAtUtc}">` : ''}`
+  const btnText = schedule ? `批准(將於 ${esc(schedule.wall)} ${esc(schedule.tz)} 執行)` : '批准並執行'
   return `<!doctype html><meta charset=utf-8><title>確認變更 ${esc(id)}</title>
 <style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}button{padding:8px 16px;font-size:1rem}</style>
-<h1>確認 change-set ${esc(id)}</h1>${view.intro}
+<h1>確認 change-set ${esc(id)}</h1>${scheduleIntro}${view.intro}
 ${view.tableHtml}
 <form method=post action="/confirm/${esc(id)}/approve" style="margin-top:1rem">
-  <input type=hidden name=diff_version value="${esc(diffVersion)}">
-  <button type=submit>批准並執行</button></form>
+  ${hiddenInputs}
+  <button type=submit>${btnText}</button></form>
 <form method=post action="/confirm/${esc(id)}/reject"><button type=submit>拒絕</button></form>`
 }
 
@@ -111,7 +114,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     // for a different user's change-set id.
     if (!rec || !sameUser(rec.creatorLabel, who.userLabel) || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
     const { diff, version } = await liveDiff(rec, who.accessToken)
-    res.status(200).send(renderShell(rec.id, getModule(rec.actionType).renderConfirm(rec, diff, version, ''), version))
+    res.status(200).send(renderShell(rec.id, getModule(rec.actionType).renderConfirm(rec, diff, version, ''), version, rec.schedule))
   }))
 
   r.post('/confirm/:id/approve', h(async (req, res) => {
@@ -131,13 +134,18 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
       rec, who, expectedDiffVersion: String(req.body?.diff_version),
       channel: 'confirm_page',
       audit: { ip: req.ip, clientInfo: req.header('user-agent') },
+      expectedExecuteAtUtc: req.body?.expected_execute_at_utc !== undefined && req.body.expected_execute_at_utc !== '' ? Number(req.body.expected_execute_at_utc) : undefined,
     })
     if (out.stale) {
       const { diff, version } = await liveDiff(rec, who.accessToken)
-      res.status(409).send(renderShell(rec.id, getModule(rec.actionType).renderConfirm(rec, diff, version, '<p style="color:#b00">目標欄位已被改動,請重新確認。</p>'), version))
+      res.status(409).send(renderShell(rec.id, getModule(rec.actionType).renderConfirm(rec, diff, version, '<p style="color:#b00">目標欄位已被改動,請重新確認。</p>'), version, rec.schedule))
       return
     }
     if (out.casFailed) { res.status(409).send('已被處理或已過期'); return }
+    if (out.scheduled) {
+      res.status(200).send(`<!doctype html><meta charset=utf-8><style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}</style><h1>已排程</h1><p>變更將於 ${esc(rec.schedule!.wall)} (${esc(rec.schedule!.tz)}) 執行。</p><p>若需取消，可回本頁點擊「拒絕」。</p>`)
+      return
+    }
     res.status(200).send(`<!doctype html><meta charset=utf-8><h1>執行結果:${esc(out.status)}</h1><pre>${esc(JSON.stringify(out.results, null, 2))}</pre>`)
   }))
 
