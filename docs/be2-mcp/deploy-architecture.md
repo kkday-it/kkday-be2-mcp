@@ -14,6 +14,38 @@ be2-mcp 是一支 **內網 Node.js 服務**，講 MCP（Model Context Protocol�
 
 ---
 
+## 1.5 MCP server「肚子裡」需要什麼（DevOps 相依盤點）
+
+> 這節直接回答「除了 EKS pod，這支 server 執行時還相依哪些東西」。**結論先講：一定要一個持久化資料庫；Redis 只有在「跑超過一個 instance」時才需要；其餘幾乎沒有。**
+
+| 相依 | 需要? | 說明 |
+|---|---|---|
+| **持久化 DB** | ✅ **必須** | 現用 SQLite 單檔（PoC）；prod / 多實例 → **Postgres**。存 OAuth 外殼、**be2 token store（憑證不離境）**、change-set、確認頁 session、稽核、rate 計數。11 張表，見下。需備份（`audit_log` 合規）。 |
+| **Redis / 分散式鎖** | 🟡 **只有多實例才要** | 單一 instance 完全不需要。>1 instance 時，3 個**純記憶體**協調原語會跨實例失效（見下「多實例才需 Redis」）。 |
+| **對外 egress** | ✅ | 只有兩個下游：auth-service host、be2 gateway host（443）。無其他外呼。 |
+| **Secrets 管道** | ✅ | service key（每環境一把）、announce api key。走 k8s Secret / Vault。 |
+| **Cron（1 個）** | ✅ | `oauth-purge` 每日一次（k8s CronJob）。**這是唯一的 server 端排程工作。** |
+| **OTLP collector** | ⬜ 選配 | `OTEL_MODE=otlp` 才需要一個 collector endpoint。 |
+| **訊息佇列 / worker** | ❌ **不需要** | **批次排程發送（庫存排程等）是 client-side**——跑在使用者 Claude Desktop、他 Mac 醒著+連線才送（面板明寫），**不需要 server 端 scheduler/queue/worker**。 |
+| **物件儲存（S3 等）** | ❌ | 無檔案上傳（不像 dev-tools 的 vibefile）。 |
+| **公網 ingress** | ❌ | client 皆本機（Code/Desktop），內網即可。 |
+| **GPU / 重運算** | ❌ | 無。瓶頸在下游 API 延遲。資源估 0.5 vCPU / 512MB 起。 |
+
+**DB 的 11 張表（依用途分群）**：
+- OAuth 外殼：`oauth_clients`（DCR）、`oauth_auth_codes`、`oauth_refresh`
+- **be2 token store（Option 1，憑證不離境）**：`be2_identities`（access+refresh+businessList）、`credentials`（不透明參考 → identity）
+- Change-set：`change_sets`、`change_set_results`
+- 確認頁：`web_sessions`（`be2mcp_sid`）
+- 治理：`audit_log`（append-only、需備份/保留）、`rate_counters`（rate budget，DB-backed）、`session_read_oids`（§6.2 scope substrate）
+
+**多實例才需 Redis**（單實例可全部略過）——目前這 3 個是**純 in-process `Map`**，跨 instance 會失效：
+1. **token refresh single-flight**（`tokenManager.inflight`，per-identity）——多實例並發 refresh 會撞 be2 refresh-token rotation。
+2. **MCP Apps 批准 nonce**（`approvalNonce.live`）——A instance 發的 nonce，B instance 認不得。
+3. **inventory per-key mutex**（`execInventory`）——防跨 change-set 同 item×supplier 的 lost-update。
+（change-set 防重複執行的 CAS 走 `change_sets.status` 條件式 UPDATE，共用 DB 即跨實例安全；`rate_counters` 亦 DB-backed。→ **真正逼你上 Redis 的就是上面 3 個記憶體原語**。）
+
+**給 DevOps 的一句話**：先給「一個 Postgres（或先 SQLite+PV 單實例）＋ egress 兩個 host ＋ 一個每日 cron ＋ secrets」就能跑；**要水平擴到多 pod，才需要再加 Redis**。沒有佇列、沒有 S3、沒有公網、排程發送不吃 server。
+
 ## 2. 部署拓撲
 
 ```
