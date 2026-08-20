@@ -8,7 +8,7 @@ import type { L2ToolContext } from '../src/server/l2Context.js'
 function ctxFor(store: ChangeSetStore, userLabel: string): L2ToolContext {
   return { gateway: {} as never, accessToken: 'x', userLabel, sessionId: 's', bearerHash: 'bh',
     businessList: [], readOids: {} as unknown as ReadOidStore, changeSets: store, rateBudget: {} as never,
-    baseUrl: 'http://x', genId: () => 'id', now: () => 1000, emitConfirmUrl: () => {} }
+    baseUrl: 'http://x', genId: () => 'id', now: () => 1000, emitConfirmUrl: () => {}, scheduleTz: 'Asia/Taipei' }
 }
 function seed(store: ChangeSetStore) {
   store.create({ id: 'cs1', creatorLabel: 'owner@kkday.com', creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_product',

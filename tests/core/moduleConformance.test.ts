@@ -108,5 +108,12 @@ describe('module conformance', () => {
       const diffSample = DIFF_SAMPLES[type]
       expect(m.itemKey(sample as any)).toBe(m.itemKey(diffSample[0] as any))
     })
+
+    it(`${type}: schedulable (if present) is boolean`, () => {
+      const m = getModule(type)
+      if (m.schedulable !== undefined) {
+        expect(typeof m.schedulable).toBe('boolean')
+      }
+    })
   }
 })

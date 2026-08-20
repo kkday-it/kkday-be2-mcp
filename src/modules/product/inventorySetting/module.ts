@@ -22,6 +22,7 @@ export const INVENTORY_ACTION_CODES = ['product.product-inventory.update']
 
 export const inventorySettingModule: ActionModule<InventoryItem, InventoryDiffItem> = {
   actionType: 'inventory_setting',
+  schedulable: true,
   itemSchema: invItemShape,
   authz: {
     codes: INVENTORY_ACTION_CODES,

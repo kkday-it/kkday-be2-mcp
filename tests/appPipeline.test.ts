@@ -53,6 +53,7 @@ function fakeAppDeps(over: Partial<AppPipelineDeps> = {}): AppPipelineDeps {
     // exercised separately below in the "app tool 依賴接線" suite.
     readOids: { record() {}, has: () => false, list: () => [] } as never,
     rateBudget: { consume() {}, consumeChangeset() {} } as never,
+    scheduleTz: 'Asia/Taipei',
     audit: { record() {} } as never,
     gateway: {} as never,
     changeSets: {

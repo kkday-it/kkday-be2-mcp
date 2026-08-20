@@ -158,6 +158,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     genId: randomUUID,
     now: Date.now,
     emitConfirmUrl,
+    scheduleTz: 'Asia/Taipei',
   }
 
   // 面板輪詢（app-only tools）獨立限流，見 src/limits/appRateBudget.ts 的說明——與 rateBudget
@@ -174,6 +175,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     baseUrl,
     emitConfirmUrl,
     modifyUserFrom: modifyUserFromToken,
+    scheduleTz: 'Asia/Taipei',
   }
 
   const transports = new Map<string, StreamableHTTPServerTransport>()

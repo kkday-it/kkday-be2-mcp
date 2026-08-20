@@ -28,6 +28,7 @@ export interface L2PipelineDeps extends PipelineDeps {
   genId: () => string
   now: () => number
   emitConfirmUrl: (changesetId: string, url: string) => void
+  scheduleTz: string
 }
 
 type ToolResult = {
@@ -136,6 +137,7 @@ export function wrapL2Tool(tool: L2ToolDef, deps: L2PipelineDeps) {
       genId: deps.genId,
       now: deps.now,
       emitConfirmUrl: deps.emitConfirmUrl,
+      scheduleTz: deps.scheduleTz,
     }),
     (ctx, args) => tool.handler(args as never, ctx))
 }

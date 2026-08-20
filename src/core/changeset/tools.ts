@@ -5,6 +5,8 @@ import { makeEnvelope, toEnvelopeError, type EnvelopeError } from '../../tools/e
 import type { ActionType, AnyChangeSetItem, AnyDiffItem } from './types.js'
 import { getModule, listModules } from './registry.js'
 import type { ActionModule } from './module.js'
+import { wallToUtcEpoch } from '../schedule/tz.js'
+import { SCHEDULE_POLICY } from '../schedule/policy.js'
 
 export { INVENTORY_ACTION_CODES } from '../../modules/product/inventorySetting/module.js'
 
@@ -27,6 +29,7 @@ export const createChangesetInputShape = {
   action_type: z.enum(listModules().map(m => m.actionType) as [string, ...string[]]),
   items: z.array(itemShape).min(1).max(20),
   note: z.string().max(500).optional(),
+  schedule: z.object({ wall: z.string().min(1) }).optional(),
 }
 const inputShape = createChangesetInputShape
 
@@ -71,6 +74,27 @@ export async function createChangesetCore(args: Record<string, unknown>, ctx: L2
       return makeEnvelope([], [{ key: actionType, code: 'ACTION_NOT_ALLOWED', message: 'Your be2 permissions do not include this shelf action.' }])
     }
   }
+
+  // 塊 B:排程參數(spec §5)。schedulable opt-in——排程能力在底層,但每個 action_type 必須
+  // 明確宣告;上下架/公告有原生排程欄位,不走本層。
+  let schedule: import('./types.js').ScheduleInfo | undefined
+  if (args.schedule) {
+    if (mod.schedulable !== true) {
+      return makeEnvelope([], [{ key: actionType, code: 'SCHEDULE_NOT_SUPPORTED',
+        message: `action_type ${actionType} does not support scheduled dispatch.` }])
+    }
+    const wall = (args.schedule as { wall: string }).wall
+    let executeAtUtc: number
+    try { executeAtUtc = wallToUtcEpoch(wall, ctx.scheduleTz) }
+    catch (e) { return makeEnvelope([], [toEnvelopeError(actionType, e)]) }
+    const lead = executeAtUtc - ctx.now()
+    if (lead < SCHEDULE_POLICY.minLeadMs || lead > SCHEDULE_POLICY.horizonMs) {
+      return makeEnvelope([], [{ key: actionType, code: 'SCHEDULE_OUT_OF_RANGE',
+        message: `scheduled time must be between ${SCHEDULE_POLICY.minLeadMs / 60_000} minutes and ${SCHEDULE_POLICY.horizonMs / 86_400_000} days from now (${ctx.scheduleTz}).` }])
+    }
+    schedule = { executeAtUtc, wall, tz: ctx.scheduleTz }
+  }
+
   try {
     ctx.rateBudget.consumeChangeset(ctx.userLabel)
     const diff = await mod.computeDiff({ gateway: ctx.gateway, accessToken: ctx.accessToken, userLabel: ctx.userLabel }, items)
@@ -86,6 +110,7 @@ export async function createChangesetCore(args: Record<string, unknown>, ctx: L2
       diff,
       diffVersion,
       note: args.note as string | undefined,
+      schedule,
       status: 'pending_approval',
       createdAt: ctx.now(),
     })

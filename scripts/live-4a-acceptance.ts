@@ -243,6 +243,7 @@ async function main() {
     gateway, accessToken, userLabel, sessionId,
     bearerHash: createHash('sha256').update(accessToken).digest('hex'),
     businessList: tokens.businessList,
+    scheduleTz: 'Asia/Taipei',
     readOids, changeSets, rateBudget,
     baseUrl: `http://127.0.0.1:${cfg.port}`,
     genId: () => randomUUID(),

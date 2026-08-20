@@ -22,7 +22,7 @@ function mkCtx(over: Partial<L2ToolContext> = {}): { ctx: L2ToolContext; store: 
     gateway, accessToken: 'fake', userLabel: 'p@kkday.com', sessionId: 's1', bearerHash: 'bh',
     businessList: ['product.product-sale-status.update'], readOids, changeSets: store, rateBudget,
     baseUrl: 'http://127.0.0.1:8787', genId: () => 'cs1', now: () => 1000,
-    emitConfirmUrl, ...over,
+    emitConfirmUrl, scheduleTz: 'Asia/Taipei', ...over,
   }
   return { ctx, store, readOids, emitConfirmUrl }
 }

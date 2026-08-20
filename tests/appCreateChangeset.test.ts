@@ -26,7 +26,7 @@ function mkCtx(over: Partial<AppToolContext> = {}): { ctx: AppToolContext; store
   const ctx: AppToolContext = {
     gateway, accessToken: 'fake', userLabel: 'p@kkday.com', sessionId: 's1', bearerHash: 'bh',
     businessList: ['product.product-sale-status.update'], readOids, changeSets: store, rateBudget,
-    nonces: new ApprovalNonceStore(), baseUrl: 'http://127.0.0.1:8787', genId: () => 'cs1', now: () => 1000,
+    nonces: new ApprovalNonceStore(), baseUrl: 'http://127.0.0.1:8787', genId: () => 'cs1', now: () => 1000, scheduleTz: 'Asia/Taipei',
     emitConfirmUrl, approveAndExecute: vi.fn() as never,
     ...over,
   }
