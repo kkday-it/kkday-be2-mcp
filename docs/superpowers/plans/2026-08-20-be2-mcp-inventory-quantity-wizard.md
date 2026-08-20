@@ -666,15 +666,17 @@ Rewrite `tests/createChangesetInventory.test.ts` to stage `{action_type:'invento
 
 - [ ] **Step 13: 更新 createChangesetTool description + confirmService 註解**
 
-In `src/core/changeset/tools.ts`, replace the `inventory_setting stages per-date ...` line (currently `:118`) with:
+In `src/core/changeset/tools.ts`, replace **BOTH** the `inventory_setting stages per-date ...` line (`:118`) AND the following `'read the item inventory first — adjust is computed against live quantities at approval time. ' +` line (`:119`, which still mentions `adjust` — must go, adjust is removed) with this single line:
 ```ts
     'inventory_setting stages a套餐總量 (item_by_amount) fullday inventory SET ({item_oid, supplier_oid, quantity}) — overwrites the plan\'s fullday remaining quantity; only item_by_amount mode is supported (SKU / by-date modes are rejected). Read the item inventory first. ' +
 ```
-In `src/core/changeset/confirmService.ts`, update the `:59-60` comment: inventory change-set 現在 (item_oid, supplier_oid) 全域唯一（無 dates）；multiset 比對邏輯仍安全，此處不再有「dates 不相交」語義。改為：
+
+In `src/core/changeset/confirmService.ts`, the `// Task 12 review Finding 1: ...` comment is a **7-line block (`:59-65`)**, ending at `...與舊 Set 邏輯行為一致(既有測試不受影響)。`. Replace the **entire block** (all 7 lines) — replacing only 2 lines would leave dangling text — with:
 ```ts
-  // inventory_setting items are unique per (item_oid, supplier_oid) (fullday SET, no dates); the
-  // multiset comparison below stays correct — it just no longer needs the old non-intersecting-
-  // dates carve-out (removed with the per-date shape in塊A).
+  // multiset（非 Set）比對:面板取消勾選某項後,後端不得仍全量執行,集合須完全一致(無多無缺)。
+  // 用排序後逐一比對的 multiset 而非 Set,避免重複 key 被去重而使 mismatch 永不觸發。
+  // （塊A 後 inventory_setting 已無 dates、(item_oid, supplier_oid) 全域唯一,不再產生重複 key;
+  // multiset 對唯一 key 與 Set 等價、仍安全,保留以涵蓋任何可能產生重複 key 的 action type。）
 ```
 
 - [ ] **Step 14: 移除 inventoryShape 舊 exports**
@@ -803,7 +805,7 @@ In `src/tools/appTools.ts`, `appGetBatchViewTool.inputShape` 的 `action_type`:
 ```ts
     action_type: z.enum(['inventory_platform', 'shelf_schedule', 'inventory_setting']),
 ```
-並把 handler 內 `args.action_type as 'inventory_platform' | 'shelf_schedule'` 的兩處 cast 改為 `as BatchViewActionType`（import 該型別）。
+並把 handler 內**唯一一處** cast（`:140` `args.action_type as 'inventory_platform' | 'shelf_schedule'`）改為 `as BatchViewActionType`（從 `./batchView.js` import 該型別）。（只有一處，別找第二處。）
 
 - [ ] **Step 5: 跑 ci 確認綠**
 
@@ -925,7 +927,7 @@ In `src/ui/batch-wizard.ts`:
 - `type ActionType = 'inventory_platform' | 'shelf_schedule' | 'inventory_setting'`。
 - `WIZARDS` 加 `inventory_setting: inventorySettingWizard`。
 - `RowState` 加 `quantityInput?: HTMLInputElement`。
-- 在每列的 row-input 區塊（緊接 `if (actionType === 'inventory_platform')` 那段的 renderPlanTable 內每列渲染處），加一個 inventory_setting 分支：對每列建一個 `<input type="number" min="0" step="1">`；若 `plan.inventory_mode !== 'item_by_amount'` 則 `input.disabled = true`、勾選框 `cb.disabled = true`，並在列上 renderText 一個「目前不支援（僅套餐總量模式）」標記；`item_by_amount` 列的 input 顯示 placeholder = 現況 `current_quantity`（或「未設」），`input` 值寫回 `rs.quantityInput`。
+- 在每列的 row-input 區塊（緊接 `if (actionType === 'inventory_platform')` 那段的 renderPlanTable 內每列渲染處），加一個 inventory_setting 分支：對每列建一個 `<input type="number" min="0" step="1">`。**⚠️ CSS grid 限制**：`.bw-plan-row` 是**寫死 5 欄**的 grid（`grid-template-columns: 1.5rem 1fr 6.5rem 8.5rem 6rem`，見 `:125`）。**不可**把 input 當第 6 個 grid child append 到 row（會 wrap 破版）。做法比照 inventory_platform 的 status span——把 number input 放進**既有的最後一欄那個 cell 容器內**（即 inventory_platform 顯示 `current_platform`/mode 的同一個 `statusSpan`/欄位 element；inventory_setting 時該欄改放 input 而非唯讀文字），grid 維持 5 欄不動。若 `plan.inventory_mode !== 'item_by_amount'` 則 `input.disabled = true`、勾選框 `cb.disabled = true`，並在該 cell 內（input 旁或取代 input）renderText 一個「目前不支援（僅套餐總量模式）」標記；`item_by_amount` 列的 input 顯示 placeholder = 現況 `current_quantity`（或「未設」），`input` 存進 `rs.quantityInput`。
 - `doNext()` 的 `rowInputs` mapping 加 `quantity: r.quantityInput ? (Number.isNaN(r.quantityInput.valueAsNumber) ? undefined : r.quantityInput.valueAsNumber) : undefined`。
 - `renderDiffCard`（面板 step2）加分派：`if (actionType === 'inventory_setting') return WIZARDS[actionType].renderDiffCard(d, domHelpers)`。
 - step4 完成後的讀回驗證區（`if (actionType === 'inventory_platform')` 附近）：加 `inventory_setting` 分支比對 `plan.current_quantity === diff.target`（可選，best-effort 顯示 ✓；讀不到就略過，不阻擋）。
@@ -1001,3 +1003,5 @@ git commit -m "test(inventory): 庫存數量 fullday eval 案例（先讀後寫/
 - **Type consistency**：`InventoryItem`/`InventoryDiffItem`（T2S1）與 diff（T2S5）、executor（T2S9）、renderer（T2S11）、ui.buildItems（T4S4）、batchView（T3S3）用的欄位名一致（`item_oid/supplier_oid/quantity/current/target/no_op`）。`parseInventoryFullday`/`readItemMode`/`isItemByAmount` 簽章（T1）與 diff/batchView/L0 消費端一致。`GatewayClient.post`（T1S6）被 diff/executor/L0/batchView 使用。
 </content>
 </invoke>
+
+<!-- agy-peer-reviewed: 2026-08-20T07:40:00Z rounds=2 verdict=approved -->
