@@ -10,6 +10,10 @@ const SAMPLES: Record<string, unknown> = {
   inventory_platform: { item_oid: '1713281', supplier_oid: '0', target: 'BE2_SCM', affected_pkgs: [{ prod_oid: '34133', pkg_oid: '1', pkg_name: 'x' }] },
   shelf_schedule: { prod_oid: '34133', pkg_oid: '1', queue: [{ reserve_date_utc: '2027-01-01 00:00:00', reserve_status: true }] },
   shelf_toggle_bundle: { prod_oid: '19513', bundle_pkg_oid: '57478', target_is_active: false },
+  announcement: {
+    prod_oids: ['7781'], name: '公告', is_enabled: true,
+    start_time: '2026-09-01 00:00:00', langs: ['zh-tw'], contents: [{ lang: 'zh-tw', content: 'hi' }],
+  },
 }
 
 const DIFF_SAMPLES: Record<string, any[]> = {
@@ -19,6 +23,11 @@ const DIFF_SAMPLES: Record<string, any[]> = {
   inventory_platform: [{ item_oid: '1713281', supplier_oid: '0', current: 'BE2', target: 'BE2_SCM', noop: false, affected_pkgs: [{ prod_oid: '34133', pkg_oid: '1', pkg_name: 'x' }] }],
   shelf_schedule: [{ prod_oid: '34133', pkg_oid: '1', pkg_name: 'x', current_queue: [{ reserve_date_utc: '2027-01-01 00:00:00', reserve_status: true }], new_queue: [{ reserve_date_utc: '2027-01-02 00:00:00', reserve_status: false }], noop: false }],
   shelf_toggle_bundle: [{ prod_oid: '19513', bundle_pkg_oid: '57478', name: '展望台門票 + 大阪地鐵一日券', current_is_active: true, target_is_active: false, no_op: false }],
+  announcement: [{
+    prod_oids: ['7781'], product_names: ['A'], name: '公告', is_enabled: true,
+    start_time: '2026-09-01 00:00:00', end_time: null, langs: ['zh-tw'],
+    contents: [{ lang: 'zh-tw', content: 'hi' }], existing_count: 0, noop: false,
+  }],
 }
 
 beforeAll(() => { resetRegistryForTest(); registerAllModules() })
@@ -86,6 +95,10 @@ describe('module conformance', () => {
         mutated[0].current = mutated[0].current === 'BE2' ? 'EXTERNAL' : 'BE2'
       } else if (type === 'shelf_schedule') {
         mutated[0].current_queue = []
+      } else if (type === 'announcement') {
+        // announcement 是 create（target-only，無 live current）——改一個進 hash 的 target 欄位
+        // （name）證明 diffVersion 非恆定 hash。其 staleness 綁的是 target payload，非 live 現況。
+        mutated[0].name = mutated[0].name + '-changed'
       }
       expect(m.diffVersion(mutated)).not.toBe(m.diffVersion(diffSample as any))
     })
