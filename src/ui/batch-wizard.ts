@@ -1203,7 +1203,8 @@ export function initWizard(app: WizardApp): void {
         for (const prod of products) {
           if (Array.isArray(prod.plans)) {
             for (const plan of prod.plans) {
-              if (actionType === 'inventory_platform') {
+              if (actionType === 'inventory_platform' || actionType === 'inventory_setting') {
+                // both verify by the executor's item_key = item_oid:supplier_oid (not prod:pkg)
                 livePlans.set(`${plan.item_oid}:${plan.supplier_oid}`, plan)
               } else {
                 livePlans.set(`${prod.prod_oid}:${plan.pkg_oid}`, plan)

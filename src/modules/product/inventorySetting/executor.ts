@@ -1,6 +1,6 @@
 import type { GatewayClient } from '../../../gateway/client.js'
 import type { InventoryItem, ItemResult, ChangeSetRecord } from '../../../core/changeset/types.js'
-import { parseInventoryFullday } from '../../../tools/inventoryShape.js'
+import { readCurrentFullday } from '../../../tools/inventoryShape.js'
 import type { ExecCtx } from '../../../core/changeset/module.js'
 
 export interface InventoryExecDeps {
@@ -43,7 +43,7 @@ async function doExec(deps: InventoryExecDeps, at: string, modifyUser: string, i
   // read current fullday
   let current: number | undefined
   try {
-    current = parseInventoryFullday(await gw.post(`/product/api/v1/items/${oid}/inventories/search`, at, { supplier_oid: it.supplier_oid, page: 1 }), it.item_oid)
+    current = await readCurrentFullday(gw, at, it.item_oid, it.supplier_oid)
   } catch (e) {
     return { item_key: key, status: 'failed', error_code: 'READ_FAILED', error_message: (e as Error).message, trace_id: traceId }
   }
@@ -65,7 +65,7 @@ async function doExec(deps: InventoryExecDeps, at: string, modifyUser: string, i
   const after: Record<string, number> = {}
   let errCode: string | undefined, errMsg: string | undefined
   try {
-    const rq = parseInventoryFullday(await gw.post(`/product/api/v1/items/${oid}/inventories/search`, at, { supplier_oid: it.supplier_oid, page: 1 }), it.item_oid)
+    const rq = await readCurrentFullday(gw, at, it.item_oid, it.supplier_oid)
     if (rq !== undefined) after.fullday = rq
   } catch (e) {
     errCode = 'AFTER_READ_FAILED'; errMsg = `write succeeded but the after re-read failed: ${(e as Error).message}`

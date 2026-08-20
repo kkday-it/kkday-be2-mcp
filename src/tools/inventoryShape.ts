@@ -1,11 +1,22 @@
-// Single source of truth for the per-date quantities shape (spec §6.3): the L0 read tool's
-// trim, the diff module, and the executor's read-merge-write all resolve rows/fields HERE.
-// The real GET shape has never been observed live (every Phase 1a supplier read 403'd), so
-// these are tolerant candidate lists. FINALIZE(Task 1): once tests/fixtures/inventory-quantities.json
-// exists, tighten each list to the single observed key and add a fixture test.
+// Single source of truth for the inventory fullday read contract (spec §6): the L0 read tool,
+// the diff module, the executor, and batchView all read current quantity THROUGH here so the
+// endpoint + response shape can't drift between call sites. Real shape (2026-08-19/20 live):
+// {data:{[itemOid|skuOid]:{fullday:number|null}}}. 本版只用 item_by_amount 的 {itemOid:{fullday}}；
+// 主解析為快樂路徑，保留 defensive 降級（不鎖死原則）。
 
-// FINALIZE (塊 A): 真實形狀 = data[itemOid|skuOid].fullday（number|null）。本版只用 item_by_amount
-// 的 {itemOid:{fullday}}。主解析為快樂路徑，保留 defensive 降級（不鎖死原則）。
+// Structural gateway type — avoids importing GatewayClient so this file stays import-light.
+interface InvGateway { post(path: string, accessToken: string, body: unknown): Promise<unknown> }
+
+export function inventorySearchPath(itemOid: string): string {
+  return `/product/api/v1/items/${encodeURIComponent(itemOid)}/inventories/search`
+}
+
+// The one place the read-current-fullday call lives: POST inventories/search + parse.
+export async function readCurrentFullday(gw: InvGateway, accessToken: string, itemOid: string, supplierOid: string): Promise<number | undefined> {
+  const raw = await gw.post(inventorySearchPath(itemOid), accessToken, { supplier_oid: supplierOid, page: 1 })
+  return parseInventoryFullday(raw, itemOid)
+}
+
 export function parseInventoryFullday(raw: unknown, l1Key: string): number | undefined {
   const root = raw as { data?: unknown } | undefined
   const data = (root && typeof root === 'object' && 'data' in root ? root.data : raw) as Record<string, unknown> | undefined

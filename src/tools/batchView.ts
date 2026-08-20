@@ -5,7 +5,7 @@ import { sanitizeQueue } from '../modules/product/shelfSchedule/validate.js'
 import type { ScheduleEntry } from '../core/changeset/types.js'
 import { toEnvelopeError, type EnvelopeError } from './envelope.js'
 import { extractPackagesWithSupplier } from '../modules/product/common.js'
-import { parseInventoryFullday, readItemMode, isItemByAmount } from './inventoryShape.js'
+import { readCurrentFullday, readItemMode, isItemByAmount } from './inventoryShape.js'
 
 const MODE_LABEL: Record<string, string> = { '1:0': 'item_by_amount', '2:0': 'sku_by_amount', '1:1': 'item_by_date', '2:1': 'sku_by_date' }
 function modeLabel(m: { control_type?: number; inventory_type?: number | null }): string | undefined {
@@ -62,8 +62,9 @@ function extractPackageConfigMap(raw: unknown): Map<string, PackageConfigRow> {
 
 import { readSupplierInventorySetting, parseInventoryMode } from '../modules/product/inventoryPlatform/platformRead.js'
 
-// Per docs/be2-mcp/sit-write-contracts.md Phase 4a read section: basic-info
-async function getConfigsCached(
+// Per docs/be2-mcp/sit-write-contracts.md Phase 4a read section: basic-info (carries both the
+// inventory_platform supplier_configs and the inventory_setting mode).
+async function getBasicInfoCached(
   gateway: GatewayClient, accessToken: string, itemOid: string, cache: Map<string, Promise<unknown>>,
 ): Promise<unknown> {
   let p = cache.get(itemOid)
@@ -79,7 +80,7 @@ async function resolveCurrentPlatform(
 ): Promise<{ platform: 'BE2' | 'BE2_SCM' | 'EXTERNAL' | null; mode?: string; warning?: EnvelopeError }> {
   const key = `${itemOid}:${supplierOid}`
   try {
-    const raw = await getConfigsCached(gateway, accessToken, itemOid, cache)
+    const raw = await getBasicInfoCached(gateway, accessToken, itemOid, cache)
     const mode = parseInventoryMode(raw)
     const booleans = await readSupplierInventorySetting(gateway, accessToken, itemOid, supplierOid, raw)
     const platform = booleansToPlatform(booleans) ?? null
@@ -163,12 +164,11 @@ export async function buildBatchView(
       if (actionType === 'inventory_setting') {
         if (plan.item_oid && plan.supplier_oid) {
           try {
-            const basic = await getConfigsCached(gateway, accessToken, plan.item_oid, configsCache) // basic-info, cached per item
+            const basic = await getBasicInfoCached(gateway, accessToken, plan.item_oid, configsCache) // basic-info, cached per item
             const mode = readItemMode(basic)
             plan.inventory_mode = modeLabel(mode)
             if (isItemByAmount(mode)) {
-              const raw = await gateway.post(`/product/api/v1/items/${encodeURIComponent(plan.item_oid)}/inventories/search`, accessToken, { supplier_oid: plan.supplier_oid, page: 1 })
-              plan.current_quantity = parseInventoryFullday(raw, plan.item_oid)
+              plan.current_quantity = await readCurrentFullday(gateway, accessToken, plan.item_oid, plan.supplier_oid)
             }
           } catch (e) {
             errors.push({ key: `${plan.item_oid}:${plan.supplier_oid}`, code: 'INVENTORY_READ_UNAVAILABLE', message: `庫存現況讀取失敗（${(e as Error).message}）；此列顯示為未知，view 為唯讀展示不阻擋。` })

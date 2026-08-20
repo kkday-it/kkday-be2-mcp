@@ -1,5 +1,5 @@
 import type { ToolContext } from '../../../tools/types.js'
-import { parseInventoryFullday, readItemMode, isItemByAmount } from '../../../tools/inventoryShape.js'
+import { readCurrentFullday, readItemMode, isItemByAmount } from '../../../tools/inventoryShape.js'
 import { DiffError } from '../../../core/changeset/diff.js'
 import type { InventoryDiffItem, InventoryItem } from '../../../core/changeset/types.js'
 
@@ -18,8 +18,7 @@ export async function computeInventoryDiff(items: InventoryItem[], ctx: ToolCont
       if (!isItemByAmount(mode)) {
         throw new DiffError([key], `此商品非「套餐總量限制」模式（control_type=${mode.control_type}, inventory_type=${mode.inventory_type}），即時庫存數量版僅支援套餐總量；SKU/依日期模式尚未支援`)
       }
-      const raw = await ctx.gateway.post(`/product/api/v1/items/${encodeURIComponent(it.item_oid)}/inventories/search`, ctx.accessToken, { supplier_oid: it.supplier_oid, page: 1 })
-      current = parseInventoryFullday(raw, it.item_oid)
+      current = await readCurrentFullday(ctx.gateway, ctx.accessToken, it.item_oid, it.supplier_oid)
     } catch (e) {
       if (e instanceof DiffError) throw e
       throw new DiffError([key], `讀取庫存現況失敗（${(e as Error).message}）；fail-closed 不建立`)

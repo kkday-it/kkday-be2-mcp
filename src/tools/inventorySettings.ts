@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import type { ToolDef } from './types.js'
 import { makeEnvelope, toEnvelopeError, type EnvelopeError } from './envelope.js'
-import { parseInventoryFullday, readItemMode } from './inventoryShape.js'
+import { parseInventoryFullday, readItemMode, inventorySearchPath } from './inventoryShape.js'
 
 // spec §4: no raw dumps. Status shape verified live (product-service-direct):
 // { is_processing, previous_status, previous_msg, previous_time }. Quantity read is the
@@ -39,7 +39,7 @@ export const inventorySettingsTool: ToolDef<typeof inputShape> = {
     const calls: Promise<unknown>[] = [ctx.gateway.get(`/product/api/v1/items/${oid}/inventories/status`, ctx.accessToken)]
     if (args.supplier_oid) {
       calls.push(ctx.gateway.get(`/product/api/v1/items/${oid}/basic-info`, ctx.accessToken))
-      calls.push(ctx.gateway.post(`/product/api/v1/items/${oid}/inventories/search`, ctx.accessToken, { supplier_oid: args.supplier_oid, page: 1 }))
+      calls.push(ctx.gateway.post(inventorySearchPath(args.item_oid), ctx.accessToken, { supplier_oid: args.supplier_oid, page: 1 }))
     }
     const [statusR, basicR, searchR] = await Promise.allSettled(calls)
     if (statusR!.status === 'rejected') return makeEnvelope([], [toEnvelopeError(args.item_oid, statusR!.reason)])
