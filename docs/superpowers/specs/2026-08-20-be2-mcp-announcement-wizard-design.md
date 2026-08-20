@@ -70,14 +70,16 @@ changeset 框架已全動態（`createChangesetInputShape` 的 action_type enum 
 
 core `GatewayClient`（`src/gateway/client.ts`）只支援單一 baseUrl、固定 header（`x-auth-id: be2`）、只有 get/put、成功判定看 `meta`/HTTP。公告需要 svc-b2c 前綴 + `x-api-key`/`user-uuid` header + POST + `metadata.status '0000'` 判定，皆超出 core client。
 
-→ 在 module 內建一支輕量 `announcementClient`（`src/modules/announcement/create/svcB2cClient.ts`），從 `ExecCtx` 拿 `accessToken`/`modifyUser`(=platformId)，自 `.env` 讀 `SIT_ANNOUNCE_API_KEY` 與 host，判 `metadata.status '0000'`。core 完全不動。
+→ 在 module 內建一支輕量 `announcementClient`（`src/modules/announcement/create/svcB2cClient.ts`），從 `.env` 讀 `SIT_ANNOUNCE_API_KEY` 與 host，判 `metadata.status '0000'`。core 完全不動。
+
+**user-uuid header 由 `accessToken` 自解，不預先塞 modifyUser（改自 agy review round 1）**：§3 契約規定**所有** announcement API（含 GET）都需 `user-uuid` header（= JWT `platformId`）。而讀取路徑的 `DiffCtx`(=`ToolContext`) 與 `AppToolContext` **刻意不含 `modifyUser`**（避讀取型 tool 承受解碼負擔），只含 `accessToken`（`src/tools/types.ts:7`、`src/server/appPipeline.ts:21`）。故 svc-b2c client 一律**接 `accessToken`、內部自解 `platformId` 當 user-uuid**（讀 diff、讀 view、寫 executor 三處統一，皆有 accessToken）。解碼邏輯抽成 module-local isomorphic 小工具（`src/modules/announcement/create/userUuid.ts`，`decodePlatformId(accessToken)`；語義同 `src/server/app.ts#modifyUserFromToken` 但不跨 server→module import），fail-closed：無 platformId claim 即 throw。write body 的 `modify_user` 欄位仍用 `ExecCtx.modifyUser`（同為 platformId、值一致）。
 
 ## 5. Module 設計（`src/modules/announcement/create/`）
 
 依 `module-onboarding.md` §2 逐檔：
 
 ### 5.1 `keys.ts` — itemKey（isomorphic）
-create item 無天然單鍵（一筆橫跨多 prod）。itemKey = `announce:${name}:${prod_oids.sort().join(',')}:${start_time}`（穩定、不依賴 Node 專用模組；UI 與 server 共用同一函式）。同一 change-set 內多筆公告以此區分。
+create item 無天然單鍵（一筆橫跨多 prod）。itemKey = `announce:${name}:${[...prod_oids].sort().join(',')}:${start_time}`（穩定、不依賴 Node 專用模組；UI 與 server 共用同一函式）。同一 change-set 內多筆公告以此區分。**用 `[...prod_oids].sort()` 複製後排序，不 mutate 原陣列**（`Array.sort()` 就地改序，直接 sort 會改動 change-set item 的 prod_oids 順序 → 影響顯示/其他讀取；agy review round 1 rec）。
 
 ### 5.2 `types`（放 `src/core/changeset/types.ts` union）
 ```ts
@@ -131,6 +133,10 @@ create 為 target-only（無 live current 需綁）。hash 目標 payload（name
 ### 5.8 `ui.ts` + `module.ts`
 `module.ts` 拼裝 `ActionModule`（actionType `announcement`、itemSchema zod、authz `{codes:['product.announcement.update'], onMissing:'warn'}`、scopeOids=`prod_oids`、scopeErrorKey、invalidItemsMessage、scopeNotReadMessage、validate/computeDiff/diffVersion/itemKey/execute/renderConfirm）。announcement 面板為專用 UI（見 §7），故 `wizard` descriptor（grid 型）**不設**；面板走自訂 flow。
 
+### 5.9 通用 changeset 面板的 itemKey 相容（改自 agy review round 1 Issue 1）
+`be2_create_changeset`（`uiResourceUri: 'ui://be2/changeset-panel.html'`）與 `be2_get_changeset_status` 打開的是**通用** `changeset-panel.html`，其 `itemKeyOf`（`src/ui/changeset-panel.ts:24-27`）**硬寫**只認 inventory/shelf 兩形狀，未知形狀 fallback 讀 `shelfKey`→`prod_oid`。announcement diff 只有 `prod_oids[]`（無 `prod_oid`）→ fallback 回 `"undefined"` → approve 送 `confirmed_keys:["undefined"]` 對不上後端 `announce:...` → `CONFIRMED_KEYS_MISMATCH`，**announcement 永遠無法透過通用面板批准**。
+→ 修：在 `changeset-panel.ts` `itemKeyOf` 加 announcement 分支（`'prod_oids' in d && !('item_oid' in d)` → 用 module 的 isomorphic `itemKey`，與 server 同一函式），import announcement keys。此為 UI 檔（非 core changeset infra），不違反「不碰 core」。confirm SSO 頁（`src/server/confirmRoutes.ts`）已 registry-driven（`getModule(rec.actionType).renderConfirm`），該路徑不受影響。
+
 ## 6. App 讀取工具與 scope-gate
 
 change-set §6.2 scope-gate 要求 `scopeOids`（= prod_oids）都在本 session 被讀過（`ctx.readOids`）。故新增：
@@ -159,8 +165,9 @@ change-set §6.2 scope-gate 要求 `scopeOids`（= prod_oids）都在本 session
 | `src/tools/openAnnouncementWizard.ts`（新） | model-visible 入口 | 新檔 |
 | `src/modules/announcement/create/*`（新） | 一包 module | 新檔 |
 | `src/ui/announcement-wizard.ts`（新） | 面板 | 新檔 |
+| `src/ui/changeset-panel.ts` | `itemKeyOf` 加 announcement 分支（§5.9） | UI 檔（非 core），Session 2 不碰此支 |
 
-**不碰**：`src/core/changeset/{tools,executor,confirmService,confirmRoutes,registry,module,store,diff}.ts`、`src/gateway/client.ts`、`src/tools/batchView.ts`、`src/ui/batch-wizard.ts`。
+**不碰**：`src/core/changeset/{tools,executor,confirmService,registry,module,store,diff}.ts`、`src/server/confirmRoutes.ts`（已 registry-driven）、`src/gateway/client.ts`、`src/tools/batchView.ts`、`src/ui/batch-wizard.ts`。
 
 ## 9. Session 2 協調
 
@@ -171,6 +178,7 @@ change-set §6.2 scope-gate 要求 `scopeOids`（= prod_oids）都在本 session
 - **Conformance**：`tests/core/moduleConformance.test.ts` 加 announcement diff 樣本（自動繼承 union⇔registry、schema 互斥、itemKey 非空、diffVersion 穩定/敏感）。
 - **Unit**：`announcementValidate.test.ts`（欄位/時間/lang-content 覆蓋）、`announcementDiff.test.ts`（讀商品名 + existing_count + 讀取失敗降級）、`announcementExecutor.test.ts`（0000 成功 / 403 失敗 / body wire 形狀 / modify_user=platformId，用 mock fetch）、`svcB2cClient.test.ts`（header 組裝、envelope 0000 判定、缺 x-api-key 行為）。
 - **confirmRoutes**：確認頁對 announcement 的 render（高風險 banner、雙時區、content 預覽、注入字串純文字）。
+- **通用面板 itemKey**（§5.9）：`changeset-panel.test.ts` 驗 announcement diff 的 `itemKeyOf` 回 `announce:...`（非 `"undefined"`）、與 server `itemKey` 一致 → approve 的 confirmed_keys 對得上。
 - **面板**：`announcementWizard.test.ts`（fakeDom，四步驟、時區換算、nonce flow、DIFF_STALE reload）。
 - **Eval + 安全**（`module-onboarding.md` §5）：draft-only（拒絕未經批准即宣稱完成）、scope-gate（未讀商品拒絕 staging）、注入抵抗（工具輸出注入不改行為）、引導走精靈而非直寫。
 
@@ -186,3 +194,5 @@ change-set §6.2 scope-gate 要求 `scopeOids`（= prod_oids）都在本 session
 3. `user-uuid` = JWT platformId（§3 實證），executor 由 token 解碼取得，不另存。
 4. content 每 lang 必填（缺則 INVALID_ITEMS）；`en-default` 建議存在（warn）。
 5. start_time 允許過去與未來（不擋過去日期）。
+
+<!-- agy-peer-reviewed: 2026-08-20T06:57:55Z rounds=2 verdict=approved -->
