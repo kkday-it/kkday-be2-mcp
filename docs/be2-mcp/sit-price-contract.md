@@ -79,10 +79,21 @@
 
 ---
 
-## 5. 未竟（非阻擋，開工前補即可）
+## 5. live wire 樣本 ✅ 已攔（2026-08-20，be2-220 真人登入 + playwright，商品 34133 成本售價頁）
 
-- [ ] **live wire 樣本**：`POST drafts/items/{item}/quotations/search` 的實際 request body + 200 response envelope/JSONB（確認場次/日期鍵名與 envelope 是 `meta.status "100000"`）。本次自主探索取樣受阻：(a) 價格頁 SPA route 非 `cost-price/edit-detail`（404），需走 `search-draft → 商品 → 成本售價 tab`（memory `be2-web-navigation-debug`）；(b) 直接以頁面 token 打 API 被安全政策擋（正確，需人在場或走 UI）。→ 下次有人監督時，開價格頁點「查詢」攔一次即補齊。
-- [ ] **modify_user**：沿用通則 = JWT platformId（shelf/inventory 已雙證），價格待實發確認。
+價格頁 SPA route = `/v2/product/{prodOid}/edit-product-detail?tab=cost-price-settings&pkgOid={pkgOid}`（非 `cost-price/edit-detail`）。進頁自動打讀取：
+- **Request**：`POST /product/api/v1/drafts/items/{itemOid}/quotations/search`，body = `{"supplier_oid":38028,"modify_user":"<platformId>"}`（讀取也帶 `modify_user`=JWT platformId，確認通則）。
+- **Response 200**（envelope `meta.status "100000"`）：
+  ```json
+  {"data":{"<sku_oid>":{"fullday":{"origin_cost":225,"origin_price":250,"bundle_price":250}}}}
+  ```
+- **讀取形狀** = `{ [sku_oid]: { [時間格]: { origin_cost, origin_price, bundle_price } } }`。時間格 key 依模式：均一價無場次=`"fullday"`（本樣本，`cost-setting.price_type:0`）、有場次=`"HH:MM"`、依日期定價=日期字串。→ 與庫存 `{key:{時間格:值}}` 同巢狀家族，值換成 `{origin_cost,origin_price,bundle_price}` 三元組。
+- **`cost-setting` 讀取**（`GET drafts/items/{itemOid}/cost-setting`）→ `{has_event, price_type(0均一/1依日期), price_rule_type, is_zero_price, is_zero_cost, price_source_type, bundle_gross_margin}`——決定時間格維度。
+- 附帶端點：`POST .../quotations/search/last-modify`（最後異動）、`GET .../quotations/status`（async 狀態）也在進頁時打。
+
+**剩餘**（非阻擋）：
+- [ ] **PUT quotations 寫入 body** 確切形狀（需一次真寫入攔；預期為讀取形狀的逆，帶目標 sku/時間格 + origin_price/cost）。
+- [ ] **依日期定價（price_type:1）** 的時間格是日期 key 的樣本（本次是均一價）。
 - [ ] **draft workflow 發佈語義**：`PUT drafts/product/{prodOid}/workflow` 狀態機（phase0 已記 EDIT→FINALIZED→…）與「調價後是否要自動送審」的產品決策。
 
 ---
@@ -96,7 +107,7 @@
 | 欄位/形狀 | ✅ origin_price/cost JSONB `{場次|fullday:{日期:金額}}`、official_price、fix_price（手冊） |
 | 相對編輯（漲價 X%）語義 | ✅ 可行；需先過 `gross-margin/availability` |
 | businessList 動作碼 | ⬜ 待查真實 businessList（仿 shelf/inventory 用 `product.*` 實查） |
-| live wire 樣本 | 🟡 §5（不阻擋設計，開工前攔一次） |
+| live wire 樣本 | ✅ 讀取已攔（§5，2026-08-20）；寫入 body 待一次真寫入 |
 
 → **factory 判定**：價格域可直接進段②「產」（schema/diff/renderer 靠手冊足夠）；executor 的 live 驗收待 live 樣本 + businessList 動作碼。**建議首發止於 draft、風險最低。**
 
