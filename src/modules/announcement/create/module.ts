@@ -39,12 +39,19 @@ export const announcementCreateModule: ActionModule<AnnouncementCreateItem, Anno
   scopeOids: (item) => item.prod_oids,
   scopeErrorKey: (item) => item.prod_oids.join(','),
   validate: (items) => validateAnnouncementItems(items),
-  computeDiff: (ctx: DiffCtx, items) => computeAnnouncementDiff(items, ctx, makeAnnouncementClient()),
+  computeDiff: (ctx: DiffCtx, items) => {
+    // 安全建構：dev/test 無 SIT_ANNOUNCE_API_KEY 時 makeAnnouncementClient() 會 throw；若在此同步拋出
+    // 會擋掉整個 change-set 建立（staging）。改為 try/catch → 傳 undefined，computeAnnouncementDiff 內
+    // existing_count 降級為未知，draft-only 開發不被金鑰/授權擋住。
+    let client: ReturnType<typeof makeAnnouncementClient> | undefined
+    try { client = makeAnnouncementClient() } catch { client = undefined }
+    return computeAnnouncementDiff(items, ctx, client)
+  },
   diffVersion: (diff) => {
     // create = target-only（無 live current 需綁）。hash 目標 payload（含 contents，內文改動要使批准 stale）；
     // existing_count 是 context、不納入。contents 依 lang 排序後序列化，順序無關。
     const canon = diff.map(d => {
-      const contents = [...d.contents].sort((a, b) => (a.lang < b.lang ? -1 : 1)).map(c => `${c.lang}=${c.content}`).join('§')
+      const contents = [...d.contents].sort((a, b) => a.lang.localeCompare(b.lang)).map(c => `${c.lang}=${c.content}`).join('§')
       return `announce:${d.name}:${[...d.prod_oids].sort().join(',')}:${d.start_time}:${d.end_time ?? ''}:${d.is_enabled}:${[...d.langs].sort().join(',')}:${contents}`
     }).sort().join('|')
     return createHash('sha256').update(canon).digest('hex')

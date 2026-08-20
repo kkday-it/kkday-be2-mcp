@@ -43,6 +43,22 @@ export async function executeAnnouncementWith(
   return results
 }
 
-export function executeAnnouncement(ctx: ExecCtx, rec: ChangeSetRecord): Promise<ItemResult[]> {
-  return executeAnnouncementWith(makeAnnouncementClient(), ctx, rec)
+export async function executeAnnouncement(ctx: ExecCtx, rec: ChangeSetRecord): Promise<ItemResult[]> {
+  // 安全建構：無 SIT_ANNOUNCE_API_KEY 時 makeAnnouncementClient() 會 throw。同步拋出會讓整個執行段
+  // 崩潰（而非把每筆標 failed）——改為 catch 後把每筆 item 記為 failed，change-set 得到明確 per-item
+  // 結果而非整批 crash。（正常 live 執行時金鑰存在，走 executeAnnouncementWith 正常路徑。）
+  let client: AnnouncementClient
+  try {
+    client = makeAnnouncementClient()
+  } catch (e) {
+    const ge = e as GatewayError
+    return (rec.items as AnnouncementCreateItem[]).map(it => ({
+      item_key: itemKey(it),
+      status: 'failed' as const,
+      trace_id: '',
+      error_code: (ge?.code as string) ?? 'ANNOUNCE_CLIENT_UNAVAILABLE',
+      error_message: (e as Error)?.message ?? 'announcement client unavailable',
+    }))
+  }
+  return executeAnnouncementWith(client, ctx, rec)
 }
