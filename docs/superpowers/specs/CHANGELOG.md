@@ -29,6 +29,3 @@
 - `2026-08-18-module-factory-design.md` §4（段② 實作者可插拔）/ 分工表「② 六格 = agy 並行」改為「可插拔實作者：預設 Claude subagent（通用），agy 為 lance 本機省額度選項」/ **可攜性**——skill 不該把 agy 寫死（agy 是特定使用者本機設定，別人用 Claude subagent）。同步改 SKILL.md 後端偵測、stage2-produce.md 加 Claude subagent 後端段、memory agy-work-allocation 標 lance 專屬。
 
 
-
-
-<!-- agy-peer-reviewed: 2026-08-20T07:01:00Z rounds=2 verdict=approved -->
