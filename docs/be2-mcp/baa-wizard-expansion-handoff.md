@@ -75,7 +75,12 @@ X 與 Y 動的檔不同 → **可真並行**；唯一交會點是 wizard 的 act
 - **阻擋**：`quantity` PUT 卡 **AU9403**（User Token per-URI verify 缺 action；stage key 申請中）——可 build，live 200 待授權 grant 或 stage。
 - **注意**：Phase 3a 的 `inventoryShape.ts` 容錯欄位與真實形狀不符，**A 順手做 FINALIZE**（改主形狀 `data[itemOid|skuOid].fullday`、讀取改 POST search）。
 
-### 塊 B — 排程層（庫存數量，橫切）【最難、最後】
+### 塊 B — 排程層（庫存數量，橫切）【✅ 已完成 2026-08-20，Session 3】
+> **DONE**：probe 實證 be2 無庫存原生排程（`probe-inventory-native-schedule.md`）→ spec/plan 皆 agy APPROVED（各 rounds=4）→ 10 tasks TDD 全綠（`feat/bundle-followup` 上 `37300b8..63a1745` 18 commits）。`npm run ci` **607 passed / 0 skipped**、tsc clean、build:ui 綠、dev healthz 200（scheduler 啟動）。final whole-branch review **READY TO MERGE**（0 Critical；3 Important + 4 Minor 全數即修：purge claimed-approved 窗、stranded-executing 啟動 audit、schedule.wall model 文件、keep-alive 連坐 audit 歸屬、tz 標籤去硬編、eval 判準對齊 runner）。
+> 產出：core 泛用排程（`ChangeSetStatus` +scheduled/cancelled/missed、`src/core/schedule/{tz,policy,scheduler}.ts`、TokenManager `getFreshByIdentityId`/`keepAlive`、identityId 貫穿兩通道、時間回聲 TOCTOU、executor CAS exactly-once、取消雙通道、purge 保護）+ `schedulable` opt-in（僅 inventory_setting）+ wizard 排程輸入/scheduled ledger/取消按鈕。多實例全靠 DB CAS，**不新增 Redis 依賴**（deploy §1.5 已回改）。
+> **未竟（非阻擋）**：live 排程 e2e 待寫入授權（SIT AU9403 / stage grant）解鎖後做（spec §11：SIT 建 5 分鐘後排程→到點自動執行→讀回）。**merge 待使用者拍板**（PR #19）。
+
+### 塊 B — 排程層（原接力包，留存）
 - **第一步 probe**：be2 有無原生庫存排程端點?（手冊推論無；需實證——找 be2-web 庫存頁有無「排程/預約」入口、或問 product team）。
 - **若無 → server 端排程器設計**：
   - be2-mcp server 內網常駐 → **比原版 Mac-app 可靠**（不需「Mac 醒著」）。
