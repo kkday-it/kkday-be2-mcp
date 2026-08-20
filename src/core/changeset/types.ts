@@ -100,7 +100,7 @@ export interface AnnouncementDiffItem {
   end_time?: string | null
   langs: string[]
   contents: AnnouncementLangContent[]  // 帶進 diff 供確認頁預覽內文（防 blind write）
-  existing_count: number
+  existing_count: number | null        // 這些商品上既有公告數（context，非 blocker）；null = 讀不到/未知
   noop: false
 }
 

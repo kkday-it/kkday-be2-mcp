@@ -26,6 +26,6 @@ describe('computeAnnouncementDiff', () => {
     const client = { listByProdOids: vi.fn().mockRejectedValue(new Error('403')) } as any
     const [d] = await computeAnnouncementDiff([item], ctx, client)
     expect(d.product_names).toEqual([])
-    expect(d.existing_count).toBe(-1)  // -1 = 讀不到（顯示層呈現「未知」）
+    expect(d.existing_count).toBeNull()  // null = 讀不到（顯示層呈現「未知」）
   })
 })

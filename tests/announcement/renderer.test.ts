@@ -32,4 +32,19 @@ describe('announcement renderConfirm', () => {
     expect(v.tableHtml).toContain('2026-09-01 00:00:00 UTC')
     expect(v.tableHtml).toContain('2026-09-01 08:00:00 (GMT+8)')
   })
+  it('en-default warn: shows a non-blocking note when langs lacks en-default', () => {
+    const v = renderConfirm(rec, [diff], 'ver1', '')  // diff.langs = ['zh-tw'] (no en-default)
+    expect(v.intro).toContain('en-default')
+    expect(v.intro).toMatch(/提醒|不阻擋/)
+  })
+  it('en-default warn: no note when en-default present', () => {
+    const withEn = { ...diff, langs: ['zh-tw', 'en-default'], contents: [{ lang: 'zh-tw', content: 'x' }, { lang: 'en-default', content: 'y' }] }
+    const v = renderConfirm(rec, [withEn], 'ver1', '')
+    expect(v.intro).not.toContain('en-default')
+  })
+  it('existing_count null renders as 未知', () => {
+    const unknown = { ...diff, existing_count: null }
+    const v = renderConfirm(rec, [unknown], 'ver1', '')
+    expect(v.tableHtml).toContain('未知')
+  })
 })

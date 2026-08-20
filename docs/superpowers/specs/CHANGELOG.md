@@ -24,6 +24,8 @@
 
 - 同檔 §5.2/§5.7（plan 的 agy review round 1 兩修，回頭補齊 spec 內部一致性）/ (1) §5.2 `AnnouncementDiffItem` 補 `contents` 欄位——原本 §5.5 hash 與 §5.7 renderer 都引用 contents 但 diff item 沒帶 → 確認頁看不到內文 = blind write；(2) §5.7 renderer 明訂 start/end 走**伺服器端雙時區**（UTC + GMT+8 固定偏移）/ agy 審 plan 時抓到 diff item 缺 contents（內部矛盾）與確認頁只顯示 UTC 單時區（§5.7/§10 要雙時區）。
 
+- 同檔 §5.2/§5.3/§5.5/假設#4（code-review 收尾兩修）/ (1) `en-default` warn 明訂放在**確認頁 renderer + 面板 step-3**（validate 是 error-or-null 無 warn 通道）——實作前漏了這條 warn，code-review Spec 軸抓到；(2) `AnnouncementDiffItem.existing_count` 由 `number`(用 -1 當未知哨兵) 改為 `number | null`（null=未知），去除 primitive-obsession 哨兵（code-review Standards 軸）/ agy 雙軸 code-review（PR #19）發現的 2 個塊 C 真落差。
+
 ## 2026-08-19
 
 - 建立本 CHANGELOG（追溯補記上述 2026-08-16/18 的 spec 異動）/ 落實新增的「規格變更」規則。

@@ -4,8 +4,8 @@ import { extractProductInfo } from '../../../tools/findProducts.js'
 import type { AnnouncementClient } from './svcB2cClient.js'
 
 // create 無「現況可比」，但守主 spec §4「嚴禁盲寫」：讀商品名 + 既有公告數當 context（非 blocker）。
-// 任何讀取失敗一律降級（product_names 留空、existing_count = -1 表未知），不阻擋 staging。
-// client 可為 undefined（dev/test 無 SIT_ANNOUNCE_API_KEY，或建構失敗）——此時 existing_count 留 -1
+// 任何讀取失敗一律降級（product_names 留空、existing_count = null 表未知），不阻擋 staging。
+// client 可為 undefined（dev/test 無 SIT_ANNOUNCE_API_KEY，或建構失敗）——此時 existing_count 留 null
 // （未知），不阻擋 staging。這是 create 的 draft-only 開發不被 svc-b2c 授權/金鑰擋住的關鍵。
 export async function computeAnnouncementDiff(
   items: AnnouncementCreateItem[], ctx: DiffCtx, client: AnnouncementClient | undefined,
@@ -21,11 +21,11 @@ export async function computeAnnouncementDiff(
         names.push(oid)  // 讀不到商品名 → 退回顯示 oid（非致命）
       }
     }
-    let existing = -1
+    let existing: number | null = null
     if (client) {
       try {
         existing = (await client.listByProdOids(ctx.accessToken, it.prod_oids)).length
-      } catch { /* leave existing = -1 (未知) */ }
+      } catch { /* leave existing = null (未知) */ }
     }
     out.push({
       prod_oids: it.prod_oids,

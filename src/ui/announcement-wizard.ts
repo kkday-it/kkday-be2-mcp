@@ -169,8 +169,7 @@ export function initAnnouncementWizard(app: WizardApp, prefillProdOids: string[]
     const title = document.createElement('div'); title.className = 'bw-card-title'; renderText(title, '將對這些商品建立公告'); container.appendChild(title)
     for (const p of products) {
       const line = document.createElement('div'); line.className = 'bw-prod-line'
-      const existing = Number(p.existing_count)
-      const ex = existing < 0 ? '（既有公告數未知）' : `（既有公告 ${existing} 筆）`
+      const ex = p.existing_count == null ? '（既有公告數未知）' : `（既有公告 ${Number(p.existing_count)} 筆）`
       renderText(line, `${p.name ?? p.prod_oid}  ${p.prod_oid} ${ex}`)
       container.appendChild(line)
     }
@@ -296,6 +295,12 @@ export function initAnnouncementWizard(app: WizardApp, prefillProdOids: string[]
     setStep(3); wizardEl.textContent = ''
     const warn = document.createElement('div'); warn.className = 'bw-banner bw-banner-danger'
     renderText(warn, '商品公告會即時對前台顯示，請確認內容與生效時間後再批准。'); wizardEl.appendChild(warn)
+    // en-default fallback 提醒（warn 不 block，spec §5.3 假設#4）：缺 en-default 出非阻擋提示。
+    if (currentDiffItems.some(d => !((d.langs as string[] | undefined) ?? []).includes('en-default'))) {
+      const note = document.createElement('div'); note.className = 'bw-banner'; note.style.color = '#b35900'
+      renderText(note, '提醒：未含 en-default 語系（en-xx fallback 文案來源）；此為提醒、不阻擋批准。')
+      wizardEl.appendChild(note)
+    }
     const card = document.createElement('div'); card.className = 'bw-card'
     for (const d of currentDiffItems) {
       const dc = document.createElement('div'); dc.className = 'bw-diff-card'

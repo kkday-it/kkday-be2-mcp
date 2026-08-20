@@ -5,7 +5,7 @@ import type { AnnouncementCreateItem, ChangeSetRecord } from '../../src/core/cha
 
 // Regression for the final-review Critical: makeAnnouncementClient() throws when SIT_ANNOUNCE_API_KEY
 // is absent (dev/test). That must NOT block staging (computeDiff) nor crash execution (executor) —
-// it must degrade: existing_count = -1 for the diff, and per-item `failed` results for execution.
+// it must degrade: existing_count = null for the diff, and per-item `failed` results for execution.
 
 const item: AnnouncementCreateItem = {
   prod_oids: ['7781'], name: '公告', is_enabled: true,
@@ -13,10 +13,10 @@ const item: AnnouncementCreateItem = {
 }
 
 describe('announcement degrades when svc-b2c client unavailable (no api key)', () => {
-  it('computeDiff with client=undefined does not throw; existing_count = -1', async () => {
+  it('computeDiff with client=undefined does not throw; existing_count = null', async () => {
     const ctx = { gateway: { get: vi.fn().mockResolvedValue({ name: 'A' }) }, accessToken: 'tok', userLabel: 'u' } as any
     const [d] = await computeAnnouncementDiff([item], ctx, undefined)
-    expect(d.existing_count).toBe(-1)
+    expect(d.existing_count).toBeNull()
     expect(d.product_names).toEqual(['A'])
     expect(d.noop).toBe(false)
   })

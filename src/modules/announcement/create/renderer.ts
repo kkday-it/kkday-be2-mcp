@@ -14,13 +14,19 @@ function dualTz(utcStr: string): string {
 }
 
 export function renderConfirm(_rec: ChangeSetRecord, diff: AnnouncementDiffItem[], diffVersion: string, banner: string): ConfirmView {
-  const intro = `\n<p><strong style="color:#b00">商品公告會即時對前台顯示</strong>;請確認內容與生效時間。</p>${banner}`
+  // en-default 是 en-xx 各語系的 fallback 文案來源（spec §5.3 假設#4「建議存在，warn 不 block」）。
+  // 缺它不擋批准，但在確認頁（人工批准當下）出一則非阻擋提醒——這是「warn」最該被看到的地方。
+  const missingEnDefault = diff.some(d => !d.langs.includes('en-default'))
+  const enDefaultNote = missingEnDefault
+    ? `<p style="color:#b35900">提醒：未含 <code>en-default</code> 語系（en-xx 各語系的 fallback 文案來源）；缺它前台其他 en 語系可能無 fallback 文案。此為提醒、不阻擋批准。</p>`
+    : ''
+  const intro = `\n<p><strong style="color:#b00">商品公告會即時對前台顯示</strong>;請確認內容與生效時間。</p>${enDefaultNote}${banner}`
 
   const rows = diff.map(d => {
     const prods = d.product_names.length
       ? d.product_names.map(esc).join('、')
       : d.prod_oids.map(esc).join('、')
-    const existing = d.existing_count < 0 ? '未知' : String(d.existing_count)
+    const existing = d.existing_count == null ? '未知' : String(d.existing_count)
     const time = esc(dualTz(d.start_time)) + (d.end_time ? '<br>~ ' + esc(dualTz(d.end_time)) : '')
     // per-lang 內文預覽（untrusted → esc；換行保留）。
     const contentPreview = d.contents.map(c =>

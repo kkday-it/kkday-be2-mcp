@@ -102,7 +102,7 @@ export interface AnnouncementDiffItem {
   end_time?: string | null
   langs: string[]
   contents: AnnouncementLangContent[] // 帶進 diff 供確認頁 per-lang 內文預覽（防 blind write；改自 agy plan review）
-  existing_count: number              // 這些商品上既有公告數（context，非 blocker）
+  existing_count: number | null       // 這些商品上既有公告數（context，非 blocker）；null = 讀不到/未知
   noop: false                         // create 永不 noop
 }
 ```
@@ -111,7 +111,8 @@ export interface AnnouncementDiffItem {
 ### 5.3 `validate.ts`
 - `name` 非空且 ≤254；`prod_oids` 非空；`langs` 非空。
 - `start_time` 必填且符合 `YYYY-MM-DD HH:mm:ss`；`end_time` 若有則格式正確且 **晚於** start_time。
-- `contents` 至少涵蓋所有 `langs`（缺 lang 文案 → INVALID_ITEMS）；建議 `en-default` 存在（warn 不 block）。
+- `contents` 至少涵蓋所有 `langs`（缺 lang 文案 → INVALID_ITEMS）。
+- **`en-default` 建議存在但不 block**：`validate` 回傳型別是 error-or-null（沒有 warn 通道），故 en-default 的「warn 不 block」**不放在 validate**，而是在**確認頁 renderer 與 wizard 面板 step-3**（人工批准當下）出一則非阻擋提醒——warn 最該被看到的地方。缺 en-default 不影響 staging/執行。
 - **不擋過去日期**：start_time 可為未來（原生排程語義），亦可為現在。
 
 ### 5.4 `diff.ts` — computeDiff
@@ -193,7 +194,7 @@ change-set §6.2 scope-gate 要求 `scopeOids`（= prod_oids）都在本 session
 1. change-set item = 一筆公告橫跨所選 prod_oids（對齊 native「一筆多 prodOids」），非每商品一筆。
 2. 一次 change-set 建立一筆公告（items 陣列雖支援多筆，wizard MVP 產一筆）。
 3. `user-uuid` = JWT platformId（§3 實證），executor 由 token 解碼取得，不另存。
-4. content 每 lang 必填（缺則 INVALID_ITEMS）；`en-default` 建議存在（warn）。
+4. content 每 lang 必填（缺則 INVALID_ITEMS）；`en-default` 建議存在（warn 於確認頁/面板 step-3，不 block；見 §5.3）。
 5. start_time 允許過去與未來（不擋過去日期）。
 
 <!-- agy-peer-reviewed: 2026-08-20T06:57:55Z rounds=2 verdict=approved -->

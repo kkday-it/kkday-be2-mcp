@@ -185,18 +185,18 @@ export const appGetAnnouncementViewTool: AppToolDef = {
     ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId)
     const prodOids = args.prod_oids as string[]
     const errors: EnvelopeError[] = []
-    const products: Array<{ prod_oid: string; name?: string; existing_count: number }> = []
+    const products: Array<{ prod_oid: string; name?: string; existing_count: number | null }> = []
     // existing_count 是 best-effort context（live 讀取卡 svc-b2c S2S 403、且 dev/test 可能無
-    // SIT_ANNOUNCE_API_KEY）。client 建不起來或 list 失敗一律靜默降級（existing_count = -1 未知），
+    // SIT_ANNOUNCE_API_KEY）。client 建不起來或 list 失敗一律靜默降級（existing_count = null 未知），
     // 不 push error——scope-gate 只需 read_oids + 商品名；既有公告數讀不到不該讓整個 view 報錯。
     let client: ReturnType<typeof makeAnnouncementClient> | undefined
-    try { client = makeAnnouncementClient() } catch { /* announcement client unavailable → existing_count 留 -1 */ }
+    try { client = makeAnnouncementClient() } catch { /* announcement client unavailable → existing_count 留 null */ }
     for (const oid of prodOids) {
       let name: string | undefined
       try { name = extractProductInfo(await ctx.gateway.get(`/product/api/v1/drafts/products/${encodeURIComponent(oid)}/info`, ctx.accessToken)).name }
       catch (e) { errors.push(toEnvelopeError(oid, e)) }
-      let existing = -1
-      if (client) { try { existing = (await client.listByProdOids(ctx.accessToken, [oid])).length } catch { /* 既有公告數讀不到 → -1 未知，不報錯 */ } }
+      let existing: number | null = null
+      if (client) { try { existing = (await client.listByProdOids(ctx.accessToken, [oid])).length } catch { /* 既有公告數讀不到 → null 未知，不報錯 */ } }
       products.push({ prod_oid: oid, name, existing_count: existing })
     }
     return makeEnvelope([{ products }], errors, prodOids)
