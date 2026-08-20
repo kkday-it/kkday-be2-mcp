@@ -42,6 +42,7 @@ export interface WizardDescriptor {
   buildItems(rows: WizardRowInput[], opts: { target?: string }): unknown[]
   renderDiffCard(d: Record<string, unknown>, h: DomHelpers): HTMLElement
   step2WarningText?: string
+  schedulable?: boolean
 }
 
 export interface ActionModule<Item = unknown, DiffI = unknown> {

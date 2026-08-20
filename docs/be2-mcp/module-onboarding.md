@@ -30,6 +30,7 @@
   - `isItem`
   - `scopeOids`, `scopeErrorKey`
   - `validate`, `computeDiff`, `diffVersion`, `itemKey`, `execute`, `renderConfirm`
+  - `schedulable?: boolean`（選配,預設不填=不接 core 排程層):宣告本 action_type 是否允許 change-set 帶 `schedule`(到點派送,塊 B)。**有原生排程欄位的 domain 一律不開**(上下架走 reserve_queue、公告走 startTime/endTime);只有像庫存數量這種 backend 無原生排程的域才開。開了之後 wizard 描述子(`ui.ts` 的 `WizardDescriptor.schedulable`)可同步標記讓面板長出排程輸入。
 
 ## 3. 註冊 Module
 - [ ] 在 `src/modules/index.ts` 內匯入並呼叫 `registerModule(...)` 註冊該模組（import 副作用註冊）。

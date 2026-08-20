@@ -3,6 +3,7 @@ import { itemKey } from './keys.js'
 
 export const inventorySettingWizard: WizardDescriptor = {
   label: '批次庫存數量調整',
+  schedulable: true,
   step2WarningText: '庫存數量修改立即生效並清除快取、立即影響前台可售；歸零將使該方案前台不可購買。',
   itemKey,
   buildItems(rows: WizardRowInput[]): unknown[] {

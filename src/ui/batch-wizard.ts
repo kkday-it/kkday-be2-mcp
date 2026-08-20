@@ -386,6 +386,30 @@ export function initWizard(app: WizardApp): void {
     noteInput.onchange = () => { noteValue = noteInput.value }
     footerCard.appendChild(noteInput)
 
+    let schedToggle: HTMLInputElement | undefined
+    let schedInput: HTMLInputElement | undefined
+    if (WIZARDS[actionType].schedulable) {
+      const schedWrap = document.createElement('label')
+      schedWrap.className = 'bw-row-inline'
+      schedWrap.style.marginRight = 'auto' // push the rest to the right if possible, or just let note take space
+      schedToggle = document.createElement('input'); schedToggle.type = 'checkbox'; schedToggle.dataset.role = 'schedToggle'
+      const toggleLabel = document.createElement('span'); renderText(toggleLabel, '排程到點執行')
+      schedInput = document.createElement('input'); schedInput.type = 'datetime-local'; schedInput.dataset.role = 'schedWall'; schedInput.hidden = true
+      schedInput.className = 'bw-input'
+      const tzLabel = document.createElement('span'); renderText(tzLabel, '伺服器時區(Asia/Taipei)'); tzLabel.hidden = true; tzLabel.style.fontSize = '.8125rem'; tzLabel.style.color = 'var(--bw-muted)'
+      
+      schedToggle.onchange = () => {
+        if (schedInput) schedInput.hidden = !schedToggle!.checked
+        tzLabel.hidden = !schedToggle!.checked
+      }
+      
+      schedWrap.appendChild(schedToggle)
+      schedWrap.appendChild(toggleLabel)
+      schedWrap.appendChild(schedInput)
+      schedWrap.appendChild(tzLabel)
+      footerCard.appendChild(schedWrap)   // fakeDom 無 insertBefore;順序放 note 後即可
+    }
+
     const nextBtn = primaryBtn('下一步', 'nextBtn', () => { void doNext() })
     footerCard.appendChild(nextBtn)
     wizardEl.appendChild(footerCard)
@@ -838,10 +862,11 @@ export function initWizard(app: WizardApp): void {
       }
       clearFallback(fallbackEl)
       statusEl.textContent = '建立變更中…'
+      const schedule = schedToggle?.checked && schedInput?.value ? { wall: schedInput.value } : undefined
       try {
         const createR = await app.callServerTool({
           name: 'app_create_changeset',
-          arguments: { action_type: actionType, items, ...(noteValue ? { note: noteValue } : {}) },
+          arguments: { action_type: actionType, items, ...(noteValue ? { note: noteValue } : {}), ...(schedule ? { schedule } : {}) },
         })
         
         let parsedErrCode: string | undefined
@@ -1005,7 +1030,12 @@ export function initWizard(app: WizardApp): void {
     const card = document.createElement('div')
     card.className = 'bw-card'
     const desc = document.createElement('p')
-    renderText(desc, '按下後將送出批准並立即執行本次變更。')
+    const currentSchedule = lastViewRec?.schedule as { execute_at_utc: string; wall: string; tz: string } | undefined
+    if (currentSchedule) {
+      renderText(desc, `將於 ${currentSchedule.wall} (${currentSchedule.tz}) 執行。按下後將送出批准。`)
+    } else {
+      renderText(desc, '按下後將送出批准並立即執行本次變更。')
+    }
     card.appendChild(desc)
     const footer = document.createElement('div')
     footer.className = 'bw-row-footer'
@@ -1021,10 +1051,11 @@ export function initWizard(app: WizardApp): void {
     if (!changesetId || !currentNonce || !currentDiffVersion) { showFallback(fallbackEl, '缺少批准所需資訊，請回上一步重載'); return }
     statusEl.textContent = '執行中…'
     const confirmedKeys = currentDiffItems.map(WIZARDS[actionType].itemKey)
+    const currentSchedule = lastViewRec?.schedule as { execute_at_utc: number; wall: string; tz: string } | undefined
     try {
       const r = await app.callServerTool({
         name: 'app_confirm_changeset',
-        arguments: { changeset_id: changesetId, decision: 'approve', nonce: currentNonce, diff_version: currentDiffVersion, confirmed_keys: confirmedKeys },
+        arguments: { changeset_id: changesetId, decision: 'approve', nonce: currentNonce, diff_version: currentDiffVersion, confirmed_keys: confirmedKeys, ...(currentSchedule ? { expected_execute_at_utc: currentSchedule.execute_at_utc } : {}) },
       })
       const env = r.structuredContent
       const err = env?.errors?.[0]
@@ -1037,7 +1068,13 @@ export function initWizard(app: WizardApp): void {
       // of a dead-end message.
       if (err?.code === 'DIFF_STALE') { renderStaleNotice(); return }
       if (err) { showFallback(fallbackEl, `批准失敗：${err.code ?? ''} ${err.message ?? ''}`); return }
-      const rec = (env?.items?.[0] as { results?: unknown[] } | undefined) ?? {}
+      const rec = (env?.items?.[0] as { status?: string; results?: unknown[] } | undefined) ?? {}
+      if (rec.status === 'scheduled') {
+        // 排程批准:server 只回 {changeset_id, status:'scheduled'}、無 per-item results——用
+        // confirmedKeys 合成 scheduled 列(帶 wall 供藥丸文案),取消按鈕由 ledger 列渲染提供。
+        renderStep4(confirmedKeys.map(k => ({ item_key: k, status: 'scheduled', schedule: { wall: currentSchedule?.wall ?? '' } })))
+        return
+      }
       renderStep4((rec.results as Array<Record<string, unknown>> | undefined) ?? [])
     } catch (e) { showFallback(fallbackEl, '送出失敗：' + String(e)) }
   }
@@ -1078,8 +1115,12 @@ export function initWizard(app: WizardApp): void {
       const row = document.createElement('div')
       row.dataset.itemKey = String(res.item_key)
       row.dataset.status = String(res.status)
-      const status = res.status
-      const kind = status === 'done' ? 'ok' : status === 'skipped_noop' ? 'skip' : 'error'
+      const status = String(res.status)
+      let kind = 'error'
+      if (status === 'done' || status === 'scheduled') kind = 'ok'
+      else if (status === 'skipped_noop' || status === 'cancelled') kind = 'skip'
+      else if (status === 'missed') kind = 'error'
+      
       row.className = 'bw-ledger-row'
       row.style.flexWrap = 'wrap'
 
@@ -1125,10 +1166,39 @@ export function initWizard(app: WizardApp): void {
       row.appendChild(keyWrap)
 
       const statusSpan = document.createElement('span')
-      const statusLabel = kind === 'ok' ? '已完成' : kind === 'skip' ? '無變更，略過' : `失敗（${String(res.status)}）`
-      statusSpan.className = `bw-ledger-status bw-ledger-status-${kind === 'ok' ? 'ok' : kind === 'skip' ? 'skip' : 'error'}`
+      let statusLabel = ''
+      if (status === 'done') statusLabel = '已完成'
+      else if (status === 'skipped_noop') statusLabel = '無變更，略過'
+      else if (status === 'scheduled') {
+        const wall = (res.schedule as any)?.wall ?? ''
+        statusLabel = `已排程 ${wall}`
+      }
+      else if (status === 'cancelled') statusLabel = '取消排程'
+      else if (status === 'missed') statusLabel = '錯過排程'
+      else statusLabel = `失敗（${status}）`
+
+      statusSpan.className = `bw-ledger-status bw-ledger-status-${kind}`
       renderText(statusSpan, statusLabel)
       row.appendChild(statusSpan)
+
+      if (status === 'scheduled') {
+        const cancelBtn = secondaryBtn('取消排程', 'cancelBtn', async () => {
+          cancelBtn.disabled = true
+          try {
+            await app.callServerTool({
+              name: 'app_confirm_changeset',
+              arguments: { changeset_id: changesetId!, decision: 'cancel', nonce: currentNonce!, diff_version: currentDiffVersion!, confirmed_keys: [] }
+            })
+            renderText(statusSpan, '取消排程')
+            statusSpan.className = 'bw-ledger-status bw-ledger-status-skip'
+            cancelBtn.hidden = true
+          } catch(e) {
+            cancelBtn.disabled = false
+          }
+        })
+        cancelBtn.style.marginLeft = '0.5rem'
+        row.appendChild(cancelBtn)
+      }
 
       if (kind === 'error') {
         const codeSpan = document.createElement('span')

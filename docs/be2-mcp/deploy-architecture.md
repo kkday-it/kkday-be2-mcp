@@ -24,9 +24,9 @@ be2-mcp 是一支 **內網 Node.js 服務**，講 MCP（Model Context Protocol�
 | **Redis / 分散式鎖** | 🟡 **只有多實例才要** | 單一 instance 完全不需要。>1 instance 時，3 個**純記憶體**協調原語會跨實例失效（見下「多實例才需 Redis」）。 |
 | **對外 egress** | ✅ | 只有兩個下游：auth-service host、be2 gateway host（443）。無其他外呼。 |
 | **Secrets 管道** | ✅ | service key（每環境一把）、announce api key。走 k8s Secret / Vault。 |
-| **Cron（1 個）** | ✅ | `oauth-purge` 每日一次（k8s CronJob）。**這是唯一的 server 端排程工作。** |
+| **Cron（1 個）** | ✅ | `oauth-purge` 每日一次（k8s CronJob）。已排除「被 `scheduled` change-set 引用」的 identity（塊 B purge 保護，spec §6）。另有 server 內建的排程 poller（見下一列），但那是 app 進程內的 in-process timer、不是外部 cron。 |
 | **OTLP collector** | ⬜ 選配 | `OTEL_MODE=otlp` 才需要一個 collector endpoint。 |
-| **訊息佇列 / worker** | ❌ **不需要** | **批次排程發送（庫存排程等）是 client-side**——跑在使用者 Claude Desktop、他 Mac 醒著+連線才送（面板明寫），**不需要 server 端 scheduler/queue/worker**。 |
+| **訊息佇列 / worker** | ❌ **不需要** | 排程送出（庫存到點派送，塊 B）由 **server 內建 in-process poller** 完成——app 進程內的 scheduler tick（遞迴 setTimeout，`src/core/schedule/scheduler.ts`），**無外部 queue/worker**；多實例的到期認領走 `change_sets` 的 DB CAS，**不新增 Redis 依賴**。（原「client-side、Mac 醒著才送」的設計已被塊 B 取代。） |
 | **物件儲存（S3 等）** | ❌ | 無檔案上傳（不像 dev-tools 的 vibefile）。 |
 | **公網 ingress** | ❌ | client 皆本機（Code/Desktop），內網即可。 |
 | **GPU / 重運算** | ❌ | 無。瓶頸在下游 API 延遲。資源估 0.5 vCPU / 512MB 起。 |
@@ -43,8 +43,9 @@ be2-mcp 是一支 **內網 Node.js 服務**，講 MCP（Model Context Protocol�
 2. **MCP Apps 批准 nonce**（`approvalNonce.live`）——A instance 發的 nonce，B instance 認不得。
 3. **inventory per-key mutex**（`execInventory`）——防跨 change-set 同 item×supplier 的 lost-update。
 （change-set 防重複執行的 CAS 走 `change_sets.status` 條件式 UPDATE，共用 DB 即跨實例安全；`rate_counters` 亦 DB-backed。→ **真正逼你上 Redis 的就是上面 3 個記憶體原語**。）
+4. **排程層（塊 B）不新增第 4 個**：scheduler 的到期認領（`claimScheduled`）、stranded 回收（`releaseClaim`）、keep-alive 認領（`be2_identities.keepalive_claimed_at`）全是 DB 條件式 UPDATE，多實例天然 at-most-once；keep-alive 與「使用者活動觸發的 lazy refresh」跨實例相撞的殘餘風險歸屬原語 #1（refresh single-flight），多實例部署本來就需 Redis 收斂該原語，排程層不改變此結論。
 
-**給 DevOps 的一句話**：先給「一個 Postgres（或先 SQLite+PV 單實例）＋ egress 兩個 host ＋ 一個每日 cron ＋ secrets」就能跑；**要水平擴到多 pod，才需要再加 Redis**。沒有佇列、沒有 S3、沒有公網、排程發送不吃 server。
+**給 DevOps 的一句話**：先給「一個 Postgres（或先 SQLite+PV 單實例）＋ egress 兩個 host ＋ 一個每日 cron ＋ secrets」就能跑；**要水平擴到多 pod，才需要再加 Redis**。沒有佇列、沒有 S3、沒有公網；排程送出是 app 進程內建 poller（不需額外基礎設施）。
 
 ## 2. 部署拓撲
 

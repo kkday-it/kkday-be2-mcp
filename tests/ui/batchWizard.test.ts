@@ -1265,3 +1265,100 @@ describe('batch-wizard panel: step 4 automatic read-back verification', () => {
     expect(rows[0].textContent).toContain('✓ 已驗證：be2 現況與目標一致')
   })
 })
+
+describe('batch-wizard panel: inventory_setting 排程(塊 B)', () => {
+  const wizardEl = doc.getElementById('wizard')
+  beforeEach(() => { wizardEl.children.length = 0 })
+
+  const invBatchView = envelope([{
+    products: [{
+      prod_oid: 'P1', name: '商品1', plans: [
+        { pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', inventory_mode: 'item_by_amount', current_quantity: 10 },
+      ],
+    }],
+  }])
+
+  it('schedulable 分頁(inventory_setting)顯示排程切換,勾選才露出 datetime;shelf_schedule 不顯示', async () => {
+    const { app, fireLaunch } = makeFakeApp({ app_get_batch_view: () => invBatchView })
+    initWizard(app as never)
+    fireLaunch('inventory_setting', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    const schedToggle = findByRole(wizardEl, 'schedToggle')
+    expect(schedToggle).toBeDefined()
+    const schedWall = findByRole(wizardEl, 'schedWall')
+    expect(schedWall.hidden).toBe(true)
+    schedToggle.checked = true
+    schedToggle.onchange!()
+    expect(schedWall.hidden).toBe(false)
+
+    // 對照組:非 schedulable(shelf_schedule)不渲染切換
+    wizardEl.children.length = 0
+    const { app: app2, fireLaunch: fire2 } = makeFakeApp({
+      app_get_batch_view: () => envelope([{ products: [{ prod_oid: 'P1', name: '商品1', plans: [{ pkg_oid: 'A', name: '方案A', queue: [] }] }] }]),
+    })
+    initWizard(app2 as never)
+    fire2('shelf_schedule', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    expect(wizardEl.querySelectorAll('[data-role=schedToggle]').length).toBe(0)
+  })
+
+  it('勾排程建立帶 schedule.wall;批准帶 expected_execute_at_utc;scheduled 合成 ledger 列含取消按鈕,取消送 decision:cancel', async () => {
+    const createResult = envelope([{ changeset_id: 'cs-s' }])
+    const viewResult = envelope([{
+      changeset_id: 'cs-s', status: 'pending_approval', nonce: 'n-1', diff_version: 'dv-1',
+      schedule: { execute_at_utc: 1756717200000, wall: '2026-09-01T09:00', tz: 'Asia/Taipei' },
+      diff: { items: [{ item_oid: 'I1', supplier_oid: 'S1', current: 10, target: 20, no_op: false }] },
+    }])
+    // 真實 server 對排程批准只回 {changeset_id, status:'scheduled'}——無 results(面板需自行合成列)
+    const confirmResult = envelope([{ changeset_id: 'cs-s', status: 'scheduled' }])
+    const { app, calls, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => invBatchView,
+      app_create_changeset: () => createResult,
+      app_get_changeset_view: () => viewResult,
+      app_confirm_changeset: () => confirmResult,
+    })
+    initWizard(app as never)
+    fireLaunch('inventory_setting', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+
+    const cbA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    cbA.checked = true
+    cbA.onclick!()
+    const qty = wizardEl.querySelectorAll('input[type=number]')[0]
+    ;(qty as unknown as { valueAsNumber: number }).valueAsNumber = 20
+
+    const schedToggle = findByRole(wizardEl, 'schedToggle')
+    schedToggle.checked = true
+    schedToggle.onchange!()
+    const schedWall = findByRole(wizardEl, 'schedWall')
+    schedWall.value = '2026-09-01T09:00'
+
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+    const createCall = calls.find(c => c.name === 'app_create_changeset')!
+    expect(createCall.arguments.schedule).toEqual({ wall: '2026-09-01T09:00' })
+
+    findByRole(wizardEl, 'toApproveBtn').onclick!()
+    expect(wizardEl.textContent).toContain('將於 2026-09-01T09:00 (Asia/Taipei) 執行')
+
+    findByRole(wizardEl, 'approveBtn').onclick!()
+    await flush()
+    const confirmCall = calls.find(c => c.name === 'app_confirm_changeset')!
+    expect(confirmCall.arguments.expected_execute_at_utc).toBe(1756717200000)
+
+    // Step 4:合成的 scheduled 列 + 取消按鈕
+    const rows = wizardEl.querySelectorAll('.bw-ledger-row')
+    expect(rows.length).toBe(1)
+    expect(rows[0].textContent).toContain('已排程 2026-09-01T09:00')
+    const cancelBtn = findByRole(rows[0], 'cancelBtn')
+    expect(cancelBtn).toBeDefined()
+    cancelBtn.onclick!()
+    await flush()
+    const cancelCall = calls.find(c => c.name === 'app_confirm_changeset' && c.arguments.decision === 'cancel')!
+    expect(cancelCall.arguments).toMatchObject({ changeset_id: 'cs-s', decision: 'cancel', confirmed_keys: [] })
+    expect(rows[0].textContent).toContain('取消排程')
+  })
+})
