@@ -200,6 +200,24 @@ API endpoints（手冊列，與我方實證一致）：
 
 > 🔑 **發現高價值來源**：`kkday-it/product-team-docs` 的 `Product/系統操作手冊/` 有 33 份 product team 權威手冊（含 `04-成本售價設定.md`=3b 價格、`02-套餐設定.md`、`14-商品上架狀態設定.md`、`30-組合套餐匯入模組.md` 等）——**未來各 action_type onboarding / factory 段① 探索應優先讀對應手冊**，比逆向 API 快且權威。已記入 memory。
 
+### 2026-08-20 追加：BY_DATETIME 樣本攔到 → 庫存讀取形狀矩陣完整
+
+be2-220 真人登入 + playwright，商品 2247、item 1677495（**sku_by_date**：L1 key 為 32-hex sku_oid），庫存頁點查詢：
+- **Request**：`POST /product/api/v1/items/1677495/inventories/search`，body = `{"rrules":[{recurrence_date, recurrence_event}], "supplier_oid":2671, "page":1}`（**日期模式必帶 `rrules`**；解掉先前 by-datetime 不帶 rrules 的 422）。
+- **Response 200**（`meta.status "100000"`）：`{data:{ [sku_oid]:{ "YYYY-MM-DD":{fullday: qty|null}, … } }}`（本樣本 7 SKU × 343 日期，值多為 `null`=未設）。
+
+**→ 讀取形狀矩陣完整（`control_type` 決定 L1 key、`inventory_type` 決定有無日期層、內層 key=`fullday`|場次時間、值=數量或 `null`）**：
+| 模式 (control/inv) | L1 key | 巢狀 | 來源 |
+|---|---|---|---|
+| item_by_amount (1/0) | itemOid | `{itemOid:{fullday:N}}` | ✅ item 1650033 |
+| sku_by_amount (2/0) | sku_oid | `{sku_oid:{fullday:N}}` | 推論（同家族） |
+| item_by_date (1/1) | itemOid | `{itemOid:{date:{fullday\|"HH:MM":N}}}` | 推論 |
+| sku_by_date (2/1) | sku_oid | `{sku_oid:{date:{fullday\|"HH:MM":N}}}` | ✅ item 1677495 |
+
+**FINALIZE parser 要點（`inventoryShape.ts` 改寫依據）**：L1 key 可能是 itemOid（數字）或 sku_oid（32-hex）；可能有或沒有日期層；內層 `fullday` 或場次時間字串；**值可為 `null`**（未設，需容錯不當 0）。此矩陣＋官方手冊 `remain_qty` 定義已足以把容錯猜測換成確定解析。**同時解掉 BAA 庫存排程「依日期/場次未支援」**（memory `be2-mcp-phase3-plan`）——形狀已知即可擴。
+
+> ⚠️ **不鎖死原則（使用者 2026-08-20 提醒）**：上表是**已確認的主形狀**，但**不同商品類型（飯店 / F&B / GYG 動態價 / OCBT / 高鐵假期等）的 response 可能有變體**。→ parser 應**以此矩陣為主解析路徑、但保留 defensive 容錯**（未知 key/缺層/null 值都優雅降級），**不要 hard-code 成單一形狀**。把「確認的形狀」當快樂路徑，不是唯一路徑；遇到沒見過的類型先記錄樣本、再擴解析，而非拋錯。
+
 ### 2026-08-19 附帶：sku-date-switch（日期/場次可售開關）讀取形狀（同 session 一併攔到，屬痛點#2 域、非庫存數量）
 
 同頁「日期/場次銷售開關」分頁觸發（item 1650033、supplier 181）：
