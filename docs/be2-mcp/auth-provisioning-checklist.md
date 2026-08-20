@@ -1,9 +1,26 @@
-# be2-mcp × auth-service 開通清單（給 auth-service / RD 一次加齊）
+# be2-mcp × auth-service 開通清單（給 kkday-auth-service RD）
 
-> 目的：把 be2-mcp 會用到的所有 auth 相關開通**一次列給 RD**，免得逐條來回。
-> 兩類：**(A) auth-service 直打的 S2S 端點**（需 service key + 對的 scope）、**(B) 經 API Gateway 的各 URI**（User Token，需在 auth-svc 的 **Entry Config** 綁對 Business action，`/verify` 才會過）。
-> **重要**：be2-mcp **不自己打 `/verify`**——token 驗證委派 gateway（gateway 代打 auth-svc verify）。所以 (B) 全靠 Entry Config 的 per-URI 規則。
-> 涵蓋：已上線 + 規劃中（庫存數量、商品公告、價格 3b）。環境：SIT `be2-220` 已通；**stage / prod 待開**。
+> 全部都是 **kkday-auth-service** 自己的設定面：service key、Entry Config（per-URI verify 規則）、Business action → 群組對映、`/verify` 行為、`BE2_DOMAIN` origin 白名單。gateway 只是代打 verify、product-service 只是被呼叫的下游——**RD 要動的都在 auth-service**。
+> **重要**：be2-mcp **不自己打 `/verify`**（委派 gateway 代打）。**已上線 action_type（上下架/庫存平台）的 Entry Config 早已正確、不需再動**；下面只列「目前 verify 過不了 / 待開」的項。
+
+---
+
+## 0. auth-service RD 只需要動這 3 件（其餘皆 reference / 已 OK）
+
+1. **Service key（stage + prod，需 `read` scope）** — `login-authorization-code`/`refresh-token` 走 `serviceAuth:read`。
+   - ⚠️ 現況：手上 stage key（`EvIry7…Vt5`）換碼回 **401 `AU9997 "Service key is invalid"`**（同帳號同 host login 是 200）→ 請確認是否 stage 環境 + read scope 的正確值。
+2. **兩條 verify / Entry Config gap**（只有這兩條現在過不了）：
+   - **庫存數量寫入 `AU9403`**：`PUT /product/api/v1/items/{itemOid}/inventories/{supplierOid}/quantity`。帳號已有 `product.product-inventory.update`，但 Entry Config 對 URI pattern **`api/v1/items/{*}/inventories/{*}/quantity`** 綁的是**別顆 Business action** → 請查該 action 並加進帳號群組（或告知 code）。（Kibana trace：verify v2 `CheckTargetRuleCache` user-with-business-oid）
+   - **商品公告 svc-b2c 403**：`/svc-b2c/api/v1/admin/product/announcement`（GET/POST/PATCH）。此 target 的 `/verify` 對 be2-mcp 的 **auth-service 使用者 JWT 回 403**（對 web session token 則過）→ 請確認 svc-b2c target 是否接受這種 User Token、需哪顆 Business action / 或不同 `x-auth-id`。
+3. **`BE2_DOMAIN` origin 白名單（prod）** — prod `isDevEnv`=false 會檢查 POPUP 登入 origin，需把 be2-mcp 部署 origin 納入。
+
+> （另有一條屬 Entry Config 的 IP 欄位：User Token 走 Entry Config 會驗來源 IP，需允許 be2-mcp 部署機 IP。IP 值由 DevOps 提供，設定動作在 auth-service Entry Config。）
+
+---
+
+## 附錄（reference）— be2-mcp 會打的完整 auth 相關端點
+
+> 以下為完整清單供 RD 對照 Entry Config；**已上線者標示，無需動作**。涵蓋規劃中（庫存數量、商品公告、價格 3b）。環境：SIT `be2-220` 已通；stage/prod 待開。
 
 ---
 
