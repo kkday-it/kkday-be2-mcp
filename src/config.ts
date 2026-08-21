@@ -2,6 +2,12 @@ import { z } from 'zod'
 import 'dotenv/config'
 
 const PRESETS = {
+  // SIT 有多台機器（be2-220/221…）；用機器別名而非籠統 'sit'，避免打錯機器。'sit' 保留為向後相容別名。
+  'sit-220': {
+    authsvcUrl: 'https://auth-220.sit.kkday.com',
+    gatewayUrl: 'https://api-gateway-220.sit.kkday.com',
+    keyVar: 'SIT_AUTHSVC_SERVICE_KEY',
+  },
   sit: {
     authsvcUrl: 'https://auth-220.sit.kkday.com',
     gatewayUrl: 'https://api-gateway-220.sit.kkday.com',
@@ -20,7 +26,7 @@ const PRESETS = {
 } as const
 
 const EnvSchema = z.object({
-  BE2_ENV: z.enum(['sit', 'stage', 'prod']).optional(),
+  BE2_ENV: z.enum(['sit-220', 'sit', 'stage', 'prod']).optional(),
   AUTHSVC_URL: z.string().url(),
   GATEWAY_URL: z.string().url(),
   SIT_AUTHSVC_SERVICE_KEY: z.string().min(1).optional(),
@@ -41,7 +47,7 @@ export interface Config {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const be2Env = env.BE2_ENV as 'sit' | 'stage' | 'prod' | undefined
+  const be2Env = env.BE2_ENV as 'sit-220' | 'sit' | 'stage' | 'prod' | undefined
   const preset = be2Env ? PRESETS[be2Env] : undefined
 
   const patchedEnv = { ...env }
