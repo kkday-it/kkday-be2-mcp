@@ -18,6 +18,12 @@ function isShelfTogglePlanItem(i: unknown): i is ChangeSetItem {
   return typeof (i as ChangeSetItem).prod_oid === 'string' && typeof (i as ChangeSetItem).pkg_oid === 'string' && typeof (i as ChangeSetItem).target_is_active === 'boolean'
 }
 
+function singleDirection(items: Array<{ target_is_active: boolean }>) {
+  const dirs = new Set(items.map(i => i.target_is_active))
+  if (dirs.size > 1) return { key: 'mixed_direction', message: '一批上下架不可同時含上架與下架，請分兩批送出。' }
+  return null
+}
+
 export const shelfToggleProductModule: ActionModule<ChangeSetItem, DiffItem> = {
   actionType: 'shelf_toggle_product',
   shapeFamily: 'shelf_toggle',
@@ -33,7 +39,7 @@ export const shelfToggleProductModule: ActionModule<ChangeSetItem, DiffItem> = {
   isItem: isShelfToggleProductItem,
   scopeOids: (item: ChangeSetItem) => [item.prod_oid, ...(item.pkg_oid ? [item.pkg_oid] : [])],
   scopeErrorKey: (item: ChangeSetItem) => item.pkg_oid ?? item.prod_oid,
-  validate: () => null,
+  validate: (items) => singleDirection(items as Array<{ target_is_active: boolean }>),
   computeDiff: (ctx: DiffCtx, items: ChangeSetItem[]) => computeShelfDiff('shelf_toggle_product', items, ctx),
   diffVersion: (diff: DiffItem[]) => {
     const canon = diff.map(s => `${s.prod_oid}:${s.pkg_oid ?? ''}=${s.current_is_active ?? 'null'}`).sort().join('|')
@@ -57,7 +63,7 @@ export const shelfTogglePlanModule: ActionModule<ChangeSetItem, DiffItem> = {
   isItem: isShelfTogglePlanItem,
   scopeOids: (item: ChangeSetItem) => [item.prod_oid, ...(item.pkg_oid ? [item.pkg_oid] : [])],
   scopeErrorKey: (item: ChangeSetItem) => item.pkg_oid ?? item.prod_oid,
-  validate: () => null,
+  validate: (items) => singleDirection(items as Array<{ target_is_active: boolean }>),
   computeDiff: (ctx: DiffCtx, items: ChangeSetItem[]) => computeShelfDiff('shelf_toggle_plan', items, ctx),
   diffVersion: (diff: DiffItem[]) => {
     const canon = diff.map(s => `${s.prod_oid}:${s.pkg_oid ?? ''}=${s.current_is_active ?? 'null'}`).sort().join('|')
