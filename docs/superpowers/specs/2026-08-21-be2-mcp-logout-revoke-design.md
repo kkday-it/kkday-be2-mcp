@@ -91,9 +91,11 @@ discovery += revocation_endpoint
 
 ### 6.2 POST `/confirm/connections/revoke-all`
 
-- 同一登入 gate。CSRF:`be2mcp_sid` 是 `SameSite=Lax`,跨站 POST 不帶 cookie,天然擋掉;不另做 CSRF token。
+- 同一登入 gate。
+- **CSRF 防護 = 顯式 Origin 檢查,不倚賴 `SameSite=Lax`**:be2-mcp 跑在 `127.0.0.1:<port>`,而 SameSite 的「site」判定不含 port——同機另一個 port 上的(受駭)服務發 top-level POST,瀏覽器照樣附 `be2mcp_sid` cookie。故本 POST 要求 `Origin` header 存在且**完全等於** server 自身 origin(`baseUrl`,含 port),否則 403;絕不 fallback 到 Referer。(既有 `POST /confirm/:id/approve` 不在本案範圍:它由不可猜的 change-set UUID + creator-bound 把關,攻擊者無從構造目標 URL;`revoke-all` 是固定路徑才需要這道。)
 - 以 `userLabel` 找出所有 identity(新 store 方法 `IdentityStore.listByUserLabel`,比對沿用 `confirmRoutes.sameUser` 的 trim+lowercase 正規化),逐一 `revokeGrant`。
-- **現任 web session 不動**:按完頁面仍登入著,重新渲染顯示「已斷開 N 條連線」。當前 identity 的 oauth credential 一樣被撤(它就是使用者要斷的東西之一)。
+- **現任 web session 不動**:當前 identity 的 oauth credential 一樣被撤(它就是使用者要斷的東西之一)。
+- **POST-Redirect-GET**:成功後 303 redirect 回 `GET /confirm/connections?revoked=<N>`,由 GET 渲染「已斷開 N 條連線」訊息(`revoked` 參數以 `^\d{1,4}$` 驗證後才進頁面),避免瀏覽器重新整理跳「重送表單」警告。
 - `static_bearer` **不在撤銷範圍**(v1 決策):它是 ops 經 `bootstrap-user` 手動核發的 headless fallback,生命週期由 ops 管;頁面文案註明「headless static bearer 不受此操作影響」。
 - 稽核:每條被撤連線記一筆 `tool: 'confirm_connections_revoke_all'`。
 
@@ -110,6 +112,11 @@ discovery += revocation_endpoint
 | `CredentialStore` | `countByIdentityAndKind(identityId, kind)` | §6.1 同上(`oauth_access` 那一半的判定) |
 | `IdentityStore` | `listByUserLabel(userLabel)`(SQL `lower(trim(user_label))` 比對) | §6.2 橫跨 identity 撤銷 |
 | `src/oauth/revocation.ts` | `revokeGrant(deps, identityId)` | §4.4 共用 helper;`app.ts` 的 `purgeCredential` 維持原樣不動(它是 credential 級 cascade,語義不同) |
+
+**接線異動(app.ts / ssoRoutes.ts)**:
+
+- `SsoDeps` 增 `oauthStore: OAuthStore`(§6.1 `countRefreshByIdentity`、§6.2 `revokeGrant` 內部需要)與 `baseOrigin: string`(§6.2 Origin 檢查);`app.ts` 掛 `buildSsoRouter` 時把既有的 `oauthStore` 實例與 `baseUrl` origin 傳入。
+- `confirmRoutes.ts` 的 `requireSession` 抽成共用 helper(如 `src/server/sessionGate.ts`,deps:`webSessions`+`credentials`+`tokenManager`),`confirmRoutes` 與 `ssoRoutes` 兩邊共用;行為不變(kind gate + idle-expiry 語義原樣)。
 
 ## 8. 邊界(寫給使用者與 reviewer 的明話)
 
@@ -139,6 +146,8 @@ discovery += revocation_endpoint
 12. POST revoke-all → 同 userLabel 所有 identity 的 oauth 憑證/refresh 全消失、目前 web_session 仍有效(再 GET 一次 200)、別的 userLabel 不受影響、`static_bearer` 存活。
 13. userLabel 大小寫/空白差異(sameUser 正規化)仍匹配。
 14. 稽核逐連線記錄。
+15. CSRF:POST 無 `Origin` → 403;`Origin` 為同 host 異 port(如 `http://127.0.0.1:9999`)→ 403;正確 Origin → 303 redirect 至 `/confirm/connections?revoked=<N>`(PRG)。
+16. `requireSession` 抽出後,既有 confirmRoutes 全部測試不動仍綠(行為不變證明)。
 
 **回歸**:`npm run ci` 全綠;既有 reuse-detection、logout、oauth-purge 測試不動仍綠。
 
@@ -148,3 +157,5 @@ discovery += revocation_endpoint
 - auth-service 端 token 撤銷、be2-web SSO 登出聯動。
 - DCR ghost client 清理(仍歸 `oauth-purge` 未來項)。
 - `static_bearer` 生命週期管理。
+
+<!-- agy-peer-reviewed: 2026-08-21T05:28:58Z rounds=2 verdict=approved -->
