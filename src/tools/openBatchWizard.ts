@@ -15,7 +15,7 @@ import { makeEnvelope } from './envelope.js'
 // server-side reads app_get_batch_view performs once the panel actually loads those oids; passing
 // prod_oids to this tool records nothing into ReadOidStore.
 const inputShape = {
-  action_type: z.enum(['inventory_platform', 'shelf_schedule']),
+  action_type: z.enum(['inventory_platform', 'shelf_schedule', 'inventory_setting']),
   prod_oids: z.array(z.string().min(1)).max(10).optional(),
 }
 
@@ -23,7 +23,7 @@ export const openBatchWizardTool: ToolDef<typeof inputShape> = {
   name: 'be2_open_batch_wizard',
   description:
     'Open the batch wizard panel to stage inventory_platform (switch which platform manages inventory: ' +
-    'BE2/BE2_SCM/EXTERNAL) or shelf_schedule (reserve-date on/off-shelf schedule) changes across multiple ' +
+    'BE2/BE2_SCM/EXTERNAL), shelf_schedule (reserve-date on/off-shelf schedule), or inventory_setting (set套餐總量 fullday inventory quantity per plan) changes across multiple ' +
     'products and plans in one guided flow. prod_oids only prefill the panel selection — they do NOT ' +
     'satisfy the server-side read-scope gate; only the panel\'s own app_get_batch_view call (server-side ' +
     'reads) establishes that. On a host that does not support MCP Apps (e.g. Claude Code), this tool cannot ' +

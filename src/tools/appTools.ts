@@ -1,8 +1,10 @@
 import { z } from 'zod'
 import type { AppToolDef, AppToolContext } from '../server/appPipeline.js'
-import { makeEnvelope, toEnvelopeError } from './envelope.js'
-import { buildBatchView } from './batchView.js'
+import { makeEnvelope, toEnvelopeError, type EnvelopeError } from './envelope.js'
+import { buildBatchView, type BatchViewActionType } from './batchView.js'
 import { createChangesetCore, createChangesetInputShape } from '../core/changeset/tools.js'
+import { extractProductInfo } from './findProducts.js'
+import { makeAnnouncementClient } from '../modules/announcement/create/svcB2cClient.js'
 
 // 無 existence leak：找不到 id 與「id 存在但非自己建立」回同一種錯誤，讓外部觀察者無法用
 // error 差異探測他人 change-set 是否存在。
@@ -22,11 +24,17 @@ export const appGetChangesetViewTool: AppToolDef = {
   async handler(args, ctx: AppToolContext) {
     const rec = ctx.changeSets.get(args.changeset_id)
     if (!rec || rec.creatorLabel !== ctx.userLabel) return NOT_FOUND(args.changeset_id)
-    const results = ['pending_approval', 'approved'].includes(rec.status) ? undefined : ctx.changeSets.getResults(rec.id)
+    const results = ['pending_approval', 'approved', 'scheduled'].includes(rec.status) ? undefined : ctx.changeSets.getResults(rec.id)
     const view: Record<string, unknown> = { changeset_id: rec.id, status: rec.status, action_type: rec.actionType, note: rec.note, diff: { items: rec.diff } }
-    if (rec.status === 'pending_approval') {
-      // nonce 只在 app-only tool 回傳裡發放（model 讀不到，見 T6）；面板批准操作（Task 11）需帶
-      // 這個 nonce + diff_version，把「按下批准」綁到一個 model 拿不到的一次性密碼。
+    // schedule 是 change-set 不可變部分:rec.schedule 存在即回、不限 status(Task 10 review
+    // Critical 1——pending_approval 不回會讓面板批准少帶 expected_execute_at_utc 回聲,server
+    // 端 SCHEDULE_ECHO_MISMATCH 必炸)。鍵名對齊 be2_get_changeset_status 的 snake_case。
+    if (rec.schedule) {
+      view.schedule = { execute_at_utc: rec.schedule.executeAtUtc, wall: rec.schedule.wall, tz: rec.schedule.tz }
+    }
+    if (rec.status === 'pending_approval' || rec.status === 'scheduled') {
+      // nonce 只在 app-only tool 回傳裡發放（model 讀不到，見 T6）；面板批准/取消操作需帶
+      // 這個 nonce + diff_version，把「按下批准/取消」綁到一個 model 拿不到的一次性密碼。
       view.diff_version = rec.diffVersion
       view.nonce = ctx.nonces.issue({ changesetId: rec.id, diffVersion: rec.diffVersion, sessionId: ctx.sessionId })
     } else if (results) {
@@ -70,10 +78,11 @@ export const appConfirmChangesetTool: AppToolDef = {
   description: 'Panel-only: approve or reject a change-set the caller created (requires the panel-issued nonce).',
   inputShape: {
     changeset_id: z.string().min(1),
-    decision: z.enum(['approve', 'reject']),
+    decision: z.enum(['approve', 'reject', 'cancel']),
     nonce: z.string().min(1),
     diff_version: z.string().min(1),
     confirmed_keys: z.array(z.string()),
+    expected_execute_at_utc: z.number().int().optional(),
   } as never,
   annotations: {
     title: 'Confirm and execute change-set',
@@ -88,6 +97,11 @@ export const appConfirmChangesetTool: AppToolDef = {
     // nonce 先驗（單次消耗）—— 這是防 model 自我批准的主防線。
     const ok = ctx.nonces.verifyAndConsume(args.nonce, { changesetId: rec.id, diffVersion: args.diff_version, sessionId: ctx.sessionId })
     if (!ok) return makeEnvelope([], [{ key: rec.id, code: 'NONCE_INVALID', message: 'Approval token invalid/expired; reopen the panel to refresh.' }])
+    if (args.decision === 'cancel') {
+      const won = ctx.changeSets.casStatus(rec.id, 'scheduled', 'cancelled', ctx.now())
+      if (!won) return makeEnvelope([], [{ key: rec.id, code: 'NOT_CANCELLABLE', message: 'Only a scheduled change-set can be cancelled.' }])
+      return makeEnvelope([{ changeset_id: rec.id, status: 'cancelled' }])
+    }
     if (args.decision === 'reject') {
       // Finding 2（Task 11 review）: 不可無條件 setStatus——若此 change-set 已透過確認頁(confirm
       // page)以外的路徑批准/執行完畢,面板帶著仍有效的 nonce 按「拒絕」會把已執行結果覆寫成
@@ -101,9 +115,10 @@ export const appConfirmChangesetTool: AppToolDef = {
     // executeChangeSet → audit（channel:'panel'）。confirmed_keys 必須與 change-set items 完全一致，
     // 否則 service throw CONFIRMED_KEYS_MISMATCH（面板取消勾選不能讓後端仍全量執行 —— spec §4.3）。
     try {
-      const out = await ctx.approveAndExecute({ rec, expectedDiffVersion: args.diff_version, confirmedKeys: args.confirmed_keys, channel: 'panel' })
+      const out = await ctx.approveAndExecute({ rec, expectedDiffVersion: args.diff_version, confirmedKeys: args.confirmed_keys, channel: 'panel', expectedExecuteAtUtc: args.expected_execute_at_utc as number | undefined })
       if (out.stale) return makeEnvelope([], [{ key: rec.id, code: 'DIFF_STALE', message: 'Change-set state moved; panel will reload the new diff.' }])
       if (out.casFailed) return makeEnvelope([], [{ key: rec.id, code: 'ALREADY_PROCESSED', message: 'This change-set was already approved/executed (possibly via the confirm page).' }])
+      if (out.scheduled) return makeEnvelope([{ changeset_id: rec.id, status: 'scheduled' }])
       return makeEnvelope([{ changeset_id: rec.id, status: out.status, results: out.results }])
     } catch (e) {
       return makeEnvelope([], [toEnvelopeError(rec.id, e)])   // CONFIRMED_KEYS_MISMATCH 等
@@ -120,7 +135,7 @@ export const appGetBatchViewTool: AppToolDef = {
   name: 'app_get_batch_view',
   description: 'Panel-only: load products -> plans + current state for the batch wizard (registers server-side read-scope).',
   inputShape: {
-    action_type: z.enum(['inventory_platform', 'shelf_schedule']),
+    action_type: z.enum(['inventory_platform', 'shelf_schedule', 'inventory_setting']),
     prod_oids: z.array(z.string().min(1)).min(1).max(10),
   } as never,
   annotations: {
@@ -135,9 +150,11 @@ export const appGetBatchViewTool: AppToolDef = {
     // appRateBudget 的面板輪詢節流是兩個獨立額度，見 appPipeline.ts AppToolContext 註解）。
     ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId)
     const { products, errors, read_oids } = await buildBatchView(
-      ctx.gateway, ctx.accessToken, args.action_type as 'inventory_platform' | 'shelf_schedule', args.prod_oids as string[],
+      ctx.gateway, ctx.accessToken, args.action_type as BatchViewActionType, args.prod_oids as string[],
     )
-    return makeEnvelope([{ products }], errors, read_oids)
+    // schedule_tz（spec §9：面板須標示實際 BE2_TZ 而非通用「伺服器時區」）——由 ctx 帶出給面板 step-1
+    // 顯示。排程輸入的 wall-clock 即以此 tz 於 server 端換算 UTC。
+    return makeEnvelope([{ products, schedule_tz: ctx.scheduleTz }], errors, read_oids)
   },
 }
 
@@ -174,6 +191,33 @@ export const appCreateChangesetTool: AppToolDef = {
   },
 }
 
+export const appGetAnnouncementViewTool: AppToolDef = {
+  name: 'app_get_announcement_view',
+  description: 'Panel-only: load products (names + existing announcement count) for the announcement wizard (registers server-side read-scope for prod_oids).',
+  inputShape: { prod_oids: z.array(z.string().min(1)).min(1).max(10) } as never,
+  annotations: { title: 'Get announcement view', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  async handler(args, ctx: AppToolContext) {
+    ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId)
+    const prodOids = args.prod_oids as string[]
+    const errors: EnvelopeError[] = []
+    const products: Array<{ prod_oid: string; name?: string; existing_count: number | null }> = []
+    // existing_count 是 best-effort context（live 讀取卡 svc-b2c S2S 403、且 dev/test 可能無
+    // SIT_ANNOUNCE_API_KEY）。client 建不起來或 list 失敗一律靜默降級（existing_count = null 未知），
+    // 不 push error——scope-gate 只需 read_oids + 商品名；既有公告數讀不到不該讓整個 view 報錯。
+    let client: ReturnType<typeof makeAnnouncementClient> | undefined
+    try { client = makeAnnouncementClient() } catch { /* announcement client unavailable → existing_count 留 null */ }
+    for (const oid of prodOids) {
+      let name: string | undefined
+      try { name = extractProductInfo(await ctx.gateway.get(`/product/api/v1/drafts/products/${encodeURIComponent(oid)}/info`, ctx.accessToken)).name }
+      catch (e) { errors.push(toEnvelopeError(oid, e)) }
+      let existing: number | null = null
+      if (client) { try { existing = (await client.listByProdOids(ctx.accessToken, [oid])).length } catch { /* 既有公告數讀不到 → null 未知，不報錯 */ } }
+      products.push({ prod_oid: oid, name, existing_count: existing })
+    }
+    return makeEnvelope([{ products }], errors, prodOids)
+  },
+}
+
 export const APP_TOOLS: AppToolDef[] = [
-  appGetChangesetViewTool, appGetConfirmLinkTool, appConfirmChangesetTool, appGetBatchViewTool, appCreateChangesetTool,
+  appGetChangesetViewTool, appGetConfirmLinkTool, appConfirmChangesetTool, appGetBatchViewTool, appCreateChangesetTool, appGetAnnouncementViewTool,
 ]

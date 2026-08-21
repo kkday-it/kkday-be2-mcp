@@ -32,6 +32,13 @@ export function runOAuthPurge(db: Database.Database, now: number): OAuthPurgeRes
   const ghostRes = db.prepare(`
     DELETE FROM be2_identities
     WHERE identity_id NOT IN (SELECT DISTINCT identity_id FROM credentials)
+    -- spec §6 purge 保護：排程件被 claim 後短暫處於 approved(execute_at_utc 非 null)，此窗內
+    -- 也不能清，否則會刪掉正在執行中排程件的 executor identity。
+    AND identity_id NOT IN (
+      SELECT executor_identity_id FROM change_sets
+      WHERE executor_identity_id IS NOT NULL
+        AND (status='scheduled' OR (status='approved' AND execute_at_utc IS NOT NULL))
+    )
   `).run()
   return {
     expiredAuthCodes: codeRes.changes,

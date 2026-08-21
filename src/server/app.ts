@@ -16,6 +16,7 @@ import { RateBudget } from '../limits/rateBudget.js'
 import { AppRateBudget } from '../limits/appRateBudget.js'
 import { ChangeSetStore } from '../core/changeset/store.js'
 import { ApprovalNonceStore } from '../core/changeset/approvalNonce.js'
+import { makeScheduler } from '../core/schedule/scheduler.js'
 import { WebSessionStore } from './webSessionStore.js'
 import { requestContext } from './requestContext.js'
 import { wrapTool, wrapL2Tool, type PipelineDeps, type L2PipelineDeps } from './toolPipeline.js'
@@ -33,6 +34,7 @@ import { findProductsTool } from '../tools/findProducts.js'
 import { productPlansTool } from '../tools/productPlans.js'
 import { inventorySettingsTool } from '../tools/inventorySettings.js'
 import { openBatchWizardTool } from '../tools/openBatchWizard.js'
+import { openAnnouncementWizardTool } from '../tools/openAnnouncementWizard.js'
 import { createChangesetTool, getChangesetStatusTool } from '../core/changeset/tools.js'
 import { APP_TOOLS } from '../tools/appTools.js'
 import type { ToolDef } from '../tools/types.js'
@@ -56,6 +58,9 @@ const TOOLS: ToolDef[] = [
   // built in Task 7). A plain L0-style ToolDef — it does no gateway reads of its own, so it needs
   // nothing beyond the base ToolContext wrapTool already provides.
   openBatchWizardTool as ToolDef,
+  // Session 1（announcement）：公告專用面板入口（ui://be2/announcement-wizard.html）。sibling tool，
+  // 非 be2_open_batch_wizard 的 action_type——uiResourceUri 一 tool 綁一面板無法動態切（見 spec §4.2）。
+  openAnnouncementWizardTool as ToolDef,
 ]
 const L2_TOOLS: L2ToolDef[] = [createChangesetTool, getChangesetStatusTool]
 
@@ -154,6 +159,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     genId: randomUUID,
     now: Date.now,
     emitConfirmUrl,
+    scheduleTz: config.scheduleTz,
   }
 
   // 面板輪詢（app-only tools）獨立限流，見 src/limits/appRateBudget.ts 的說明——與 rateBudget
@@ -170,6 +176,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     baseUrl,
     emitConfirmUrl,
     modifyUserFrom: modifyUserFromToken,
+    scheduleTz: config.scheduleTz,
   }
 
   const transports = new Map<string, StreamableHTTPServerTransport>()
@@ -340,6 +347,9 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
       console.error('mcp request failed:', (err as Error).message)
     })
   })
+
+  const scheduler = makeScheduler({ changeSets, gateway, audit, now: Date.now, tokenManager })
+  app.locals.startScheduler = scheduler.start
 
   return app
 }

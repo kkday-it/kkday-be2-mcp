@@ -1,35 +1,35 @@
 import { describe, it, expect } from 'vitest'
-import { parseQuantities, groupDatesByMonth, findRows, rowDate, rowQty, setRowQty } from '../src/tools/inventoryShape.js'
+import { readFileSync } from 'node:fs'
+import { parseInventoryFullday, readItemMode, isItemByAmount } from '../src/tools/inventoryShape.js'
+const fixture = JSON.parse(readFileSync('tests/fixtures/inventory-quantities.json', 'utf8'))
 
-describe('parseQuantities', () => {
-  it('parses rows under any candidate top-level key and candidate field names', () => {
-    const raw = { itemInventory: [{ date: '2026-08-15', quantity: 10 }, { date: '2026-08-16', quantity: 0 }] }
-    expect(parseQuantities(raw).byDate).toEqual({ '2026-08-15': 10, '2026-08-16': 0 })
+describe('parseInventoryFullday', () => {
+  it('reads data[itemOid].fullday from the full envelope', () => {
+    expect(parseInventoryFullday(fixture, '1650033')).toBe(32)
   })
-  it('parses snake_case variants', () => {
-    const raw = { item_inventory: [{ inventory_date: '2026-08-15', inventory_qty: 3 }] }
-    expect(parseQuantities(raw).byDate).toEqual({ '2026-08-15': 3 })
+  it('reads from an already-unwrapped map (gateway strips .data)', () => {
+    expect(parseInventoryFullday({ '1650033': { fullday: 32 } }, '1650033')).toBe(32)
   })
-  it('returns empty byDate on unknown shapes (never throws)', () => {
-    expect(parseQuantities(undefined).byDate).toEqual({})
-    expect(parseQuantities({ nothing: true }).byDate).toEqual({})
+  it('coerces a numeric string', () => {
+    expect(parseInventoryFullday({ data: { '7': { fullday: '15' } } }, '7')).toBe(15)
   })
-  it('setRowQty overwrites the matched quantity key in place', () => {
-    const row: Record<string, unknown> = { date: '2026-08-15', quantity: 10, other: 'kept' }
-    setRowQty(row, 60)
-    expect(row).toEqual({ date: '2026-08-15', quantity: 60, other: 'kept' })
-    expect(rowQty(row)).toBe(60)
-    expect(rowDate(row)).toBe('2026-08-15')
-  })
-  it('findRows handles a bare array response', () => {
-    expect(findRows([{ date: 'd', quantity: 1 }])).toHaveLength(1)
+  it('returns undefined for null / missing / NaN (never 0)', () => {
+    expect(parseInventoryFullday({ data: { '7': { fullday: null } } }, '7')).toBeUndefined()
+    expect(parseInventoryFullday({ data: {} }, '7')).toBeUndefined()
+    expect(parseInventoryFullday({ data: { '7': { fullday: 'x' } } }, '7')).toBeUndefined()
+    expect(parseInventoryFullday(undefined, '7')).toBeUndefined()
   })
 })
 
-describe('groupDatesByMonth', () => {
-  it('groups and preserves order within a month', () => {
-    const m = groupDatesByMonth(['2026-08-30', '2026-09-01', '2026-08-31'])
-    expect([...m.keys()]).toEqual(['2026-08', '2026-09'])
-    expect(m.get('2026-08')).toEqual(['2026-08-30', '2026-08-31'])
+describe('readItemMode / isItemByAmount', () => {
+  const basic = { item_config: { inventory_setting: { control_type: 1, inventory_type: 0 } } }
+  it('reads control_type/inventory_type from basic-info', () => {
+    expect(readItemMode(basic)).toEqual({ control_type: 1, inventory_type: 0 })
+  })
+  it('item_by_amount is 1/0 only', () => {
+    expect(isItemByAmount({ control_type: 1, inventory_type: 0 })).toBe(true)
+    expect(isItemByAmount({ control_type: 2, inventory_type: 0 })).toBe(false)
+    expect(isItemByAmount({ control_type: 1, inventory_type: 1 })).toBe(false)
+    expect(isItemByAmount({ control_type: undefined, inventory_type: null })).toBe(false)
   })
 })

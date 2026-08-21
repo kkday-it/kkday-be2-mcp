@@ -113,7 +113,7 @@ describe('execShelfSchedule', () => {
 // right key), Task 4 adds an EXPLICIT branch in itemKeysOf — this test locks that branch so a
 // future refactor can't silently regress it back to relying on the coincidence.
 describe('itemKeysOf — shelf_schedule key rule (Task 4)', () => {
-  const WHO = { accessToken: 'tok', userLabel: 'owner@kkday.com', sessionId: 's1' }
+  const WHO = { accessToken: 'tok', userLabel: 'owner@kkday.com', sessionId: 's1', identityId: 'id-test' }
 
   function makeDeps(gateway: { get: Function; put: Function }): { store: ChangeSetStore; deps: ConfirmServiceDeps } {
     const db = openDb(':memory:')

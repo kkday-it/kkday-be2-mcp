@@ -5,6 +5,8 @@ import { makeEnvelope, toEnvelopeError, type EnvelopeError } from '../../tools/e
 import type { ActionType, AnyChangeSetItem, AnyDiffItem } from './types.js'
 import { getModule, listModules } from './registry.js'
 import type { ActionModule } from './module.js'
+import { wallToUtcEpoch } from '../schedule/tz.js'
+import { SCHEDULE_POLICY } from '../schedule/policy.js'
 
 export { INVENTORY_ACTION_CODES } from '../../modules/product/inventorySetting/module.js'
 
@@ -27,6 +29,9 @@ export const createChangesetInputShape = {
   action_type: z.enum(listModules().map(m => m.actionType) as [string, ...string[]]),
   items: z.array(itemShape).min(1).max(20),
   note: z.string().max(500).optional(),
+  schedule: z.object({
+    wall: z.string().min(1).describe('BE2_TZ(伺服器設定時區)的牆鐘時間,格式 YYYY-MM-DDTHH:mm——不是 UTC;server 會自行換算'),
+  }).optional(),
 }
 const inputShape = createChangesetInputShape
 
@@ -71,6 +76,27 @@ export async function createChangesetCore(args: Record<string, unknown>, ctx: L2
       return makeEnvelope([], [{ key: actionType, code: 'ACTION_NOT_ALLOWED', message: 'Your be2 permissions do not include this shelf action.' }])
     }
   }
+
+  // 塊 B:排程參數(spec §5)。schedulable opt-in——排程能力在底層,但每個 action_type 必須
+  // 明確宣告;上下架/公告有原生排程欄位,不走本層。
+  let schedule: import('./types.js').ScheduleInfo | undefined
+  if (args.schedule) {
+    if (mod.schedulable !== true) {
+      return makeEnvelope([], [{ key: actionType, code: 'SCHEDULE_NOT_SUPPORTED',
+        message: `action_type ${actionType} does not support scheduled dispatch.` }])
+    }
+    const wall = (args.schedule as { wall: string }).wall
+    let executeAtUtc: number
+    try { executeAtUtc = wallToUtcEpoch(wall, ctx.scheduleTz) }
+    catch (e) { return makeEnvelope([], [toEnvelopeError(actionType, e)]) }
+    const lead = executeAtUtc - ctx.now()
+    if (lead < SCHEDULE_POLICY.minLeadMs || lead > SCHEDULE_POLICY.horizonMs) {
+      return makeEnvelope([], [{ key: actionType, code: 'SCHEDULE_OUT_OF_RANGE',
+        message: `scheduled time must be between ${SCHEDULE_POLICY.minLeadMs / 60_000} minutes and ${SCHEDULE_POLICY.horizonMs / 86_400_000} days from now (${ctx.scheduleTz}).` }])
+    }
+    schedule = { executeAtUtc, wall, tz: ctx.scheduleTz }
+  }
+
   try {
     ctx.rateBudget.consumeChangeset(ctx.userLabel)
     const diff = await mod.computeDiff({ gateway: ctx.gateway, accessToken: ctx.accessToken, userLabel: ctx.userLabel }, items)
@@ -86,6 +112,7 @@ export async function createChangesetCore(args: Record<string, unknown>, ctx: L2
       diff,
       diffVersion,
       note: args.note as string | undefined,
+      schedule,
       status: 'pending_approval',
       createdAt: ctx.now(),
     })
@@ -115,12 +142,12 @@ export const createChangesetTool: L2ToolDef = {
     'and approve or reject it there; only then does the write execute. You CANNOT approve or execute this change-set ' +
     'yourself — report the changeset_id and the diff to the user and tell them to open the confirm page to decide. ' +
     'Only pass oids you already looked up this session. ' +
-    'inventory_setting stages per-date inventory quantity changes ({item_oid, supplier_oid, op: set|adjust, quantity, dates}); ' +
-    'read the item inventory first — adjust is computed against live quantities at approval time. ' +
+    'inventory_setting stages an item-total (套餐總量, item_by_amount) fullday inventory SET ({item_oid, supplier_oid, quantity}) — overwrites the plan\'s fullday remaining quantity; only item_by_amount mode is supported (SKU / by-date modes are rejected). Read the item inventory first. ' +
     'Before staging, you MUST confirm 3 things with the user: (1) explicit plan list (confirm each pkg_oid, no vague "all"); ' +
     '(2) whether to apply immediately (shelf_toggle_plan) or schedule (shelf_schedule); ' +
     '(3) if scheduling, the exact date, time, and TIMEZONE (ask if not provided, do not guess). ' +
-    'Convert local time to UTC "YYYY-MM-DD HH:mm:ss" for reserve_date_utc. If any is missing, ASK first, do NOT stage.',
+    'Convert local time to UTC "YYYY-MM-DD HH:mm:ss" for reserve_date_utc. If any is missing, ASK first, do NOT stage. ' +
+    'Optional schedule:{wall} stages a timed dispatch — wall is a BE2_TZ wall-clock time (YYYY-MM-DDTHH:mm), NOT UTC; execution requires human approval and happens server-side at that time.',
   inputShape,
   uiResourceUri: 'ui://be2/changeset-panel.html',
   annotations: {
@@ -137,7 +164,7 @@ export const createChangesetTool: L2ToolDef = {
 
 export const getChangesetStatusTool: L2ToolDef = {
   name: 'be2_get_changeset_status',
-  description: 'Query a change-set you created: its approval/execution status and per-item before/after results. Read-only.',
+  description: 'Query a change-set you created: its approval/execution status and per-item before/after results. Read-only. Scheduled change-sets report { schedule } with the dispatch time.',
   inputShape: { changeset_id: z.string().min(1) },
   uiResourceUri: 'ui://be2/changeset-panel.html',
   annotations: {
@@ -150,7 +177,9 @@ export const getChangesetStatusTool: L2ToolDef = {
   async handler(args, ctx) {
     const rec = ctx.changeSets.get(args.changeset_id as string)
     if (!rec || rec.creatorLabel !== ctx.userLabel) return makeEnvelope([], [{ key: args.changeset_id as string, code: 'NOT_FOUND', message: 'No such change-set for this user.' }])
-    const results = ['pending_approval', 'approved'].includes(rec.status) ? undefined : ctx.changeSets.getResults(rec.id)
-    return makeEnvelope([{ changeset_id: rec.id, status: rec.status, action_type: rec.actionType, note: rec.note, diff: { items: rec.diff }, ...(results ? { results } : {}) }])
+    const results = ['pending_approval', 'approved', 'scheduled'].includes(rec.status) ? undefined : ctx.changeSets.getResults(rec.id)
+    return makeEnvelope([{ changeset_id: rec.id, status: rec.status, action_type: rec.actionType, note: rec.note,
+      ...(rec.schedule ? { schedule: { execute_at_utc: rec.schedule.executeAtUtc, wall: rec.schedule.wall, tz: rec.schedule.tz } } : {}),
+      diff: { items: rec.diff }, ...(results ? { results } : {}) }])
   },
 }

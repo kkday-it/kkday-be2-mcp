@@ -42,7 +42,7 @@ beforeAll(async () => {
   enrollBearer(db, BEARER_B, 'other@kkday.com')
   const config: Config = {
     authsvcUrl: 'https://auth.invalid', gatewayUrl: 'https://gw.invalid',
-    serviceKey: 'sk', port: 0, dbPath: ':memory:', otelMode: 'off',
+    serviceKey: 'sk', port: 0, dbPath: ':memory:', otelMode: 'off', scheduleTz: 'Asia/Taipei',
   }
   const app = buildApp({ config, db })
   http = createServer(app)
@@ -108,7 +108,8 @@ describe('MCP server integration', () => {
     // and thus always listed, regardless of host Apps support — same as the pre-existing L0 tools.
     expect(tools.map(t => t.name).sort()).toEqual([
       'be2_create_changeset', 'be2_find_products', 'be2_get_changeset_status',
-      'be2_get_inventory_settings', 'be2_get_product_plans', 'be2_open_batch_wizard',
+      'be2_get_inventory_settings', 'be2_get_product_plans', 'be2_open_announcement_wizard',
+      'be2_open_batch_wizard',
     ])
     await client.close()
   })

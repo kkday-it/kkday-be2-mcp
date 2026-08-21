@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { z } from 'zod'
 import { buildBatchView } from '../src/tools/batchView.js'
 import { appGetBatchViewTool } from '../src/tools/appTools.js'
@@ -208,6 +208,7 @@ describe('app_get_batch_view — 全鏈路：read-oids 登記 + budget 計數', 
       appRateBudget: new AppRateBudget(),
       readOids, rateBudget,
       audit: { record() {} } as never,
+      scheduleTz: 'Asia/Taipei',
       gateway: fakeGateway(),
       changeSets: {} as never,
       nonces: new ApprovalNonceStore(),
@@ -258,5 +259,40 @@ describe('app_get_batch_view — 全鏈路：read-oids 登記 + budget 計數', 
     expect(JSON.stringify(out.structuredContent)).toBe(out.content[0].text)
     const body = out.structuredContent as { items: Array<{ products: unknown[] }> }
     expect(body.items[0].products).toHaveLength(1)
+  })
+})
+
+function gw(overrides: Record<string, any> = {}) {
+  return {
+    get: vi.fn(async (p: string) => {
+      if (p.includes('/packages')) return [{ pkg_oid: '9', pkg_name: 'P', item_oid: '1650033', is_active: true, supplier_mapping: [{ supplier_oid: '181', is_default: true }] }]
+      if (p.includes('/basic-info')) return overrides.basic ?? { item_config: { inventory_setting: { control_type: 1, inventory_type: 0 } } }
+      if (p.includes('/drafts/products')) return { name: 'Prod' }
+      if (p.includes('/package-configs')) return []
+      return {}
+    }),
+    post: vi.fn(async () => overrides.search ?? { '1650033': { fullday: 32 } }),
+  } as any
+}
+
+describe('buildBatchView inventory_setting', () => {
+  it('resolves current_quantity + inventory_mode for item_by_amount', async () => {
+    const { products, read_oids } = await buildBatchView(gw(), 'tok', 'inventory_setting', ['2287'])
+    const plan = products[0].plans[0]
+    expect(plan.current_quantity).toBe(32)
+    expect(plan.inventory_mode).toBe('item_by_amount')
+    expect(read_oids).toContain('1650033')
+  })
+  it('non-item_by_amount plan is marked, current_quantity left undefined', async () => {
+    const g = gw({ basic: { item_config: { inventory_setting: { control_type: 2, inventory_type: 1 } } } })
+    const { products } = await buildBatchView(g, 'tok', 'inventory_setting', ['2287'])
+    expect(products[0].plans[0].current_quantity).toBeUndefined()
+    expect(products[0].plans[0].inventory_mode).toBe('sku_by_date')
+  })
+  it('degrades to a warning when the quantity read throws (no unhandled rejection)', async () => {
+    const g = gw(); g.post = vi.fn(async () => { throw Object.assign(new Error('403'), { code: 'AU9403' }) })
+    const { products, errors } = await buildBatchView(g, 'tok', 'inventory_setting', ['2287'])
+    expect(products[0].plans[0].current_quantity).toBeUndefined()
+    expect(errors.some(e => e.code === 'INVENTORY_READ_UNAVAILABLE')).toBe(true)
   })
 })

@@ -10,7 +10,7 @@ export interface ExecCtx {
   modifyUser: string
   userLabel: string
   sessionId: string
-  channel?: 'panel' | 'confirm_page'
+  channel?: 'panel' | 'confirm_page' | 'scheduler'
   span<T>(name: string, fn: (traceId: string) => Promise<T>): Promise<T>
   now: () => number
 }
@@ -27,6 +27,7 @@ export interface WizardRowInput {
   prod_oid: string; pkg_oid: string; pkg_name: string
   item_oid?: string; supplier_oid?: string
   queue: Array<{ reserve_date_utc: string; reserve_status: boolean }>; cleared: boolean
+  quantity?: number   // inventory_setting: per-row fullday SET target
 }
 
 export interface DomHelpers {
@@ -41,10 +42,14 @@ export interface WizardDescriptor {
   buildItems(rows: WizardRowInput[], opts: { target?: string }): unknown[]
   renderDiffCard(d: Record<string, unknown>, h: DomHelpers): HTMLElement
   step2WarningText?: string
+  schedulable?: boolean
 }
 
 export interface ActionModule<Item = unknown, DiffI = unknown> {
   actionType: string
+  // core 排程層 opt-in,見 spec §5;有原生排程欄位的 domain 不開
+  schedulable?: boolean
+  shapeFamily?: string // 同 shapeFamily 的模組共用寬鬆基底形狀，互斥性測試對家族內豁免、diffVersion 敏感度測試共用同一 mutation 分支
   itemSchema: z.ZodType<Item>
   authz: { codes: string[]; onMissing: 'block' | 'warn' }
   invalidItemsMessage: string

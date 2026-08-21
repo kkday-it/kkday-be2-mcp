@@ -10,13 +10,15 @@
 import { connectApp, renderText } from './panelShared.js'
 import { inventoryPlatformWizard } from '../modules/product/inventoryPlatform/ui.js'
 import { shelfScheduleWizard } from '../modules/product/shelfSchedule/ui.js'
+import { inventorySettingWizard } from '../modules/product/inventorySetting/ui.js'
 import type { WizardDescriptor, WizardRowInput, DomHelpers } from '../core/changeset/module.js'
 
-type ActionType = 'inventory_platform' | 'shelf_schedule'
+type ActionType = 'inventory_platform' | 'shelf_schedule' | 'inventory_setting'
 
 const WIZARDS: Record<ActionType, WizardDescriptor> = {
   inventory_platform: inventoryPlatformWizard,
-  shelf_schedule: shelfScheduleWizard
+  shelf_schedule: shelfScheduleWizard,
+  inventory_setting: inventorySettingWizard
 }
 
 interface ScheduleEntry { reserve_date_utc: string; reserve_status: boolean }
@@ -235,6 +237,7 @@ interface RowState {
   inventory_mode?: string
   queue: ScheduleEntry[]
   cleared?: boolean
+  quantityInput?: HTMLInputElement
 }
 
 function showFallback(el: HTMLElement, m: string): void { el.hidden = false; el.textContent = m }
@@ -383,6 +386,32 @@ export function initWizard(app: WizardApp): void {
     noteInput.onchange = () => { noteValue = noteInput.value }
     footerCard.appendChild(noteInput)
 
+    let schedToggle: HTMLInputElement | undefined
+    let schedInput: HTMLInputElement | undefined
+    let schedTzLabel: HTMLElement | undefined   // §9：載入後填入實際 BE2_TZ（app_get_batch_view.schedule_tz）
+    if (WIZARDS[actionType].schedulable) {
+      const schedWrap = document.createElement('label')
+      schedWrap.className = 'bw-row-inline'
+      schedWrap.style.marginRight = 'auto' // push the rest to the right if possible, or just let note take space
+      schedToggle = document.createElement('input'); schedToggle.type = 'checkbox'; schedToggle.dataset.role = 'schedToggle'
+      const toggleLabel = document.createElement('span'); renderText(toggleLabel, '排程到點執行')
+      schedInput = document.createElement('input'); schedInput.type = 'datetime-local'; schedInput.dataset.role = 'schedWall'; schedInput.hidden = true
+      schedInput.className = 'bw-input'
+      const tzLabel = document.createElement('span'); renderText(tzLabel, '伺服器時區'); tzLabel.hidden = true; tzLabel.style.fontSize = '.8125rem'; tzLabel.style.color = 'var(--bw-muted)'
+      schedTzLabel = tzLabel   // 由 doLoad 於載入後改成實際時區值
+      
+      schedToggle.onchange = () => {
+        if (schedInput) schedInput.hidden = !schedToggle!.checked
+        tzLabel.hidden = !schedToggle!.checked
+      }
+      
+      schedWrap.appendChild(schedToggle)
+      schedWrap.appendChild(toggleLabel)
+      schedWrap.appendChild(schedInput)
+      schedWrap.appendChild(tzLabel)
+      footerCard.appendChild(schedWrap)   // fakeDom 無 insertBefore;順序放 note 後即可
+    }
+
     const nextBtn = primaryBtn('下一步', 'nextBtn', () => { void doNext() })
     footerCard.appendChild(nextBtn)
     wizardEl.appendChild(footerCard)
@@ -398,7 +427,10 @@ export function initWizard(app: WizardApp): void {
         const r = await app.callServerTool({ name: 'app_get_batch_view', arguments: { action_type: actionType, prod_oids: prodOids } })
         if (r.isError) { showFallback(fallbackEl, '載入失敗'); return }
         const structuredContent = r.structuredContent as { items?: unknown[], errors?: Array<{code?: string, message?: string}> } | undefined
-        const products = (structuredContent?.items?.[0] as { products?: unknown[] } | undefined)?.products ?? []
+        const item0 = structuredContent?.items?.[0] as { products?: unknown[]; schedule_tz?: string } | undefined
+        const products = item0?.products ?? []
+        // §9：把排程時區標籤從通用「伺服器時區」換成實際 BE2_TZ 值（若後端有帶）。
+        if (item0?.schedule_tz && schedTzLabel) renderText(schedTzLabel, `時區：${item0.schedule_tz}`)
         
         const nfErrors = (structuredContent?.errors ?? []).filter(e => e.code === 'PRODUCT_NOT_FOUND')
         if (nfErrors.length > 0) {
@@ -625,19 +657,38 @@ export function initWizard(app: WizardApp): void {
           // 歸屬字串,故不套用「綠=上架/紅=下架」這組語意(那組留給真的有 boolean 狀態的欄位)。
           const statusWrap = document.createElement('span')
           statusWrap.className = 'bw-status-badge'
-          const dot = document.createElement('span')
-          const statusSpan = document.createElement('span')
-          if (actionType === 'inventory_platform') {
-            const hasPlatform = plan.current_platform != null
-            dot.className = `bw-dot ${hasPlatform ? 'bw-dot-green' : 'bw-dot-gray'}`
-            renderText(statusSpan, hasPlatform ? String(plan.current_platform) : '—')
+          if (actionType === 'inventory_setting') {
+            if (plan.inventory_mode !== 'item_by_amount') {
+              cb.disabled = true
+              renderText(statusWrap, '目前不支援（僅套餐總量模式）')
+              statusWrap.style.fontSize = '0.6875rem'
+              statusWrap.style.color = 'var(--bw-muted)'
+            } else {
+              const input = document.createElement('input')
+              input.type = 'number'
+              input.min = '0'
+              input.step = '1'
+              input.className = 'bw-input'
+              input.style.width = '100%'
+              input.placeholder = plan.current_quantity != null ? String(plan.current_quantity) : '未設'
+              rs.quantityInput = input
+              statusWrap.appendChild(input)
+            }
           } else {
-            const queueLen = Array.isArray(plan.reserve_queue) ? plan.reserve_queue.length : 0
-            dot.className = `bw-dot ${isBundle ? 'bw-dot-gray' : queueLen > 0 ? 'bw-dot-green' : 'bw-dot-gray'}`
-            renderText(statusSpan, isBundle ? '(bundle，不可個別排程)' : queueLen > 0 ? `現有 ${queueLen} 筆排程` : '（無排程）')
+            const dot = document.createElement('span')
+            const statusSpan = document.createElement('span')
+            if (actionType === 'inventory_platform') {
+              const hasPlatform = plan.current_platform != null
+              dot.className = `bw-dot ${hasPlatform ? 'bw-dot-green' : 'bw-dot-gray'}`
+              renderText(statusSpan, hasPlatform ? String(plan.current_platform) : '—')
+            } else {
+              const queueLen = Array.isArray(plan.reserve_queue) ? plan.reserve_queue.length : 0
+              dot.className = `bw-dot ${isBundle ? 'bw-dot-gray' : queueLen > 0 ? 'bw-dot-green' : 'bw-dot-gray'}`
+              renderText(statusSpan, isBundle ? '(bundle，不可個別排程)' : queueLen > 0 ? `現有 ${queueLen} 筆排程` : '（無排程）')
+            }
+            statusWrap.appendChild(dot)
+            statusWrap.appendChild(statusSpan)
           }
-          statusWrap.appendChild(dot)
-          statusWrap.appendChild(statusSpan)
           row.appendChild(statusWrap)
 
           row.appendChild(badge)
@@ -798,7 +849,8 @@ export function initWizard(app: WizardApp): void {
         checked: r.checkbox.checked, is_bundle: r.is_bundle ?? false,
         prod_oid: r.prod_oid, pkg_oid: r.pkg_oid, pkg_name: r.pkg_name,
         item_oid: r.item_oid, supplier_oid: r.supplier_oid,
-        queue: r.queue, cleared: r.cleared ?? false
+        queue: r.queue, cleared: r.cleared ?? false,
+        quantity: r.quantityInput ? (Number.isNaN(r.quantityInput.valueAsNumber) ? undefined : r.quantityInput.valueAsNumber) : undefined
       }))
       const items = WIZARDS[actionType].buildItems(rowInputs, { target }) as Array<Record<string, unknown>>
       if (items.length === 0) {
@@ -813,12 +865,19 @@ export function initWizard(app: WizardApp): void {
         }
         return
       }
+      // 勾了排程但沒填時間:必須擋下,不能靜默轉「立即執行」——那正是使用者勾排程想避開的
+      // 最危險路徑(庫存立即生效並清快取)。(Task 10 review Important)
+      if (schedToggle?.checked && !schedInput?.value) {
+        showFallback(fallbackEl, '已勾選排程但未填時間——請填寫排程時間,或取消排程勾選改為立即執行')
+        return
+      }
       clearFallback(fallbackEl)
       statusEl.textContent = '建立變更中…'
+      const schedule = schedToggle?.checked && schedInput?.value ? { wall: schedInput.value } : undefined
       try {
         const createR = await app.callServerTool({
           name: 'app_create_changeset',
-          arguments: { action_type: actionType, items, ...(noteValue ? { note: noteValue } : {}) },
+          arguments: { action_type: actionType, items, ...(noteValue ? { note: noteValue } : {}), ...(schedule ? { schedule } : {}) },
         })
         
         let parsedErrCode: string | undefined
@@ -918,6 +977,9 @@ export function initWizard(app: WizardApp): void {
     if (actionType === 'shelf_schedule' && Array.isArray(d.new_queue)) {
       return WIZARDS[actionType].renderDiffCard(d, domHelpers)
     }
+    if (actionType === 'inventory_setting') {
+      return WIZARDS[actionType].renderDiffCard(d, domHelpers)
+    }
     if (actionType === 'inventory_platform' && 'target' in d) {
       return WIZARDS[actionType].renderDiffCard(d, domHelpers)
     }
@@ -979,7 +1041,12 @@ export function initWizard(app: WizardApp): void {
     const card = document.createElement('div')
     card.className = 'bw-card'
     const desc = document.createElement('p')
-    renderText(desc, '按下後將送出批准並立即執行本次變更。')
+    const currentSchedule = lastViewRec?.schedule as { execute_at_utc: number; wall: string; tz: string } | undefined
+    if (currentSchedule) {
+      renderText(desc, `將於 ${currentSchedule.wall} (${currentSchedule.tz}) 執行。按下後將送出批准。`)
+    } else {
+      renderText(desc, '按下後將送出批准並立即執行本次變更。')
+    }
     card.appendChild(desc)
     const footer = document.createElement('div')
     footer.className = 'bw-row-footer'
@@ -995,10 +1062,11 @@ export function initWizard(app: WizardApp): void {
     if (!changesetId || !currentNonce || !currentDiffVersion) { showFallback(fallbackEl, '缺少批准所需資訊，請回上一步重載'); return }
     statusEl.textContent = '執行中…'
     const confirmedKeys = currentDiffItems.map(WIZARDS[actionType].itemKey)
+    const currentSchedule = lastViewRec?.schedule as { execute_at_utc: number; wall: string; tz: string } | undefined
     try {
       const r = await app.callServerTool({
         name: 'app_confirm_changeset',
-        arguments: { changeset_id: changesetId, decision: 'approve', nonce: currentNonce, diff_version: currentDiffVersion, confirmed_keys: confirmedKeys },
+        arguments: { changeset_id: changesetId, decision: 'approve', nonce: currentNonce, diff_version: currentDiffVersion, confirmed_keys: confirmedKeys, ...(currentSchedule ? { expected_execute_at_utc: currentSchedule.execute_at_utc } : {}) },
       })
       const env = r.structuredContent
       const err = env?.errors?.[0]
@@ -1011,7 +1079,13 @@ export function initWizard(app: WizardApp): void {
       // of a dead-end message.
       if (err?.code === 'DIFF_STALE') { renderStaleNotice(); return }
       if (err) { showFallback(fallbackEl, `批准失敗：${err.code ?? ''} ${err.message ?? ''}`); return }
-      const rec = (env?.items?.[0] as { results?: unknown[] } | undefined) ?? {}
+      const rec = (env?.items?.[0] as { status?: string; results?: unknown[] } | undefined) ?? {}
+      if (rec.status === 'scheduled') {
+        // 排程批准:server 只回 {changeset_id, status:'scheduled'}、無 per-item results——用
+        // confirmedKeys 合成 scheduled 列(帶 wall 供藥丸文案),取消按鈕由 ledger 列渲染提供。
+        renderStep4(confirmedKeys.map(k => ({ item_key: k, status: 'scheduled', schedule: { wall: currentSchedule?.wall ?? '' } })))
+        return
+      }
       renderStep4((rec.results as Array<Record<string, unknown>> | undefined) ?? [])
     } catch (e) { showFallback(fallbackEl, '送出失敗：' + String(e)) }
   }
@@ -1052,8 +1126,12 @@ export function initWizard(app: WizardApp): void {
       const row = document.createElement('div')
       row.dataset.itemKey = String(res.item_key)
       row.dataset.status = String(res.status)
-      const status = res.status
-      const kind = status === 'done' ? 'ok' : status === 'skipped_noop' ? 'skip' : 'error'
+      const status = String(res.status)
+      let kind = 'error'
+      if (status === 'done' || status === 'scheduled') kind = 'ok'
+      else if (status === 'skipped_noop' || status === 'cancelled') kind = 'skip'
+      else if (status === 'missed') kind = 'error'
+      
       row.className = 'bw-ledger-row'
       row.style.flexWrap = 'wrap'
 
@@ -1099,10 +1177,60 @@ export function initWizard(app: WizardApp): void {
       row.appendChild(keyWrap)
 
       const statusSpan = document.createElement('span')
-      const statusLabel = kind === 'ok' ? '已完成' : kind === 'skip' ? '無變更，略過' : `失敗（${String(res.status)}）`
-      statusSpan.className = `bw-ledger-status bw-ledger-status-${kind === 'ok' ? 'ok' : kind === 'skip' ? 'skip' : 'error'}`
+      let statusLabel = ''
+      if (status === 'done') statusLabel = '已完成'
+      else if (status === 'skipped_noop') statusLabel = '無變更，略過'
+      else if (status === 'scheduled') {
+        const wall = (res.schedule as any)?.wall ?? ''
+        statusLabel = `已排程 ${wall}`
+      }
+      else if (status === 'cancelled') statusLabel = '取消排程'
+      else if (status === 'missed') statusLabel = '錯過排程'
+      else statusLabel = `失敗（${status}）`
+
+      statusSpan.className = `bw-ledger-status bw-ledger-status-${kind}`
       renderText(statusSpan, statusLabel)
       row.appendChild(statusSpan)
+
+      if (status === 'scheduled') {
+        const cancelBtn = secondaryBtn('取消排程', 'cancelBtn', async () => {
+          cancelBtn.disabled = true
+          try {
+            // 批准時的 nonce 已被單次消耗——取消前必須重新 view 取新鮮 nonce(scheduled 狀態
+            // 的 view 會 issue 新 nonce)。(Task 10 review Critical 2a)
+            const vr = await app.callServerTool({ name: 'app_get_changeset_view', arguments: { changeset_id: changesetId! } })
+            const vEnv = vr.structuredContent
+            const vRec = vEnv?.items?.[0] as { nonce?: string; diff_version?: string } | undefined
+            if (vr.isError || vEnv?.errors?.[0] || !vRec?.nonce) {
+              showFallback(fallbackEl, `取消失敗:${vEnv?.errors?.[0]?.code ?? '無法取得取消憑證'}`)
+              cancelBtn.disabled = false
+              return
+            }
+            const r = await app.callServerTool({
+              name: 'app_confirm_changeset',
+              arguments: { changeset_id: changesetId!, decision: 'cancel', nonce: vRec.nonce, diff_version: vRec.diff_version ?? currentDiffVersion!, confirmed_keys: [] }
+            })
+            // callServerTool 對錯誤信封是正常 resolve——必須驗 isError/errors,否則 server 取消
+            // 失敗(NONCE_INVALID/NOT_CANCELLABLE)時 UI 仍宣稱已取消 = 假陽性,排程照跑。
+            // (Task 10 review Critical 2b)
+            const env = r.structuredContent
+            const err = env?.errors?.[0]
+            if (r.isError || err) {
+              showFallback(fallbackEl, `取消失敗:${err?.code ?? ''} ${err?.message ?? ''}`)
+              cancelBtn.disabled = false
+              return
+            }
+            renderText(statusSpan, '取消排程')
+            statusSpan.className = 'bw-ledger-status bw-ledger-status-skip'
+            cancelBtn.hidden = true
+          } catch(e) {
+            showFallback(fallbackEl, '取消失敗:' + String(e))
+            cancelBtn.disabled = false
+          }
+        })
+        cancelBtn.style.marginLeft = '0.5rem'
+        row.appendChild(cancelBtn)
+      }
 
       if (kind === 'error') {
         const codeSpan = document.createElement('span')
@@ -1177,7 +1305,8 @@ export function initWizard(app: WizardApp): void {
         for (const prod of products) {
           if (Array.isArray(prod.plans)) {
             for (const plan of prod.plans) {
-              if (actionType === 'inventory_platform') {
+              if (actionType === 'inventory_platform' || actionType === 'inventory_setting') {
+                // both verify by the executor's item_key = item_oid:supplier_oid (not prod:pkg)
                 livePlans.set(`${plan.item_oid}:${plan.supplier_oid}`, plan)
               } else {
                 livePlans.set(`${prod.prod_oid}:${plan.pkg_oid}`, plan)
@@ -1194,6 +1323,10 @@ export function initWizard(app: WizardApp): void {
           const plan = livePlans.get(String(v.res.item_key))
           if (actionType === 'inventory_platform') {
             if (plan && plan.current_platform != null && plan.current_platform === diff.target) {
+              verified = true
+            }
+          } else if (actionType === 'inventory_setting') {
+            if (plan && plan.current_quantity === diff.target) {
               verified = true
             }
           } else {

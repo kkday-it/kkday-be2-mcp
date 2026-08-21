@@ -1,32 +1,29 @@
 import type { ToolContext } from '../../../tools/types.js'
-import { parseQuantities, groupDatesByMonth } from '../../../tools/inventoryShape.js'
+import { readCurrentFullday, readItemMode, isItemByAmount } from '../../../tools/inventoryShape.js'
 import { DiffError } from '../../../core/changeset/diff.js'
-import type { InventoryDateDiff, InventoryDiffItem, InventoryItem } from '../../../core/changeset/types.js'
+import type { InventoryDiffItem, InventoryItem } from '../../../core/changeset/types.js'
 
-// Per-date live diff (spec §4). One GET per (item, supplier, month) — the quantities endpoint
-// is month-scoped. adjust needs a numeric base for every date (嚴禁盲寫: a delta on an unknown
-// base is undefined); set may target an unknown base (it's still a fully-defined write).
+// spec §5.3. Fullday SET diff. Mode gate first (only item_by_amount 1/0); then POST search for
+// current fullday. Any read failure or mode mismatch is fail-closed (嚴禁盲寫). current=undefined
+// (未設) is legal for SET — it is still a fully-defined write.
 export async function computeInventoryDiff(items: InventoryItem[], ctx: ToolContext): Promise<InventoryDiffItem[]> {
   const out: InventoryDiffItem[] = []
   for (const it of items) {
-    const byDate: Record<string, number> = {}
-    for (const [ym] of groupDatesByMonth(it.dates)) {
-      const raw = await ctx.gateway.get(
-        `/product/api/v1/items/${encodeURIComponent(it.item_oid)}/inventories/${encodeURIComponent(it.supplier_oid)}`,
-        ctx.accessToken, { year_month: ym })
-      Object.assign(byDate, parseQuantities(raw).byDate)
+    const key = `${it.item_oid}:${it.supplier_oid}`
+    let mode: { control_type?: number; inventory_type?: number | null }
+    let current: number | undefined
+    try {
+      const basic = await ctx.gateway.get(`/product/api/v1/items/${encodeURIComponent(it.item_oid)}/basic-info`, ctx.accessToken)
+      mode = readItemMode(basic)
+      if (!isItemByAmount(mode)) {
+        throw new DiffError([key], `此商品非「套餐總量限制」模式（control_type=${mode.control_type}, inventory_type=${mode.inventory_type}），即時庫存數量版僅支援套餐總量；SKU/依日期模式尚未支援`)
+      }
+      current = await readCurrentFullday(ctx.gateway, ctx.accessToken, it.item_oid, it.supplier_oid)
+    } catch (e) {
+      if (e instanceof DiffError) throw e
+      throw new DiffError([key], `讀取庫存現況失敗（${(e as Error).message}）；fail-closed 不建立`)
     }
-    const noBase = it.op === 'adjust' ? it.dates.filter(d => byDate[d] === undefined) : []
-    if (noBase.length) {
-      throw new DiffError(noBase.map(d => `${it.item_oid}:${it.supplier_oid}:${d}`),
-        `adjust needs a readable current quantity; none for: ${noBase.join(', ')}`)
-    }
-    const dates: InventoryDateDiff[] = it.dates.map(d => {
-      const current = byDate[d]
-      const target = it.op === 'set' ? it.quantity : (current as number) + it.quantity
-      return { date: d, current, target, no_op: it.op === 'set' && current === it.quantity, would_go_negative: target < 0 }
-    })
-    out.push({ item_oid: it.item_oid, supplier_oid: it.supplier_oid, op: it.op, quantity: it.quantity, dates })
+    out.push({ item_oid: it.item_oid, supplier_oid: it.supplier_oid, current, target: it.quantity, no_op: current === it.quantity })
   }
   return out
 }

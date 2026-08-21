@@ -15,9 +15,9 @@ import type { ChangeSetRecord, InventoryItem } from '../src/core/changeset/types
 // memory sqlite, same harness as tests/confirmRoutes*.test.ts) with a fake gateway, so the actual
 // itemKeysOf + Set-equality code path is what runs.
 
-const WHO = { accessToken: 'tok', userLabel: 'owner@kkday.com', sessionId: 's1' }
+const WHO = { accessToken: 'tok', userLabel: 'owner@kkday.com', sessionId: 's1', identityId: 'id-test' }
 
-function makeDeps(gateway: { get: Function; put: Function }): { store: ChangeSetStore; audit: AuditLog; deps: ConfirmServiceDeps } {
+function makeDeps(gateway: { get: Function; put: Function; post?: Function }): { store: ChangeSetStore; audit: AuditLog; deps: ConfirmServiceDeps } {
   const db = openDb(':memory:')
   const store = new ChangeSetStore(db, { now: () => 1000 })
   const audit = new AuditLog(db, () => 1000)
@@ -69,32 +69,26 @@ function seedInventory(store: ChangeSetStore, id: string, items: InventoryItem[]
   return store.get(id)!
 }
 
-// Mirrors tests/confirmRoutesInventory.test.ts's fakeGw, extended to key by (item_oid,
-// supplier_oid) so a change-set with TWO items (needed for finding-1(d)'s item×supplier key
-// coverage) is served correctly — execInventory processes rec.items sequentially (executor.ts),
-// so tracking "which supplier was last GET-ed for this item" and using it on the matching PUT is
-// safe (no overlap between items).
-function invGateway(qty: Record<string, Record<string, number>>) {
-  const lastSupplierForItem: Record<string, string> = {}
+// fullday-SET contract (塊 A): keyed by `item:supplier` -> fullday number. get serves
+// status + basic-info (item_by_amount 1/0); post serves inventories/search; put serves the
+// quantity endpoint. Mirrors the real diff/executor call shape.
+function invGateway(qty: Record<string, number>) {
   return {
     qty,
-    async get(path: string, _at: string, query?: Record<string, string>) {
+    async get(path: string) {
       if (path.endsWith('/inventories/status')) return { is_processing: false }
-      const m = /\/items\/([^/]+)\/inventories\/([^/]+)$/.exec(path)!
-      const item = decodeURIComponent(m[1]); const supplier = decodeURIComponent(m[2])
-      lastSupplierForItem[item] = supplier
-      const key = `${item}:${supplier}`
-      const ym = query!.year_month
-      const map = qty[key] ?? {}
-      return { itemInventory: Object.entries(map).filter(([d]) => d.startsWith(ym)).map(([date, quantity]) => ({ date, quantity })) }
+      if (path.endsWith('/basic-info')) return { item_config: { inventory_setting: { control_type: 1, inventory_type: 0 } } }
+      return {}
     },
-    async put(path: string, _at: string, body: Record<string, unknown>) {
-      const m = /\/items\/([^/]+)\/inventories$/.exec(path)!
+    async post(path: string, _at: string, body: { supplier_oid: string }) {
+      const m = /\/items\/([^/]+)\/inventories\/search$/.exec(path)!
       const item = decodeURIComponent(m[1])
-      const supplier = lastSupplierForItem[item]
-      const key = `${item}:${supplier}`
-      qty[key] = qty[key] ?? {}
-      for (const row of (body.itemInventory as Array<{ date: string; quantity: number }>) ?? []) qty[key][row.date] = row.quantity
+      return { [item]: { fullday: qty[`${item}:${body.supplier_oid}`] } }
+    },
+    async put(path: string, _at: string, body: any) {
+      const m = /\/items\/([^/]+)\/inventories\/([^/]+)\/quantity$/.exec(path)!
+      const item = decodeURIComponent(m[1]); const supplier = decodeURIComponent(m[2])
+      qty[`${item}:${supplier}`] = body.inventory_data.remain_qty[item].fullday
       return {}
     },
   }
@@ -139,10 +133,10 @@ describe('approveAndExecute — real confirmed_keys validation (Task 11 Finding 
 
   it('(d) inventory change-set: item×supplier key rule — missing one of two keys throws, both present passes', async () => {
     const items: InventoryItem[] = [
-      { item_oid: 'i1', supplier_oid: 's1', op: 'set', quantity: 10, dates: ['2026-08-15'] },
-      { item_oid: 'i2', supplier_oid: 's2', op: 'set', quantity: 20, dates: ['2026-08-15'] },
+      { item_oid: 'i1', supplier_oid: 's1', quantity: 10 },
+      { item_oid: 'i2', supplier_oid: 's2', quantity: 20 },
     ]
-    const qty = { 'i1:s1': { '2026-08-15': 5 }, 'i2:s2': { '2026-08-15': 7 } }
+    const qty = { 'i1:s1': 5, 'i2:s2': 7 }
 
     // missing key: only i1's key present
     {
@@ -168,20 +162,19 @@ describe('approveAndExecute — real confirmed_keys validation (Task 11 Finding 
     }
   })
 
-  it('(f) inventory duplicate key: TWO items share (item_oid,supplier_oid) with disjoint dates — Set-equality bug vs multiset fix', async () => {
-    // Task 12 review Finding 1: validateInventoryItems only enforces (item, supplier, date)
-    // uniqueness — two items with the SAME (item_oid, supplier_oid) but disjoint `dates` are
-    // legal and both collapse to the SAME rendered key `i1:s1` in the panel. Under Set-based
-    // comparison, expected=[k,k] dedups to {k}; confirmedKeys=[k] (user unchecked ONE of the two
-    // rows) also dedups to {k} — sizes match, contents match, the mismatch check never fires,
-    // and the full batch (including the row the user tried to uncheck) executes. This test pins
-    // the multiset fix: (b) below MUST throw CONFIRMED_KEYS_MISMATCH, which it would NOT under
-    // the old Set logic (non-vacuous regression pin).
+  it('(f) inventory duplicate key: TWO items share (item_oid,supplier_oid) — Set-equality bug vs multiset fix', async () => {
+    // Task 12 review Finding 1 (塊A 後仍成立): a change-set with two items sharing the SAME
+    // (item_oid, supplier_oid) — hand-built here directly in the store (bypasses
+    // validateInventoryItems' uniqueness rule) — both collapse to the SAME rendered key `i1:s1`.
+    // Under Set-based comparison, expected=[k,k] dedups to {k}; confirmedKeys=[k] (user unchecked
+    // ONE of the two rows) also dedups to {k} — sizes/contents match, the mismatch check never
+    // fires, and the full batch executes. This pins the multiset fix: (b) below MUST throw
+    // CONFIRMED_KEYS_MISMATCH, which it would NOT under the old Set logic (non-vacuous regression).
     const items: InventoryItem[] = [
-      { item_oid: 'i1', supplier_oid: 's1', op: 'set', quantity: 10, dates: ['2026-08-15'] },
-      { item_oid: 'i1', supplier_oid: 's1', op: 'set', quantity: 20, dates: ['2026-08-16'] },
+      { item_oid: 'i1', supplier_oid: 's1', quantity: 10 },
+      { item_oid: 'i1', supplier_oid: 's1', quantity: 20 },
     ]
-    const qty = { 'i1:s1': { '2026-08-15': 5, '2026-08-16': 7 } }
+    const qty = { 'i1:s1': 5 }
 
     // (a) confirmed_keys = both keys ['i1:s1','i1:s1'] (both rows still checked) — passes the gate.
     {

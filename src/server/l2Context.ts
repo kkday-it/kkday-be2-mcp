@@ -31,6 +31,7 @@ export interface L2ToolContext {
   // be2-auth SSO session cookie on the confirm page, not a capability token in the URL) — the
   // out-of-band delivery is defense in depth, not the security boundary.
   emitConfirmUrl: (changesetId: string, url: string) => void
+  scheduleTz: string
 }
 
 export interface L2ToolDef {

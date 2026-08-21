@@ -13,7 +13,7 @@ import type { ChangeSetRecord, ChangeSetItem, InventoryItem, InventoryPlatformIt
 // decision": that sequence is security-critical (it is what makes approval execute-exactly-once
 // and immune to a stale/replayed diff) and a copy would silently drift from the original.
 
-export interface ApproveWho { accessToken: string; userLabel: string; sessionId: string }
+export interface ApproveWho { accessToken: string; userLabel: string; sessionId: string; identityId: string }
 
 export interface ApproveParams {
   rec: ChangeSetRecord
@@ -28,6 +28,7 @@ export interface ApproveParams {
   confirmedKeys?: string[]
   channel: 'panel' | 'confirm_page'
   audit?: { ip?: string; clientInfo?: string }
+  expectedExecuteAtUtc?: number
 }
 
 // The three failure modes are mutually exclusive with success: exactly one of stale/casFailed is
@@ -35,6 +36,7 @@ export interface ApproveParams {
 export interface ApproveResult {
   stale?: true
   casFailed?: true
+  scheduled?: true
   status?: 'done' | 'partial' | 'failed'
   results?: ItemResult[]
 }
@@ -56,13 +58,10 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
   // (1) confirmed_keys 校驗（面板專用；確認頁不傳此欄位、跳過本步）——見 spec §4.3:面板取消勾選
   // 某個項目後,後端不得仍全量執行整批。集合須完全一致(無多、無缺)。
   //
-  // Task 12 review Finding 1: 不可用 Set 比對——inventory change-set 合法允許兩個項目共用同一
-  // (item_oid, supplier_oid) 但 dates 不相交(validateInventoryItems 只檢查 (item,supplier,date)
-  // 三元組唯一性),兩者在面板上會渲染成同一把 key。若用 Set,expected 的 [k,k] 會被去重成 {k},
-  // 使用者取消勾選其中一列後 confirmedKeys 送出的 [k] 也去重成 {k}——集合大小、內容都對得上,
-  // mismatch 檢查永遠不會觸發,導致使用者想取消的那一列仍隨整批一起執行。改用「排序後逐一比對
-  // 的 multiset」:重複次數必須相同,長度不同或排序後任一位置不同即視為不符。唯一 key 的情境下
-  // 與舊 Set 邏輯行為一致(既有測試不受影響)。
+  // multiset（非 Set）比對:面板取消勾選某項後,後端不得仍全量執行,集合須完全一致(無多無缺)。
+  // 用排序後逐一比對的 multiset 而非 Set,避免重複 key 被去重而使 mismatch 永不觸發。
+  // （塊A 後 inventory_setting 已無 dates、(item_oid, supplier_oid) 全域唯一,不再產生重複 key;
+  // multiset 對唯一 key 與 Set 等價、仍安全,保留以涵蓋任何可能產生重複 key 的 action type。）
   if (confirmedKeys) {
     const expected = rec.items.map(i => mod.itemKey(i)).sort()
     const got = [...confirmedKeys].sort()
@@ -97,6 +96,36 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
   // the whole call while the change-set is still 'pending_approval' — retryable, not stranded.
   const modifyUser = deps.modifyUserFrom(who.accessToken)
 
+  // Finding 3（Task 11 review）: 沿用抽出前 confirmRoutes.ts 原本的 'confirm-page:'（連字號）字首,
+  // 不可讓 channel 字面值('confirm_page',底線)直接滲入可觀察的 audit 紀錄——那是這次抽取造成的
+  // clientInfo 漂移,不是刻意設計。面板(panel)沒有「原本」可沿用,取一個獨立字首。
+  const clientInfoPrefix = channel === 'confirm_page' ? 'confirm-page' : 'panel'
+
+  // 塊 B(spec §5):時間回聲綁定——人看到的時間必須等於將執行的時間(同 confirmed_keys 綁
+  // items、diff_version 綁內容)。有 schedule 必帶回聲、無 schedule 不得帶,錯配一律 409。
+  if (rec.schedule || params.expectedExecuteAtUtc !== undefined) {
+    if (!rec.schedule || params.expectedExecuteAtUtc !== rec.schedule.executeAtUtc) {
+      throw new AppError('SCHEDULE_ECHO_MISMATCH', 'expected_execute_at_utc does not match this change-set schedule', 409)
+    }
+    // 批准閾值刻意與建立不同(spec §5):只驗「仍在未來」——若也用 minLead,建立時剛好
+    // minLead 後的排程在人審完 diff 點批准的瞬間必然 409,tight schedule 永遠批不過。
+    if (rec.schedule.executeAtUtc <= deps.now()) {
+      throw new AppError('SCHEDULE_IN_PAST', 'scheduled time has passed — cancel and re-create with a new time', 409)
+    }
+    const won = deps.changeSets.setScheduled(rec.id, {
+      identityId: who.identityId, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId,
+    }, deps.now())
+    if (!won) return { casFailed: true }
+    deps.audit.record({
+      userLabel: who.userLabel, sessionId: who.sessionId,
+      clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
+      tool: 'changeset.approve',
+      params: { changeset_id: rec.id, ip: audit?.ip, channel, scheduled_for: rec.schedule.executeAtUtc },
+      status: 'ok', traceId: 'n/a', durationMs: 0,
+    })
+    return { scheduled: true }
+  }
+
   // (3) atomic compare-and-swap: only the caller that wins the pending_approval -> approved
   // transition may proceed to executeChangeSet. This is what guarantees execute-exactly-once
   // under concurrent approvals — including the cross-channel case now possible post-Task-11 (one
@@ -109,10 +138,6 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
   // tool='changeset.execute'. Preserves the confirm-page's original ip/clientInfo audit fields
   // (params.audit) verbatim — dropping IP audit here was an explicitly called-out regression risk
   // during this extraction.
-  // Finding 3（Task 11 review）: 沿用抽出前 confirmRoutes.ts 原本的 'confirm-page:'（連字號）字首,
-  // 不可讓 channel 字面值('confirm_page',底線)直接滲入可觀察的 audit 紀錄——那是這次抽取造成的
-  // clientInfo 漂移,不是刻意設計。面板(panel)沒有「原本」可沿用,取一個獨立字首。
-  const clientInfoPrefix = channel === 'confirm_page' ? 'confirm-page' : 'panel'
   deps.audit.record({
     userLabel: who.userLabel, sessionId: who.sessionId,
     clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
@@ -123,5 +148,6 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
 
   // (4) execute.
   const out = await executeChangeSet(deps, rec.id, { accessToken: who.accessToken, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId, channel })
+  if (!out) return { casFailed: true }
   return { status: out.status, results: out.results }
 }

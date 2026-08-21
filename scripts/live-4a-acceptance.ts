@@ -125,7 +125,7 @@ async function runShelfScheduleRoundTrip(
   console.log('  step 2/4: approve + execute (same shared service the confirm page / wizard panel call)')
   const rec1 = ctx.changeSets.get(created1.changeset_id)!
   const out1 = await approveAndExecute(confirmDeps, {
-    rec: rec1, who: { accessToken: at, userLabel: ctx.userLabel, sessionId: ctx.sessionId },
+    rec: rec1, who: { accessToken: at, userLabel: ctx.userLabel, sessionId: ctx.sessionId, identityId: 'live-acceptance-script' },   // 佔位:本腳本只走立即批准;若擴充排程測試需換真實 identityId(store 查無此 id 會炸 getFreshByIdentityId)
     expectedDiffVersion: rec1.diffVersion, channel: 'confirm_page',
   })
   if (out1.stale || out1.casFailed) { console.log(`    FAILED: stale=${!!out1.stale} casFailed=${!!out1.casFailed}`); return false }
@@ -167,7 +167,7 @@ async function runShelfScheduleRoundTrip(
   const created2 = createEnv2.items[0] as { changeset_id: string }
   const rec2 = ctx.changeSets.get(created2.changeset_id)!
   const out2 = await approveAndExecute(confirmDeps, {
-    rec: rec2, who: { accessToken: at, userLabel: ctx.userLabel, sessionId: ctx.sessionId },
+    rec: rec2, who: { accessToken: at, userLabel: ctx.userLabel, sessionId: ctx.sessionId, identityId: 'live-acceptance-script' },   // 佔位:本腳本只走立即批准;若擴充排程測試需換真實 identityId(store 查無此 id 會炸 getFreshByIdentityId)
     expectedDiffVersion: rec2.diffVersion, channel: 'confirm_page',
   })
   if (out2.stale || out2.casFailed || out2.status !== 'done') {
@@ -243,6 +243,7 @@ async function main() {
     gateway, accessToken, userLabel, sessionId,
     bearerHash: createHash('sha256').update(accessToken).digest('hex'),
     businessList: tokens.businessList,
+    scheduleTz: 'Asia/Taipei',
     readOids, changeSets, rateBudget,
     baseUrl: `http://127.0.0.1:${cfg.port}`,
     genId: () => randomUUID(),

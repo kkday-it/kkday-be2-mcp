@@ -1265,3 +1265,173 @@ describe('batch-wizard panel: step 4 automatic read-back verification', () => {
     expect(rows[0].textContent).toContain('✓ 已驗證：be2 現況與目標一致')
   })
 })
+
+describe('batch-wizard panel: inventory_setting 排程(塊 B)', () => {
+  const wizardEl = doc.getElementById('wizard')
+  beforeEach(() => { wizardEl.children.length = 0 })
+
+  const invBatchView = envelope([{
+    products: [{
+      prod_oid: 'P1', name: '商品1', plans: [
+        { pkg_oid: 'A', name: '方案A', item_oid: 'I1', supplier_oid: 'S1', inventory_mode: 'item_by_amount', current_quantity: 10 },
+      ],
+    }],
+    schedule_tz: 'Asia/Taipei',
+  }])
+
+  it('schedulable 分頁(inventory_setting)顯示排程切換,勾選才露出 datetime;shelf_schedule 不顯示', async () => {
+    const { app, fireLaunch } = makeFakeApp({ app_get_batch_view: () => invBatchView })
+    initWizard(app as never)
+    fireLaunch('inventory_setting', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    const schedToggle = findByRole(wizardEl, 'schedToggle')
+    expect(schedToggle).toBeDefined()
+    const schedWall = findByRole(wizardEl, 'schedWall')
+    expect(schedWall.hidden).toBe(true)
+    schedToggle.checked = true
+    schedToggle.onchange!()
+    expect(schedWall.hidden).toBe(false)
+    // §9：時區標籤顯示實際 BE2_TZ 值（來自 app_get_batch_view.schedule_tz），非通用「伺服器時區」
+    expect(wizardEl.textContent).toContain('時區：Asia/Taipei')
+    expect(wizardEl.textContent).not.toContain('伺服器時區')
+
+    // 對照組:非 schedulable(shelf_schedule)不渲染切換
+    wizardEl.children.length = 0
+    const { app: app2, fireLaunch: fire2 } = makeFakeApp({
+      app_get_batch_view: () => envelope([{ products: [{ prod_oid: 'P1', name: '商品1', plans: [{ pkg_oid: 'A', name: '方案A', queue: [] }] }] }]),
+    })
+    initWizard(app2 as never)
+    fire2('shelf_schedule', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    expect(wizardEl.querySelectorAll('[data-role=schedToggle]').length).toBe(0)
+  })
+
+  it('勾排程建立帶 schedule.wall;批准帶 expected_execute_at_utc;scheduled 合成 ledger 列含取消按鈕,取消送 decision:cancel', async () => {
+    const createResult = envelope([{ changeset_id: 'cs-s' }])
+    const viewResult = envelope([{
+      changeset_id: 'cs-s', status: 'pending_approval', nonce: 'n-1', diff_version: 'dv-1',
+      schedule: { execute_at_utc: 1756717200000, wall: '2026-09-01T09:00', tz: 'Asia/Taipei' },
+      diff: { items: [{ item_oid: 'I1', supplier_oid: 'S1', current: 10, target: 20, no_op: false }] },
+    }])
+    // 真實 server 對排程批准只回 {changeset_id, status:'scheduled'}——無 results(面板需自行合成列)
+    const confirmResult = envelope([{ changeset_id: 'cs-s', status: 'scheduled' }])
+    // 仿真 server:每次 view 發「新鮮」nonce(單次消耗語意)——取消流程必須重新 view 拿新 nonce,
+    // 不得複用批准時已消耗的那顆(review Critical 2a)。
+    let viewCalls = 0
+    const { app, calls, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => invBatchView,
+      app_create_changeset: () => createResult,
+      app_get_changeset_view: () => {
+        viewCalls++
+        const items = (viewResult.items as Array<Record<string, unknown>>)
+        return envelope([{ ...items[0], nonce: `n-${viewCalls}`, status: viewCalls === 1 ? 'pending_approval' : 'scheduled' }])
+      },
+      app_confirm_changeset: () => confirmResult,
+    })
+    initWizard(app as never)
+    fireLaunch('inventory_setting', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+
+    const cbA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    cbA.checked = true
+    cbA.onclick!()
+    const qty = wizardEl.querySelectorAll('input[type=number]')[0]
+    ;(qty as unknown as { valueAsNumber: number }).valueAsNumber = 20
+
+    const schedToggle = findByRole(wizardEl, 'schedToggle')
+    schedToggle.checked = true
+    schedToggle.onchange!()
+    const schedWall = findByRole(wizardEl, 'schedWall')
+    schedWall.value = '2026-09-01T09:00'
+
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+    const createCall = calls.find(c => c.name === 'app_create_changeset')!
+    expect(createCall.arguments.schedule).toEqual({ wall: '2026-09-01T09:00' })
+
+    findByRole(wizardEl, 'toApproveBtn').onclick!()
+    expect(wizardEl.textContent).toContain('將於 2026-09-01T09:00 (Asia/Taipei) 執行')
+
+    findByRole(wizardEl, 'approveBtn').onclick!()
+    await flush()
+    const confirmCall = calls.find(c => c.name === 'app_confirm_changeset')!
+    expect(confirmCall.arguments.expected_execute_at_utc).toBe(1756717200000)
+    expect(confirmCall.arguments.nonce).toBe('n-1')
+
+    // Step 4:合成的 scheduled 列 + 取消按鈕
+    const rows = wizardEl.querySelectorAll('.bw-ledger-row')
+    expect(rows.length).toBe(1)
+    expect(rows[0].textContent).toContain('已排程 2026-09-01T09:00')
+    const cancelBtn = findByRole(rows[0], 'cancelBtn')
+    expect(cancelBtn).toBeDefined()
+    cancelBtn.onclick!()
+    await flush()
+    // 取消前先重新 view 取新鮮 nonce(n-2),不重用批准時已消耗的 n-1
+    expect(viewCalls).toBe(2)
+    const cancelCall = calls.find(c => c.name === 'app_confirm_changeset' && c.arguments.decision === 'cancel')!
+    expect(cancelCall.arguments).toMatchObject({ changeset_id: 'cs-s', decision: 'cancel', confirmed_keys: [], nonce: 'n-2' })
+    expect(rows[0].textContent).toContain('取消排程')
+  })
+
+  it('取消失敗(server 回錯誤信封)不得假成功:顯示錯誤、按鈕恢復可按', async () => {
+    const { app, fireLaunch } = makeFakeApp({
+      app_get_batch_view: () => invBatchView,
+      app_create_changeset: () => envelope([{ changeset_id: 'cs-e' }]),
+      app_get_changeset_view: () => envelope([{
+        changeset_id: 'cs-e', status: 'pending_approval', nonce: 'n-x', diff_version: 'dv-1',
+        schedule: { execute_at_utc: 1756717200000, wall: '2026-09-01T09:00', tz: 'Asia/Taipei' },
+        diff: { items: [{ item_oid: 'I1', supplier_oid: 'S1', current: 10, target: 20, no_op: false }] },
+      }]),
+      app_confirm_changeset: (args: Record<string, unknown>) =>
+        args.decision === 'cancel'
+          ? envelope([], [{ key: 'cs-e', code: 'NOT_CANCELLABLE', message: 'Only a scheduled change-set can be cancelled.' }])
+          : envelope([{ changeset_id: 'cs-e', status: 'scheduled' }]),
+    })
+    initWizard(app as never)
+    fireLaunch('inventory_setting', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    const cbA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    cbA.checked = true
+    cbA.onclick!()
+    ;(wizardEl.querySelectorAll('input[type=number]')[0] as unknown as { valueAsNumber: number }).valueAsNumber = 20
+    const schedToggle = findByRole(wizardEl, 'schedToggle')
+    schedToggle.checked = true
+    schedToggle.onchange!()
+    findByRole(wizardEl, 'schedWall').value = '2026-09-01T09:00'
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+    findByRole(wizardEl, 'toApproveBtn').onclick!()
+    findByRole(wizardEl, 'approveBtn').onclick!()
+    await flush()
+    const rows = wizardEl.querySelectorAll('.bw-ledger-row')
+    const cancelBtn = findByRole(rows[0], 'cancelBtn')
+    cancelBtn.onclick!()
+    await flush()
+    // 假成功防線:狀態藥丸仍是「已排程」、按鈕未隱藏且恢復可按
+    expect(rows[0].textContent).toContain('已排程')
+    expect(cancelBtn.hidden).not.toBe(true)
+    expect(cancelBtn.disabled).toBe(false)
+  })
+
+  it('勾排程但未填時間:doNext 擋下,不建立 change-set(不靜默轉立即執行)', async () => {
+    const { app, calls, fireLaunch } = makeFakeApp({ app_get_batch_view: () => invBatchView })
+    initWizard(app as never)
+    fireLaunch('inventory_setting', ['P1'])
+    findByRole(wizardEl, 'loadBtn').onclick!()
+    await flush()
+    const cbA = checkboxesFor(wizardEl, 'pkg-oid', 'A')[0]
+    cbA.checked = true
+    cbA.onclick!()
+    ;(wizardEl.querySelectorAll('input[type=number]')[0] as unknown as { valueAsNumber: number }).valueAsNumber = 20
+    const schedToggle = findByRole(wizardEl, 'schedToggle')
+    schedToggle.checked = true
+    schedToggle.onchange!()
+    findByRole(wizardEl, 'nextBtn').onclick!()
+    await flush()
+    expect(calls.some(c => c.name === 'app_create_changeset')).toBe(false)
+  })
+})

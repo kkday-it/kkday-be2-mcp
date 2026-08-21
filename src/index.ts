@@ -8,4 +8,5 @@ initOtel(config.otelMode)
 const app = buildApp({ config, db: openDb(config.dbPath) })
 app.listen(config.port, '127.0.0.1', () => {
   console.log(`be2-mcp listening on http://127.0.0.1:${config.port}/mcp (env: ${config.gatewayUrl})`)
+  ;(app.locals.startScheduler as () => () => void)?.()
 })

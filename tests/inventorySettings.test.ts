@@ -1,93 +1,33 @@
-import { describe, it, expect } from 'vitest'
-import { inventorySettingsTool, trimInventory } from '../src/tools/inventorySettings.js'
-import type { ToolContext } from '../src/tools/types.js'
-import { existsSync, readFileSync } from 'node:fs'
-import { z } from 'zod'
+import { describe, it, expect, vi } from 'vitest'
+import { inventorySettingsTool } from '../src/tools/inventorySettings.js'
 
-function ctxWith(routes: Record<string, unknown | Error>): ToolContext {
+function ctx(overrides: Partial<{ status: unknown; search: unknown }> = {}) {
   return {
-    accessToken: 'fake-jwt', userLabel: 'p@kkday.com',
-    gateway: { get: async (path: string, _t: string, query?: Record<string, string>) => {
-      for (const [frag, v] of Object.entries(routes)) if (path.includes(frag)) {
-        if (v instanceof Error) throw v
-        return typeof v === 'function' ? v(query) : v
-      }
-      throw new Error(`unexpected ${path}`)
-    } } as never,
-  }
+    accessToken: 'tok',
+    gateway: {
+      get: vi.fn(async (p: string) => overrides.status ?? { is_processing: false, previous_status: null }),
+      post: vi.fn(async (p: string, _t: string, body: any) => overrides.search ?? { '1650033': { fullday: 32 } }),
+    },
+  } as any
 }
 
-const status = { is_processing: false, previous_status: null, previous_msg: '', previous_time: null }
-
-describe('be2_get_inventory_settings', () => {
-  it('validates year_month format', () => {
-    const schema = z.object(inventorySettingsTool.inputShape)
-    expect(schema.safeParse({ item_oid: 'i1', year_month: '2026-13' }).success).toBe(false)
-    expect(schema.safeParse({ item_oid: 'i1', year_month: '2026-08' }).success).toBe(true)
-    expect(schema.safeParse({ item_oid: 'i1' }).success).toBe(true)
+describe('be2_get_inventory_settings (fullday)', () => {
+  it('reads status only when no supplier_oid', async () => {
+    const c = ctx()
+    const env = await inventorySettingsTool.handler({ item_oid: '1650033' } as any, c)
+    expect(c.gateway.post).not.toHaveBeenCalled()
+    expect(env.items[0]).toMatchObject({ item_oid: '1650033', is_processing: false })
   })
-
-  it('no supplier_oid -> status only, no quantities call, no error', async () => {
-    const env = await inventorySettingsTool.handler({ item_oid: 'i1' },
-      ctxWith({ '/inventories/status': status }))
-    expect(env.items).toHaveLength(1)
-    const item = env.items[0] as Record<string, unknown>
-    expect(item.item_oid).toBe('i1')
-    expect(item.is_processing).toBe(false)
-    expect(item.previous_status).toBeNull()
-    expect(item).not.toHaveProperty('inventories')
-    expect(env.errors).toEqual([])
-    expect(env.read_oids).toEqual(['i1'])
+  it('POSTs inventories/search with {supplier_oid,page} and returns fullday', async () => {
+    const c = ctx()
+    const env = await inventorySettingsTool.handler({ item_oid: '1650033', supplier_oid: '181' } as any, c)
+    expect(c.gateway.post).toHaveBeenCalledWith('/product/api/v1/items/1650033/inventories/search', 'tok', { supplier_oid: '181', page: 1 })
+    expect((env.items[0] as any).fullday).toBe(32)
   })
-
-  it('supplier_oid given -> fetches quantities too, merges into item', async () => {
-    let seenQuery: Record<string, string> | undefined
-    const env = await inventorySettingsTool.handler({ item_oid: 'i1', supplier_oid: 's9', year_month: '2026-09' },
-      ctxWith({
-        '/inventories/status': status,
-        '/inventories/s9': (q: Record<string, string>) => { seenQuery = q; return { itemInventory: [{ date: '2026-09-01', quantity: 5 }] } },
-      }))
-    expect(env.errors).toEqual([])
-    expect(seenQuery).toEqual({ year_month: '2026-09' })
-    const item = env.items[0] as Record<string, unknown>
-    expect(item.inventories).toEqual({ '2026-09-01': 5 })
-  })
-
-  it('supplier_oid given but quantities call fails (403) -> status still returned, non-fatal error recorded', async () => {
-    const boom = Object.assign(new Error('GET inventories/s9 -> 403'), { status: 403 })
-    const env = await inventorySettingsTool.handler({ item_oid: 'i1', supplier_oid: 's9' },
-      ctxWith({ '/inventories/status': status, '/inventories/s9': boom }))
-    expect(env.items).toHaveLength(1)
-    const item = env.items[0] as Record<string, unknown>
-    expect(item.item_oid).toBe('i1')
-    expect(item.is_processing).toBe(false)
-    expect(item).not.toHaveProperty('inventories')
-    expect(env.errors).toHaveLength(1)
-    expect(env.errors[0]).toMatchObject({ key: 'i1', status: 403 })
-    expect(env.read_oids).toEqual(['i1'])
-  })
-
-  it('status call rejects -> fatal, empty items, one error keyed by item_oid', async () => {
-    const boom = Object.assign(new Error('GET inventories/status -> 500'), { status: 500 })
-    const env = await inventorySettingsTool.handler({ item_oid: 'i1' },
-      ctxWith({ '/inventories/status': boom }))
-    expect(env.items).toEqual([])
-    expect(env.errors).toHaveLength(1)
-    expect(env.errors[0]).toMatchObject({ key: 'i1', status: 500 })
-    expect(env.read_oids).toEqual([])
-  })
-
-  it('gateway failure with no routes configured -> envelope error, no throw', async () => {
-    const env = await inventorySettingsTool.handler({ item_oid: 'bad' }, ctxWith({}))
-    expect(env.items).toEqual([])
-    expect(env.errors[0]!.key).toBe('bad')
-  })
-})
-
-describe.skipIf(!existsSync('tests/fixtures/inventory-status.json'))('fixture: real SIT shape', () => {
-  it('trims the captured status fixture without throwing', () => {
-    const fx = JSON.parse(readFileSync('tests/fixtures/inventory-status.json', 'utf8'))
-    const out = trimInventory('fx', fx)
-    expect(out.item_oid).toBe('fx')
+  it('degrades to a warning when search rejects', async () => {
+    const c = ctx(); c.gateway.post = vi.fn(async () => { throw Object.assign(new Error('403'), { code: 'AU9403' }) })
+    const env = await inventorySettingsTool.handler({ item_oid: '1650033', supplier_oid: '181' } as any, c)
+    expect(env.errors.length).toBe(1)
+    expect(env.items[0]).toMatchObject({ item_oid: '1650033' })
   })
 })

@@ -53,6 +53,7 @@ export interface AppToolContext {
   // src/changeset/tools.ts#createChangesetCore unmodified. AppToolContext is now a full
   // structural superset of L2ToolContext.
   emitConfirmUrl: (changesetId: string, url: string) => void
+  scheduleTz: string
 }
 
 export interface AppToolDef {
@@ -85,6 +86,7 @@ export interface AppPipelineDeps {
   // app.ts's modifyUserFromPlaceholder) — only ever invoked LAZILY inside approveAndExecute, never
   // here at pipeline-construction/request time.
   modifyUserFrom: (accessToken: string) => string
+  scheduleTz: string
 }
 
 type ToolResult = { content: Array<{ type: 'text'; text: string }>; structuredContent?: Record<string, unknown>; isError?: boolean }
@@ -117,13 +119,14 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
           now: deps.now, genId: deps.genId,
           baseUrl: deps.baseUrl,
           emitConfirmUrl: deps.emitConfirmUrl,
+          scheduleTz: deps.scheduleTz,
           // Closure binds THIS request's resolved identity (accessToken/userLabel/sessionId) —
           // never taken from tool args. modifyUser stays unresolved until approveAndExecute needs
           // it (lazy), so read-only app tools (e.g. app_get_changeset_view) never pay the cost of
           // — or fail on — modify_user resolution.
           approveAndExecute: p => approveAndExecuteService(
             { changeSets: deps.changeSets, gateway: deps.gateway, audit: deps.audit, now: deps.now, modifyUserFrom: deps.modifyUserFrom },
-            { ...p, who: { accessToken: user.accessToken, userLabel, sessionId: reqCtx.sessionId } },
+            { ...p, who: { accessToken: user.accessToken, userLabel, sessionId: reqCtx.sessionId, identityId: user.identityId } },
           ),
         })
         // Task 5: mirrors toolPipeline.ts's runWrapped — same substrate, same generic recording —

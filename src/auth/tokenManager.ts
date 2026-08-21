@@ -5,7 +5,7 @@ import type { AuthServiceClient } from './authServiceClient.js'
 import { decodeJwtExpMs } from './jwt.js'
 import { AppError, AuthError } from '../errors.js'
 
-export interface UserAuthContext { accessToken: string; userLabel: string; businessList: unknown[] }
+export interface UserAuthContext { accessToken: string; userLabel: string; businessList: unknown[]; identityId: string }
 
 export interface TokenManagerStores { identities: IdentityStore; credentials: CredentialStore }
 
@@ -45,6 +45,50 @@ export class TokenManager {
     return this.freshFromIdentity(identity, cred.identityId)
   }
 
+  /** 排程執行入口(spec §6):以持久化的 identityId 直接取新鮮 token。 */
+  async getFreshByIdentityId(identityId: string): Promise<UserAuthContext> {
+    const identity = this.stores.identities.get(identityId)
+    if (!identity) throw new AuthError('UNKNOWN_IDENTITY', 'identity no longer exists — the scheduled change-set cannot execute; re-create it after logging in again', 401)
+    return this.freshFromIdentity(identity, identityId)
+  }
+
+  /** 排程 keep-alive(spec §6):只對「將於 windowMs 內到期」者**強制** refresh;到期判斷留在
+   *  本類內,scheduler 只給名單。DB claim(claimKeepalive)防多實例重複 refresh 撞 rotation。
+   *  永不 throw——失敗逐一回報(terminal=4xx 撤權類,由 scheduler 據以 fail 排程件),
+   *  執行時刻的失敗仍由 getFreshByIdentityId 把關。
+   *  ⚠️ 不走 freshFromIdentity——它只在 skewMs 內才 refresh,windowMs>skewMs 的區間會空轉
+   *  (claim 了卻沒 refresh、下 tick 再 claim,假成功 audit 洗版)。這裡直接進 doRefresh,
+   *  但沿用同一 inflight single-flight map,與 lazy 路徑互不重複 refresh。 */
+  async keepAlive(identityIds: string[], opts: { windowMs: number; claimTtlMs: number }):
+      Promise<{ refreshed: string[]; failed: Array<{ identityId: string; code: string; terminal: boolean }> }> {
+    const refreshed: string[] = []
+    const failed: Array<{ identityId: string; code: string; terminal: boolean }> = []
+    for (const id of identityIds) {
+      // 整段(get/window/claim/refresh)都在 try 內——「永不 throw」涵蓋 DB 層意外拋錯,
+      // 單一 id 失敗不得中斷迴圈、遺失其餘 id 的結果。
+      try {
+        const identity = this.stores.identities.get(id)
+        if (!identity) { failed.push({ identityId: id, code: 'UNKNOWN_IDENTITY', terminal: true }); continue }
+        if (identity.accessExpiresAt - this.now() >= opts.windowMs) continue
+        if (!this.stores.identities.claimKeepalive(id, this.now(), opts.claimTtlMs)) continue
+        let flight = this.inflight.get(id)
+        if (!flight) {
+          flight = this.doRefresh(identity, id).finally(() => this.inflight.delete(id))
+          this.inflight.set(id, flight)
+        }
+        const updated = await flight
+        // transient 分支會回舊 identity(未 rotate)——只有真的延壽才算 refreshed,避免假成功 audit。
+        if (updated.accessExpiresAt > identity.accessExpiresAt) refreshed.push(id)
+      } catch (e) {
+        // AuthError(REAUTH_REQUIRED / UNKNOWN_*)= terminal:identity 已死,scheduler 應立即
+        // fail 其名下排程件,否則每 tick 重打 auth-service 直到 T(error 洗版 + hammering)。
+        failed.push({ identityId: id, code: (e as { code?: string }).code ?? 'KEEPALIVE_ERROR',
+          terminal: e instanceof AuthError })
+      }
+    }
+    return { refreshed, failed }
+  }
+
   private async freshFromIdentity(identity: Identity, identityId: string): Promise<UserAuthContext> {
     if (identity.accessExpiresAt - this.now() < this.skewMs) {
       let flight = this.inflight.get(identityId)
@@ -54,7 +98,7 @@ export class TokenManager {
       }
       identity = await flight
     }
-    return { accessToken: identity.accessToken, userLabel: identity.userLabel, businessList: identity.businessList }
+    return { accessToken: identity.accessToken, userLabel: identity.userLabel, businessList: identity.businessList, identityId }
   }
 
   private async doRefresh(identity: Identity, identityId: string): Promise<Identity> {

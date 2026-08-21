@@ -31,7 +31,7 @@ function makeCtx(over: Partial<L2ToolContext> = {}): { ctx: L2ToolContext; store
     gateway: {} as never, accessToken: 'fake', userLabel: 'p@kkday.com', sessionId: 's1', bearerHash: 'bh',
     businessList: [], readOids, changeSets: store, rateBudget,
     baseUrl: 'http://127.0.0.1:8787', genId: () => 'cs1', now: () => 1000,
-    emitConfirmUrl: vi.fn(), ...over,
+    emitConfirmUrl: vi.fn(), scheduleTz: 'Asia/Taipei', ...over,
   }
   return { ctx, store }
 }

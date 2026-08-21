@@ -142,6 +142,108 @@ The `.env` SIT account is **not mapped to any supplier** on be2-220 for the test
 
 (這也解釋 stage 可寫:同帳號在 stage 的群組含該 action、be2-220 沒有 —— 與 Phase 2a shelf-toggle 的 per-環境差異同構。)
 
+### 2026-08-19 追加(read-with-data 樣本終於攔到):`inventories/search` 200 的真實形狀 + Phase 3a 容錯解析欄位名全錯，須 FINALIZE
+
+於 be2-220、真人登入 + playwright,商品 2287(product-service `prod_oid 19510`)、`pkgOid 1904256`、`item_oid 1650033`(模式 **方案總量限制 = ITEM_BY_QUANTITY**,`control_type:1,inventory_type:0`,supplier `181`)。點庫存頁「搜尋條件 → 查詢」觸發:
+
+- **Request**:`POST /product/api/v1/items/1650033/inventories/search`，body = `{"supplier_oid":181,"page":1}`（item 在 path、不在 body；此模式**不帶** rrules/filter/spec）。
+- **Response 200**：`{"data":{"1650033":{"fullday":32}},"meta":{"status":"100000","desc":"成功"}}`
+  - `data` **以 itemOid 為 key**（非陣列），值 `{fullday: <數量>}`。
+  - **數量欄位 = `fullday`**（不是 total/remaining/quantity）；`32` = 剩餘可售量。與寫入側 `remain_qty` 的 `{fullday: qty}` 變體對齊（BY_DATETIME 模式才會出現 per-date/per-event 巢狀，本樣本是 item-quantity 故單一 fullday）。
+  - envelope = product-service `meta.status "100000"`。
+
+**⇒ Q1（read row 形狀 / 數量欄位名）解除。** 但揪出 Phase 3a `src/tools/inventoryShape.ts` 的容錯候選清單**與真實形狀全不符**（FINALIZE 待辦，非新 bug——當初就標「等真 200 再收斂」）：
+- `ROWS_KEYS = ['itemInventory','item_inventory','inventories','quantities']` → 真實無 wrapper array，`data` 直接是 `{[itemOid]:{...}}` 物件。
+- `QTY_KEYS = ['quantity','qty','inventory_qty','stock']` → 缺 `fullday`。
+- `DATE_KEYS` → item-quantity 模式無 per-date；BY_DATETIME 樣本仍待攔（才能定 per-date/per-event 巢狀鍵名）。
+- 讀取端點也仍需從 `GET .../inventories/{supplierOid}`（S2S-only、403）改為 `POST .../inventories/search`（見上節）。
+- **FINALIZE 動作**：改寫 `inventoryShape.ts` 解析「`data[itemOid].fullday`」為主形狀 + 保留容錯；補 `tests/fixtures/inventory-quantities.json` 用本樣本；讀取改打 POST search。BY_DATETIME 形狀需另攔一個該模式的 item。
+
+### 2026-08-19 追加②：quantity PUT wire body 前端實證 + 官方操作手冊權威事實
+
+**(a) 寫入 wire body 前端實證**（be2-web 真發、be2-220 因授權 403，但 body 即真實契約）：
+`PUT /product/api/v1/items/{itemOid}/inventories/{supplierOid}/quantity`，body：
+```json
+{"inventory_data":{"remain_qty":{"1650033":{"fullday":20}},"modify_type":0},"modify_user":"<platformId>"}
+```
+- `remain_qty` **與讀取回應同形狀** `{[itemOid|skuOid]:{fullday|"HH:MM": qty}}`——讀寫對稱。
+- `modify_type`：`0`=ADD_AND_SUBTRACT（adjust）、`1`=REPLACE（set）。此發是 adjust。
+- `modify_user` = JWT platformId（再度確認）。
+- → **與源碼出土契約完全一致**（見上「2026-08-10 追加」§4），現多一層「前端實發」佐證。
+
+**(b) 官方操作手冊權威事實**（`product-team-docs/Product/系統操作手冊/12-庫存設定.md`，這份是 product team 維護的權威文件）：
+
+API endpoints（手冊列，與我方實證一致）：
+| Method | Path | 用途 |
+|---|---|---|
+| PUT | `api/v1/item-configs/{itemOid}/inventory-setting` | 更新庫存模式（`control_type`+`inventory_type`） |
+| POST | `api/v1/items/{item}/inventories/search` | **讀**位控資料（我方已攔 200） |
+| PUT | `api/v1/items/{item}/inventories/{supplierOid}/quantity` | **寫**數量（同步、我方已攔 body） |
+| PUT | `api/v1/items/{item}/inventories` | 非同步更新數量（批量變體） |
+
+5 種庫存模式（`control_type` 十位、`inventory_type` 個位；與我方 enum 推導一致）：
+| 代碼 | 中文 | control_type | inventory_type |
+|---|---|---|---|
+| `none` | 無限量 | -- | null |
+| `item_by_amount` | 套餐總量限制 | 1 | 0 |
+| `item_by_date` | 套餐總量-依日期&場次 | 1 | 1 |
+| `sku_by_amount` | SKU 總量限制 | 2 | 0 |
+| `sku_by_date` | SKU 總量-依日期&場次 | 2 | 1 |
+（我方實測 item 1650033 = `item_by_amount`(1/0)，故讀回單一 `{itemOid:{fullday}}`。）
+
+`remain_qty` 結構（權威）：`{"fullday": 50}`（無場次）或 `{"09:00": 20, "14:00": 30}`（有場次）→ **內層 key 是 `fullday` 或場次時間字串**。DB：`inventory.remain_qty` jsonb、`reference_type`(1=item/2=sku)、`reference_oid`(itemOid|skuOid)、`event_date`(null=總量)。
+
+高風險/語義事實（供 renderer 警語與 diff 邏輯）：
+- **數量修改立即生效**（正式資料直接異動）；歸零 → `InventoryEmpty` 事件清 sale-time cache + PubSub 通知搜尋（Solr/ES）→ 立即影響前台可售（Phase 3a renderer 紅字警語獲權威背書）。
+- **銷售判斷優先序：日期場次開關 > 庫存數量**（sku-date-switch 關閉會蓋過有量）。
+- 庫存 by supplier（每供應商各一份）；起訖月曆商品只能「無限量」；`none` 模式共享服務回 `MAX_QUANTITY=999`。
+
+> 🔑 **發現高價值來源**：`kkday-it/product-team-docs` 的 `Product/系統操作手冊/` 有 33 份 product team 權威手冊（含 `04-成本售價設定.md`=3b 價格、`02-套餐設定.md`、`14-商品上架狀態設定.md`、`30-組合套餐匯入模組.md` 等）——**未來各 action_type onboarding / factory 段① 探索應優先讀對應手冊**，比逆向 API 快且權威。已記入 memory。
+
+### 2026-08-20 追加：BY_DATETIME 樣本攔到 → 庫存讀取形狀矩陣完整
+
+be2-220 真人登入 + playwright，商品 2247、item 1677495（**sku_by_date**：L1 key 為 32-hex sku_oid），庫存頁點查詢：
+- **Request**：`POST /product/api/v1/items/1677495/inventories/search`，body = `{"rrules":[{recurrence_date, recurrence_event}], "supplier_oid":2671, "page":1}`（**日期模式必帶 `rrules`**；解掉先前 by-datetime 不帶 rrules 的 422）。
+- **Response 200**（`meta.status "100000"`）：`{data:{ [sku_oid]:{ "YYYY-MM-DD":{fullday: qty|null}, … } }}`（本樣本 7 SKU × 343 日期，值多為 `null`=未設）。
+
+**→ 讀取形狀矩陣完整（`control_type` 決定 L1 key、`inventory_type` 決定有無日期層、內層 key=`fullday`|場次時間、值=數量或 `null`）**：
+| 模式 (control/inv) | L1 key | 巢狀 | 來源 |
+|---|---|---|---|
+| item_by_amount (1/0) | itemOid | `{itemOid:{fullday:N}}` | ✅ item 1650033 |
+| sku_by_amount (2/0) | sku_oid | `{sku_oid:{fullday:N}}` | 推論（同家族） |
+| item_by_date (1/1) | itemOid | `{itemOid:{date:{fullday\|"HH:MM":N}}}` | 推論 |
+| sku_by_date (2/1) | sku_oid | `{sku_oid:{date:{fullday\|"HH:MM":N}}}` | ✅ item 1677495 |
+
+**FINALIZE parser 要點（`inventoryShape.ts` 改寫依據）**：L1 key 可能是 itemOid（數字）或 sku_oid（32-hex）；可能有或沒有日期層；內層 `fullday` 或場次時間字串；**值可為 `null`**（未設，需容錯不當 0）。此矩陣＋官方手冊 `remain_qty` 定義已足以把容錯猜測換成確定解析。**同時解掉 BAA 庫存排程「依日期/場次未支援」**（memory `be2-mcp-phase3-plan`）——形狀已知即可擴。
+
+> ⚠️ **不鎖死原則（使用者 2026-08-20 提醒）**：上表是**已確認的主形狀**，但**不同商品類型（飯店 / F&B / GYG 動態價 / OCBT / 高鐵假期等）的 response 可能有變體**。→ parser 應**以此矩陣為主解析路徑、但保留 defensive 容錯**（未知 key/缺層/null 值都優雅降級），**不要 hard-code 成單一形狀**。把「確認的形狀」當快樂路徑，不是唯一路徑；遇到沒見過的類型先記錄樣本、再擴解析，而非拋錯。
+
+### 2026-08-19 附帶：sku-date-switch（日期/場次可售開關）讀取形狀（同 session 一併攔到，屬痛點#2 域、非庫存數量）
+
+同頁「日期/場次銷售開關」分頁觸發（item 1650033、supplier 181）：
+- **Request**：`POST /be2/api/v1/product/item/{itemOid}/sku-date-switch`，body = `{"rrules":[{recurrence_date, recurrence_event}], "supplier_oid":181, "page":1}`（`rrules` 取自 item 的 `basic-info.item_calendar_rule`；此為 **POST=讀**，phase0 §C 已定調）。
+- **Response 200**（envelope `metadata.status "0000"`，非 product-service 的 `meta.status "100000"`）：
+  ```
+  data: { [sku_oid]: { "YYYY-MM-DD": {fullday: 0|1}, ... }, ... }
+  ```
+  - **確認 date-based 巢狀 = `{[sku_oid]:{[date]:{fullday:N}}}`**（key 為 sku_oid、再 date、再 `fullday`）。與 item-quantity 的 `{[itemOid]:{fullday:N}}` 一致：**`fullday` 鍵通用，巢狀深度依模式（item vs sku、single vs by-date）而變**。
+  - 此域 `fullday: 1=可售 / 0=關閉`（是**可售開關**、不是數量）。→ 供未來「日期/場次可售」action_type 參考；SKU_BY_DATETIME 的庫存**數量**形狀應同結構、但 `fullday` 值為數量。
+- **transient 觀察**：同 body 先 403（#75）後 200（#78）——第一發撞 token refresh race，重試即過，非授權/契約問題。
+
+### 2026-08-20 追加（塊 A brainstorm 期 live 重測）：**quantity PUT 在 stage 首次真 200**；SIT be2-220 仍 403（RD grant 未生效）
+
+塊 A（庫存數量進 wizard）brainstorm 定案後，以正確契約（basic-info + `POST inventories/search` + `PUT .../{sup}/quantity`）對 SIT 與 stage 各跑一次**可逆 net-zero** 寫入（讀現況 fullday → PUT 同值回寫，觀察 HTTP status，無資料異動）。用 repo `AuthServiceClient` 登入→換碼→`GatewayClient`-等價 PUT，`modify_type:1`、`modify_user=platformId`、header 帶 `x-auth-id: be2`。
+
+| 環境 | 登入 | POST search | quantity PUT（net-zero） | 結論 |
+|---|---|---|---|---|
+| SIT be2-220 | OK（businessList 含 `product.product-inventory.query/.update`，691 筆） | 200，item 1650033/sup 181（item_by_amount 1/0），fullday=32 | **403**（裸 body、無 JSON envelope＝verify 層擋，未達 product-service） | **仍卡**，與上節 AU9403 同簽章，RD grant 未生效 |
+| **stage** | **OK**（stage 憑證 `STAGE_email/pwd/AUTHSVC_SERVICE_KEY` 現已補齊、可登入，非過去 AU9997） | 200，item 1650033/sup 181 同存在同模式，fullday=20 | **200**，envelope `meta.status 100000 成功`，回寫後 fullday 仍 20（net-zero 乾淨） | **通了** ✅ |
+
+**結論（durable）**：
+1. **這是庫存數量寫入路徑的第一次真 200**——用我方程式（正確契約）在 **stage** 端到端達成，**契約 e2e 驗證完成**（先前只有 be2-web 前端實發 body / stage curl 佐證，未由我方程式跑出）。→ 塊 A 的 live 綠寫入**可在 stage 達成**，非長期 PENDING。
+2. **SIT be2-220 仍卡** auth-service verify v2 per-URI 規則（403，與上節同），RD 授權 grant 尚未生效。要 SIT 也綠，仍需該 URI 規則綁的 business action 加進帳號群組（解卡請求見上節）。
+3. per-環境授權差異（stage 有該 action、be2-220 沒有）與 Phase 2a shelf-toggle 同構，再次確認。
+
 ## inventory-platform read (Phase 4a Task 1, 2026-08-14)
 
 目的:為 `inventory_platform` change-set(切換方案的庫存管理平台:BE2／BE2_SCM／EXTERNAL)定案「以 `(item_oid, supplier_oid)` 為鍵讀兩布林 `is_external_inventory`/`is_inventory_mgmt`」的讀取端點,供 Task 3 `readSupplierInventorySetting()` 實作依據。已知寫入契約(design doc §4.1,未在本次驗證):`PUT items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting` body `{is_external_inventory, is_inventory_mgmt, modify_user}`。

@@ -3,6 +3,7 @@ import { getModule } from '../core/changeset/registry.js'
 import '../modules/index.js'
 import type { ExecutorDeps } from '../core/changeset/executor.js'
 import { approveAndExecute } from '../core/changeset/confirmService.js'
+import { AppError } from '../errors.js'
 import type { TokenManager } from '../auth/tokenManager.js'
 import type { WebSessionStore } from './webSessionStore.js'
 import type { CredentialStore } from '../store/credentialStore.js'
@@ -33,14 +34,17 @@ export interface ConfirmDeps extends ExecutorDeps {
 // otherwise 404 a change-set's own creator on their own approval page). Normalize defensively.
 const sameUser = (a: string, b: string): boolean => a.trim().toLowerCase() === b.trim().toLowerCase()
 
-function renderShell(id: string, view: ConfirmView, diffVersion: string): string {
+function renderShell(id: string, view: ConfirmView, diffVersion: string, schedule?: { executeAtUtc: number; wall: string; tz: string }): string {
+  const scheduleIntro = schedule ? `<p style="opacity:0.8;font-size:0.9em;margin-top:0">將於 ${esc(schedule.wall)} (${esc(schedule.tz)}) 執行；現況為批准當下快照，執行時庫存可能已因銷售變動，將以 SET 目標值覆寫</p>` : ''
+  const hiddenInputs = `<input type=hidden name=diff_version value="${esc(diffVersion)}">${schedule ? `\n  <input type=hidden name=expected_execute_at_utc value="${schedule.executeAtUtc}">` : ''}`
+  const btnText = schedule ? `批准(將於 ${esc(schedule.wall)} ${esc(schedule.tz)} 執行)` : '批准並執行'
   return `<!doctype html><meta charset=utf-8><title>確認變更 ${esc(id)}</title>
 <style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}button{padding:8px 16px;font-size:1rem}</style>
-<h1>確認 change-set ${esc(id)}</h1>${view.intro}
+<h1>確認 change-set ${esc(id)}</h1>${scheduleIntro}${view.intro}
 ${view.tableHtml}
 <form method=post action="/confirm/${esc(id)}/approve" style="margin-top:1rem">
-  <input type=hidden name=diff_version value="${esc(diffVersion)}">
-  <button type=submit>批准並執行</button></form>
+  ${hiddenInputs}
+  <button type=submit>${btnText}</button></form>
 <form method=post action="/confirm/${esc(id)}/reject"><button type=submit>拒絕</button></form>`
 }
 
@@ -59,7 +63,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
       if (!res.headersSent) res.status(500).send('internal error')
     }) }
 
-  async function requireSession(req: express.Request): Promise<{ sessionId: string; userLabel: string; accessToken: string } | undefined> {
+  async function requireSession(req: express.Request): Promise<{ sessionId: string; userLabel: string; accessToken: string; identityId: string } | undefined> {
     const sid = parseCookies(req.header('cookie'))['be2mcp_sid']
     if (!sid) return undefined
     const sess = deps.webSessions.get(sid)   // undefined if idle-expired (row deleted)
@@ -92,7 +96,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     // discriminating power for audit purposes, but its preimage (the cookie itself) cannot be
     // recovered from it. `who.sessionId` has no consumer besides audit labeling (grep-verified:
     // confirmService.ts, executor.ts, confirmRoutes.ts's own reject handler) so this swap is safe.
-    return { sessionId: cred.credHash, userLabel: user.userLabel, accessToken: user.accessToken }
+    return { sessionId: cred.credHash, userLabel: user.userLabel, accessToken: user.accessToken, identityId: cred.identityId }
   }
   function loginRedirect(res: express.Response, next: string) { res.redirect(302, `/confirm/login?next=${encodeURIComponent(next)}`) }
 
@@ -109,9 +113,28 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     const rec = deps.changeSets.get(String(req.params.id))
     // IDOR: only the change-set's creator may view it. Generic 404 either way — no existence leak
     // for a different user's change-set id.
-    if (!rec || !sameUser(rec.creatorLabel, who.userLabel) || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
+    if (!rec || !sameUser(rec.creatorLabel, who.userLabel) || (rec.status !== 'pending_approval' && rec.status !== 'scheduled')) { res.status(404).send('not found'); return }
+    
+    if (rec.status === 'scheduled') {
+      // 倒數（spec §8：wall+tz+倒數）——頁面載入當下的快照（server-rendered，非 live tick）。用 deps.now()
+      // 以利測試；批准已綁定、倒數僅資訊性。
+      const remainMs = rec.schedule!.executeAtUtc - deps.now()
+      const mins = Math.round(remainMs / 60_000)
+      const countdown = remainMs <= 0 ? '即將執行' : mins < 1 ? '不到 1 分鐘後執行' : `約 ${mins} 分鐘後執行`
+      const banner = `<p style="color:#2a2;font-weight:bold;margin-bottom:1rem">已排程:將於 ${esc(rec.schedule!.wall)}(${esc(rec.schedule!.tz)})執行 —— ${esc(countdown)}(登出不影響執行)</p>`
+      const view = getModule(rec.actionType).renderConfirm(rec, rec.diff, rec.diffVersion, banner)
+      const shellHtml = `<!doctype html><meta charset=utf-8><title>確認變更 ${esc(rec.id)}</title>
+<style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ccc;padding:6px 10px}button{padding:8px 16px;font-size:1rem}</style>
+<h1>確認 change-set ${esc(rec.id)}</h1>${view.intro}
+${view.tableHtml}
+<form method=post action="/confirm/${esc(rec.id)}/cancel" style="margin-top:1rem">
+  <button type=submit>取消排程</button></form>`
+      res.status(200).send(shellHtml)
+      return
+    }
+
     const { diff, version } = await liveDiff(rec, who.accessToken)
-    res.status(200).send(renderShell(rec.id, getModule(rec.actionType).renderConfirm(rec, diff, version, ''), version))
+    res.status(200).send(renderShell(rec.id, getModule(rec.actionType).renderConfirm(rec, diff, version, ''), version, rec.schedule))
   }))
 
   r.post('/confirm/:id/approve', h(async (req, res) => {
@@ -127,18 +150,53 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     // per-item checkboxes; stays whole-batch, unchanged from Phase 2a/2b). Any throw here (e.g.
     // modifyUserFrom failing) propagates to the `h()` wrapper -> 500, with the change-set left
     // 'pending_approval' (retryable, not stranded) — same as before the extraction.
-    const out = await approveAndExecute(deps, {
-      rec, who, expectedDiffVersion: String(req.body?.diff_version),
-      channel: 'confirm_page',
-      audit: { ip: req.ip, clientInfo: req.header('user-agent') },
-    })
+    let out
+    try {
+      out = await approveAndExecute(deps, {
+        rec, who, expectedDiffVersion: String(req.body?.diff_version),
+        channel: 'confirm_page',
+        audit: { ip: req.ip, clientInfo: req.header('user-agent') },
+        expectedExecuteAtUtc: req.body?.expected_execute_at_utc !== undefined && req.body.expected_execute_at_utc !== '' ? Number(req.body.expected_execute_at_utc) : undefined,
+      })
+    } catch (e) {
+      // 排程兩個新錯誤是「可預期、可自助」的 409(批准只驗仍在未來,SCHEDULE_IN_PAST 在人審久
+      // 一點的 tight schedule 上很容易發生)——不能落進 h() 的通用 500 讓訊息蒸發。其他 throw
+      // (modifyUserFrom 失敗等)維持既有慣例向上拋 → 500。
+      if (e instanceof AppError && (e.code === 'SCHEDULE_IN_PAST' || e.code === 'SCHEDULE_ECHO_MISMATCH')) {
+        res.status(409).send(`<!doctype html><meta charset=utf-8><h1>無法批准</h1><p>${esc(e.message)}</p>`)
+        return
+      }
+      throw e
+    }
     if (out.stale) {
       const { diff, version } = await liveDiff(rec, who.accessToken)
-      res.status(409).send(renderShell(rec.id, getModule(rec.actionType).renderConfirm(rec, diff, version, '<p style="color:#b00">目標欄位已被改動,請重新確認。</p>'), version))
+      res.status(409).send(renderShell(rec.id, getModule(rec.actionType).renderConfirm(rec, diff, version, '<p style="color:#b00">目標欄位已被改動,請重新確認。</p>'), version, rec.schedule))
       return
     }
     if (out.casFailed) { res.status(409).send('已被處理或已過期'); return }
+    if (out.scheduled) {
+      res.status(200).send(`<!doctype html><meta charset=utf-8><style>body{font-family:sans-serif;max-width:820px;margin:2rem auto}</style><h1>已排程</h1><p>變更將於 ${esc(rec.schedule!.wall)} (${esc(rec.schedule!.tz)}) 執行。</p><p>取消排程請透過批次精靈面板或本確認頁的排程檢視(可回本確認頁取消排程)。</p>`)
+      return
+    }
     res.status(200).send(`<!doctype html><meta charset=utf-8><h1>執行結果:${esc(out.status)}</h1><pre>${esc(JSON.stringify(out.results, null, 2))}</pre>`)
+  }))
+
+  r.post('/confirm/:id/cancel', h(async (req, res) => {
+    res.setHeader('Referrer-Policy', 'no-referrer')
+    const who = await requireSession(req)
+    if (!who) { loginRedirect(res, `/confirm/${req.params.id}`); return }
+    const rec = deps.changeSets.get(String(req.params.id))
+    if (!rec || !sameUser(rec.creatorLabel, who.userLabel)) { res.status(404).send('not found'); return }
+    // 只有 scheduled 可取消(spec §8):cancelled 是唯一允許的人工轉移、終態。
+    const won = deps.changeSets.casStatus(rec.id, 'scheduled', 'cancelled', deps.now())
+    if (!won) { res.status(409).send('已被處理或非排程狀態'); return }
+    deps.audit.record({
+      userLabel: who.userLabel, sessionId: who.sessionId,
+      clientInfo: 'confirm-page:' + String(req.headers['user-agent'] ?? '').slice(0, 80),
+      tool: 'changeset.cancel', params: { changeset_id: rec.id, ip: req.ip },
+      status: 'ok', traceId: 'n/a', durationMs: 0,
+    })
+    res.status(200).send('已取消排程')
   }))
 
   r.post('/confirm/:id/reject', h(async (req, res) => {

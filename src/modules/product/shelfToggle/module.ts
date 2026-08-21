@@ -20,6 +20,7 @@ function isShelfTogglePlanItem(i: unknown): i is ChangeSetItem {
 
 export const shelfToggleProductModule: ActionModule<ChangeSetItem, DiffItem> = {
   actionType: 'shelf_toggle_product',
+  shapeFamily: 'shelf_toggle',
   itemSchema: itemSchemaProduct,
   authz: {
     // action_type -> businessList action code(s). businessList is 666 dot-notation strings
@@ -45,6 +46,7 @@ export const shelfToggleProductModule: ActionModule<ChangeSetItem, DiffItem> = {
 
 export const shelfTogglePlanModule: ActionModule<ChangeSetItem, DiffItem> = {
   actionType: 'shelf_toggle_plan',
+  shapeFamily: 'shelf_toggle',
   itemSchema: itemSchemaPlan,
   authz: {
     codes: ['product.product-sale-status.update', 'product.bundle-package-sale-status.update'],

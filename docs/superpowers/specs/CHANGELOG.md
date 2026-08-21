@@ -15,6 +15,26 @@
 - `2026-08-18-module-factory-design.md`（全檔，新建）/ Module Factory 設計：三段闘關（探索/產/驗收）+ 方案 A 六格並行引擎 + repo skill 載體 / 把 module-onboarding 人工 checklist 自動化。
 - 同檔 §1/§2.1/§3.1/§6/§7（agy review round 1 三修）/ (1) ENDPOINTS.md 為每次跑的輸入、需複製進 repo 避免幻影路徑；(2) GATE 1 拆授權 gate（executor-only PENDING）與欄位 gate（欄位未知 block 段②，防盲寫）；(3) 六格編排寫成 run-agy-batch.sh 機械腳本 / agy 抓到「欄位未知卻說 schema 照產」是盲寫矛盾、幻影檔路徑、並行編排缺具體腳本（rounds=3 APPROVED）。
 
+## 2026-08-20
+
+- `2026-08-20-be2-mcp-inventory-schedule-design.md`（全檔，新建）/ 塊 B 排程層設計：probe 實證 be2 無庫存原生排程（`probe-inventory-native-schedule.md`）→ core 泛用排程能力（`ChangeSetStatus` 增 scheduled/cancelled/missed、批准 CAS→scheduled + 持久化批准者 identityId、server 內建 poller 以既有 DB CAS 認領=免 leader election/免新增 Redis、TOCTOU 時間回聲綁定、keep-alive refresh 讓 horizon 成立、grace 超窗標 missed 寧可不執行）+ module `schedulable` opt-in（僅 inventory_setting 開）/ 塊 B 唯一使命：庫存數量是唯一無原生排程的域；wizard 只是 UX、能力在 change-set 排程層。時區規則：牆鐘+`BE2_TZ` 換算 UTC 一次、呈現回放原文不反推（一級需求）。假設清單替代逐題釐清（背景 session）。
+
+- `2026-08-20-be2-mcp-inventory-schedule-design.md` §3/§4/§5/§6/§7/§11（agy review rounds 1-3 八修）/ (1) keep-alive 多實例防撞:be2_identities 加 keepalive_claimed_at DB claim,殘餘風險歸屬 §1.5 原語 #1;(2) TokenManager 新增公開 getFreshByIdentityId + keepAlive(封裝不穿透);(3) identityId threading 進 UserAuthContext/ApproveWho;(4) schema 加 executor_session_id(audit 歸屬批准者,禁 fallback creator);(5) 批准過期排程 409 SCHEDULE_IN_PAST,且閾值刻意與建立不同(批准只驗「仍在未來」,避免 tight schedule 永遠批不過);(6) transient refresh 失敗放回 scheduled 重試(terminal 才 failed);(7) stranded-approved 回收(schedule_claimed_at + staleClaimMs);(8) executor 起點改 casStatus(approved→executing) 輸即 abort=exactly-once 執行 / agy 抓到 spec 引用的 TokenManager API 是 private、ApproveWho 拿不到 identityId、多實例 keep-alive 撞 rotation 誤刪 credential、背景排程不能沿用「人在場一次定生死」的錯誤處理(rounds=4 APPROVED)。
+
+- `2026-08-20-be2-mcp-inventory-schedule-design.md`(實作期偏離與收尾修正,附記)/ (1) 假設 A4「horizon env 可調」實作收窄為 `SCHEDULE_POLICY` 常數(policy.ts 註明 YAGNI,env 覆寫留待真需求);(2) spec §7「啟動時對 stranded executing 記 audit 警示」final review 抓到漏做,已補(`schedule.stranded_executing` + `listExecutingScheduled`);(3) purge 保護(§6)擴大涵蓋「claim 後短暫 approved」窗口(status='approved' AND execute_at_utc 非 null 也排除);(4) keep-alive terminal 連坐 fail 的 audit 歸屬修正為批准者(§11);(5) 面板取消流程實作修正:取消前重新 view 取新鮮 nonce(批准已消耗原 nonce)+ 驗錯誤信封防假成功——spec §8 未寫到 nonce 單次性與取消的互動,實作以「同 gate 同紀律」補齊 / 塊 B 實作全程 3 輪 task review + 1 輪 final whole-branch review 的產物,實作與 spec 的偏離全數記錄於此,不靜默。
+
+- `2026-08-20-be2-mcp-inventory-quantity-wizard-design.md`（全檔，新建）/ 庫存數量進 wizard 設計（塊 A，即時 SET/fullday）：**就地改寫** Phase 3a `inventory_setting` module 為 fullday-SET 形狀（拿掉 dates[]/adjust/per-month）、**只支援 item_by_amount（1/0）其餘 fail-closed 擋 + 面板標示**、`inventoryShape.ts` FINALIZE（讀取改 `POST inventories/search`、主形狀 `data[itemOid].fullday`、保留 defensive、補 fixture）、折進既有 `be2_open_batch_wizard` grid 面板 / 對齊獨立版 BAA 庫存能力（原版僅 item_by_amount/fullday）。3 個關鍵決策經使用者拍板：(a) 砍掉重寫（舊 module 從未上線、讀取端點壞的，無相容包袱）(b) 只做 item_by_amount、其餘擋掉但 UI 標「目前不支援」(c) live 寫入 PENDING（quantity PUT AU9403，RD 處理中）。與 Session 1（公告，走 sibling 面板）幾乎零檔案衝突，剩 types.ts union / index.ts 行級小衝突。塊 B（排程）另 session。
+- `2026-08-20-be2-mcp-inventory-quantity-wizard-design.md` §3/§4.3/§8/§10（授權 gate 現況更新）/ live 重測（塊 A brainstorm 期）發現 **stage quantity PUT 首次真 200**（正確契約 e2e 驗完）、SIT be2-220 仍 403（AU9403，RD grant 未生效）、stage 憑證已補齊；spec 從「live 寫入一律 PENDING」改為「live 綠寫入走 stage、SIT 待 grant」，§8 加 stage net-zero live 驗收 exit gate / 反映真實可寫路徑，讓 writing-plans 能放真的 live-acceptance 步驟。同步 `sit-write-contracts.md` §inventory + memory `be2-mcp-phase3-plan`。
+- `2026-08-20-be2-mcp-announcement-wizard-design.md`（全檔，新建）/ 商品公告進 wizard 設計：新 `announcement` domain module（首個非 product 形狀）+ module-local svc-b2c client（不碰 core GatewayClient）+ 獨立入口 `be2_open_announcement_wizard` + 專用建立表單面板 / 把 BAA 塊 C（公告）補進 MCP，驗 `ActionModule` 介面對非 product domain 的通用性。首發動作=create 全欄位；生效走原生 startTime/endTime、不做排程；live 寫入卡 svc-b2c S2S 403（build+draft 可）。3 個關鍵決策經使用者拍板：(1) create 全欄位 (2) 專用建立表單面板 (3) 獨立入口 sibling tool（因 uiResourceUri 一 tool 綁一面板、無法動態切，且避 Session 2 衝突）。
+- 同檔 §4.3/§5.1/§5.9/§8/§10（agy review round 1 兩修一納）/ (1) **§4.3**：user-uuid header 改由 accessToken 自解 platformId（讀 diff/view/寫 executor 三處統一），原設計「從 ExecCtx 拿 modifyUser」對讀取路徑不成立（DiffCtx/AppToolContext 刻意不含 modifyUser、只含 accessToken）；(2) **§5.9**：通用 changeset-panel.ts 的 itemKeyOf 硬寫只認 inv/shelf，announcement diff（僅 prod_oids[]）會 fallback 回 "undefined" → CONFIRMED_KEYS_MISMATCH 永遠無法批准 → 加 announcement 分支；(3) §5.1 itemKey 用 [...prod_oids].sort() 非就地 mutate / agy 抓到讀取路徑無 modifyUser、通用面板 itemKey fall-through（rounds=2 APPROVED）。
+
+- 同檔 §5.2/§5.7（plan 的 agy review round 1 兩修，回頭補齊 spec 內部一致性）/ (1) §5.2 `AnnouncementDiffItem` 補 `contents` 欄位——原本 §5.5 hash 與 §5.7 renderer 都引用 contents 但 diff item 沒帶 → 確認頁看不到內文 = blind write；(2) §5.7 renderer 明訂 start/end 走**伺服器端雙時區**（UTC + GMT+8 固定偏移）/ agy 審 plan 時抓到 diff item 缺 contents（內部矛盾）與確認頁只顯示 UTC 單時區（§5.7/§10 要雙時區）。
+
+- 同檔 §5.2/§5.3/§5.5/假設#4（code-review 收尾兩修）/ (1) `en-default` warn 明訂放在**確認頁 renderer + 面板 step-3**（validate 是 error-or-null 無 warn 通道）——實作前漏了這條 warn，code-review Spec 軸抓到；(2) `AnnouncementDiffItem.existing_count` 由 `number`(用 -1 當未知哨兵) 改為 `number | null`（null=未知），去除 primitive-obsession 哨兵（code-review Standards 軸）/ agy 雙軸 code-review（PR #19）發現的 2 個塊 C 真落差。
+
+- `2026-08-20-be2-mcp-inventory-quantity-wizard-design.md` §5.3（code-review 收尾）/ `would_go_negative` 欄位：SET-only 改寫後恆 false=死欄位，spec 從「欄位保留供 renderer/型別一致」改為「刻意移除，YAGNI；重引入 adjust 再加回」——對齊實作已移除的事實（code-review Spec 軸發現 spec 說留、code 沒留）/ agy 雙軸 code-review（PR #19）發現的塊 A 落差。
+- 跨模組（code-review Standards 軸 Duplicated Code 收斂，非 spec 檔異動，附記）/ 抽 `src/gateway/httpJson.ts` 共用 HTTP-JSON 原語（fetch+timeout+json+unreachable→502），`GatewayClient`(get/put/post) 與 announcement `svcB2cClient`(list/create) 皆改用之，消除各自手刻 fetch 骨架的重複；行為不變（gatewayClient/svcB2cClient 測試 15/15 綠）。
+
 ## 2026-08-19
 
 - 建立本 CHANGELOG（追溯補記上述 2026-08-16/18 的 spec 異動）/ 落實新增的「規格變更」規則。
@@ -24,3 +44,4 @@
 
 
 
+<!-- agy-peer-reviewed: 2026-08-20T07:20:00Z rounds=3 verdict=approved -->
