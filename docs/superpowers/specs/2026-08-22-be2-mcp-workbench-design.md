@@ -50,7 +50,9 @@
 - `src/server/app.ts`：`TOOLS` 換入 `openWorkbenchTool`、移除兩個舊 `open_*`。
 - `src/server/appResources.ts`：`PANELS` 加 workbench。
 - `scripts/build-ui.mjs`：`entries` 加 `'workbench'`。
-- `src/tools/batchView.ts`：`BatchViewActionType` 擴充納入 `shelf_toggle_*` 的 step-1 讀取（使上下架也能經 `app_get_batch_view` 登記 read scope）。
+- `src/tools/batchView.ts`：(a) `BatchViewActionType` 擴充納入 `shelf_toggle_*`；(b) `buildBatchView` 對 shelf_toggle_* **需加讀商品層 `/product-configs/{oid}/switch`**（`be2_find_products` 用的那支）並在 `BatchProduct` 補 `is_active` 欄位——否則「立即上/下架」的商品整體 checkbox 沒有現況可渲染。
+- `src/tools/appTools.ts`：(a) `appGetBatchViewTool` 的 Zod `action_type` enum **必須同步擴充納入 `shelf_toggle_*`**，否則面板呼叫會被 MCP 工具驗證層直接擋下（`BatchViewActionType` 改了還不夠）；(b) `appGetAnnouncementViewTool` 改成一次帶整個 `prodOids` 陣列給 client（免現有逐 oid N+1）。
+- `src/modules/product/shelfToggle/module.ts`、`src/modules/product/shelfToggleBundle/module.ts`：(a) import 並在 `ActionModule` 定義掛上新 `ui.ts` 的 `wizard` descriptor（否則 UI registry 不會 mount）；(b) 在 `validate()` 實作單一方向檢查（見 §8）。此為修改既有 module 檔，非動 core changeset。
 
 **保留不動**：products-panel、changeset-panel 及其入口 tool（`be2_find_products` / `be2_get_product_plans` / `be2_get_inventory_settings` / `be2_create_changeset` / `be2_get_changeset_status`）。
 
@@ -85,12 +87,12 @@
 - 內容＝使用者上游 Claude 用 skill 產的 15 語系 JSON（`{type:'be2-announcement-content', langs:[{lang_code,content}]}`），於面板 ingest（貼上整段回覆解析，或 Claude 開面板時預填）。
 - 面板長出 15 語系清單，每列 checkbox 可勾選/取消（預設全選）→ 只送勾選語系。
 - 送出 = 真實 create API `POST {GATEWAY}/svc-b2c/api/v1/admin/product/announcement`（Bearer + `x-api-key`），body `{name, isEnabled, prodOids:[...], startTime, endTime, langSettings:[{langCode, content}]}`。
-- **`prodOids` 陣列一次 POST → 公告是單一 change-set、不逐商品拆批**（與上下架/庫存不同）。
+- **`prodOids` 陣列一次 POST → 公告不套用「≤20 筆逐商品拆批」規則**（與上下架/庫存不同）。**但**若 §10 probe 證實 `prodOids` 陣列有長度上限，工作台需把商品清單**按該上限分塊、發多次 create**（每塊一則相同公告、各自 change-set），而非整批失敗；即公告是「按 prodOids 上限分塊」而非「完全不拆」。上限未知前，實作以單次全送為預設並在超量時明確報錯（不靜默截斷）。
 - ingest 做 `lang_code→langCode` 欄位改名；skill 只產 15 語系，API langSettings 語系本身開放。
 
 ## 8. 新驗證 / 錯誤處理
 
-- **上下架強制單一方向**（新規則）：`shelfToggle` module `validate` 拒絕「同一批同時含上架與下架」。回錯用 module 既有 `invalidItemsMessage` 機制。
+- **上下架強制單一方向**（新規則）：在 `shelfToggle` module 的 `validate()` 實作——回傳動態 `ValidationResult`（`{key, message}`）拒絕「同一批同時含上架與下架」。**不可**用 `invalidItemsMessage`（那是 `isItem` 結構不符時的靜態字串，承載不了 payload 邏輯判斷）。屬修改 `shelfToggle/module.ts`（連同 wizard 掛載），非動 core。UI 亦只讓單一方向可選（見 §5），validate 為第二道防線。
 - **拆批（先按 action_type 分組、再按 20 切）**：change-set 是 per-action_type（`createChangesetCore` 一次一種 action_type），故工作台建 change-set 時**先依 action_type 分組**（例如「立即上/下架」同時改商品層 + 方案層 → `shelf_toggle_product` 與 `shelf_toggle_plan` 各自成 change-set），每組再把 >20 筆切成多個獨立 change-set；每個各自 diff/nonce/批准/稽核/可失敗重試。公告不拆（prodOids 陣列一次送）。檢視步驟需清楚呈現「本次 = N 個 change-set」。
 - **重用既有保護**：draft-only（agent 不直接寫）、scope-gate fail-fast（businessList action code 缺 → 擋）、stale `diff_version` 409、CAS 防重複執行、per-item audit、partial 不 collapse 成 failed。
 - **錯誤面**：未登記 read scope → 擋；invalid items → module 訊息；無 nonce 批准 → 結構上不可能。
@@ -116,8 +118,13 @@
 ## 11. 檔案變更清單
 
 **新增**：`src/ui/workbench.ts`、`src/ui/workbench.html`、`src/tools/openWorkbench.ts`、`src/modules/product/shelfToggle/ui.ts`、`src/modules/product/shelfToggleBundle/ui.ts`。
-**修改**：`src/server/app.ts`（TOOLS 增刪）、`src/server/appResources.ts`（PANELS）、`scripts/build-ui.mjs`（entries）、`src/tools/batchView.ts`（`BatchViewActionType`）。
-**保留不動**：core changeset 全部、products-panel、changeset-panel、其他既有 module 的 diff/validate/execute。
+**修改**：
+- `src/server/app.ts`（TOOLS 增刪）、`src/server/appResources.ts`（PANELS）、`scripts/build-ui.mjs`（entries）。
+- `src/tools/batchView.ts`（`BatchViewActionType` 擴充 + `buildBatchView` 加讀商品層 switch/補 `BatchProduct.is_active`）。
+- `src/tools/appTools.ts`（`appGetBatchViewTool` Zod enum 同步擴充；`appGetAnnouncementViewTool` 批次帶 prodOids）。
+- `src/modules/product/shelfToggle/module.ts`、`src/modules/product/shelfToggleBundle/module.ts`（掛 `wizard` descriptor + 單一方向 `validate()`）。
+
+**保留不動**：core changeset 引擎（registry/store/executor/confirmService/scheduler/module 介面）、products-panel、changeset-panel、其他既有 module 的 diff/execute。
 
 ## 12. 不做（YAGNI）
 
@@ -125,3 +132,5 @@
 - 「一次送多則不同公告」的購物籃佇列（v2；v1 一則→多商品）。
 - 面板觸發模型跑翻譯（翻譯全在使用者上游，面板 ingest-only，故不需此能力）。
 - 動態多面板切換（受 MCP Apps 一 tool 一面板限制；單面板內 JS 切換即可）。
+
+<!-- agy-peer-reviewed: 2026-08-21T16:51:24Z rounds=2 verdict=approved -->
