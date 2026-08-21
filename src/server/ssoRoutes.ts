@@ -124,7 +124,7 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
     res.status(200).send('logged out')
   }))
 
-  const gateDeps = () => ({ webSessions: deps.webSessions, credentials: deps.credentials, tokenManager: deps.tokenManager })
+  const gateDeps = { webSessions: deps.webSessions, credentials: deps.credentials, tokenManager: deps.tokenManager }
   // 「Claude 連線」定義(spec §6.1):有至少一顆 oauth_access 或至少一列 oauth_refresh 的 identity。
   const isConnection = (identityId: string): boolean =>
     deps.oauthStore.countRefreshByIdentity(identityId) > 0 ||
@@ -133,7 +133,7 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
     deps.identities.listByUserLabel(userLabel).filter(i => isConnection(i.identityId))
 
   r.get('/confirm/connections', h(async (req, res) => {
-    const who = await requireSession(gateDeps(), req)
+    const who = await requireSession(gateDeps, req)
     if (!who) { res.redirect(302, `/confirm/login?next=${encodeURIComponent('/confirm/connections')}`); return }
     const conns = listConnections(who.userLabel)
     const revokedRaw = String(req.query.revoked ?? '')
@@ -155,11 +155,11 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
     // CSRF(spec §6.2):SameSite 對 127.0.0.1 不分 port,同機異 port 可跨站 POST 這條固定路徑,
     // 故要求 Origin 存在且完全等於自身 origin;絕不 fallback 到 Referer。
     if (req.header('origin') !== deps.baseOrigin) { res.status(403).send('forbidden'); return }
-    const who = await requireSession(gateDeps(), req)
+    const who = await requireSession(gateDeps, req)
     if (!who) { res.status(403).send('forbidden'); return }
     let n = 0
     for (const conn of listConnections(who.userLabel)) {
-      revokeGrant({ oauthStore: deps.oauthStore, credentials: deps.credentials, identities: deps.identities }, conn.identityId)
+      revokeGrant(deps, conn.identityId)
       deps.audit.record({
         userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-connections',
         tool: 'confirm_connections_revoke_all', params: { identity_id: conn.identityId },

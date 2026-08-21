@@ -70,13 +70,28 @@ describe('POST /oauth/revoke(RFC 7009,spec §4)', () => {
   it('unknown token / static_bearer / web_session secret → 200 no-op、store 無變化、無 audit', async () => {
     const g = seedGrant(db)
     g.creds.insert({ credHash: CredentialStore.hash('sb-raw'), identityId: g.identityId, kind: 'static_bearer', expiresAt: null, updatedAt: 1 })
-    for (const t of ['garbage', 'sb-raw']) {
+    g.creds.insert({ credHash: CredentialStore.hash('ws-raw'), identityId: g.identityId, kind: 'web_session', expiresAt: null, updatedAt: 1 })
+    for (const t of ['garbage', 'sb-raw', 'ws-raw']) {
       const r = await revoke({ token: t })
       expect(r.status).toBe(200)
     }
     expect(g.creds.getBySecret('sb-raw')).toBeDefined()
+    expect(g.creds.getBySecret('ws-raw')).toBeDefined()
     expect(g.oauth.countRefreshByIdentity(g.identityId)).toBe(1)
     expect(db.prepare("SELECT COUNT(*) c FROM audit_log WHERE tool = 'oauth_revoke'").get()).toEqual({ c: 0 })
+  })
+  it('consumed / 已過期的 refresh 呈上 → 照樣命中、整 family 撤銷(spec §4.2)', async () => {
+    // consumed:模擬已被 rotation 標記過的舊 refresh
+    const g1 = seedGrant(db, { identityId: 'IC' })
+    db.prepare('UPDATE oauth_refresh SET consumed = 1 WHERE identity_id = ?').run('IC')
+    expect((await revoke({ token: g1.rawRefresh })).status).toBe(200)
+    expect(g1.oauth.countRefreshByIdentity('IC')).toBe(0)
+    expect(g1.creds.getBySecret(g1.rawAccess)).toBeUndefined()
+    // expired:exp 已過的列照樣命中(冪等、無害)
+    const g2 = seedGrant(db, { identityId: 'IE' })
+    db.prepare('UPDATE oauth_refresh SET exp = 1 WHERE identity_id = ?').run('IE')
+    expect((await revoke({ token: g2.rawRefresh })).status).toBe(200)
+    expect(g2.oauth.countRefreshByIdentity('IE')).toBe(0)
   })
   it('token 缺席 → 400 invalid_request', async () => {
     const r = await revoke({})
