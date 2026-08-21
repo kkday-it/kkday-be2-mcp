@@ -381,7 +381,9 @@ describe('POST /oauth/revoke(RFC 7009,spec §4)', () => {
 it('宣告 revocation_endpoint(RFC 8414)', async () => {
   const r = await fetch(`${base}/.well-known/oauth-authorization-server`)
   const meta = (await r.json()) as Record<string, unknown>
-  expect(meta.revocation_endpoint).toBe(`${base}/oauth/revoke`)   // base 依該檔既有變數調整
+  // 注意:測試 config.port=0,server 內部 baseUrl 是 http://127.0.0.1:0(≠ 實際隨機 listening
+  // port)——斷言必須錨定 meta.issuer 而非 harness 的 base,比照該檔既有測試做法。
+  expect(meta.revocation_endpoint).toBe(`${meta.issuer}/oauth/revoke`)
   expect(meta.revocation_endpoint_auth_methods_supported).toEqual(['none'])
 })
 ```
@@ -488,8 +490,8 @@ export interface SessionUser { sessionId: string; userLabel: string; accessToken
 export async function requireSession(deps: SessionGateDeps, req: express.Request): Promise<SessionUser | undefined>
 ```
 
-- [ ] **Step 1: 搬移** — 把 `confirmRoutes.ts` 66–100 行的 `requireSession` **原文**(含全部註解)搬到 `src/server/sessionGate.ts`,只改:`deps.webSessions/credentials/tokenManager` 引用改走參數 `deps`;檔頭加一句說明「confirmRoutes 與 ssoRoutes 共用的 web-session 登入 gate(kind gate + 死 session 清理 + touch),自 confirmRoutes 抽出,行為不變」。
-- [ ] **Step 2: confirmRoutes 改用** — 刪本地函式,`import { requireSession } from './sessionGate.js'`,兩個呼叫處(GET `/confirm/:id`、POST approve/reject 內)改 `await requireSession({ webSessions: deps.webSessions, credentials: deps.credentials, tokenManager: deps.tokenManager }, req)`。
+- [ ] **Step 1: 搬移** — 把 `confirmRoutes.ts` 66–100 行的 `requireSession` **原文**(含全部註解)搬到 `src/server/sessionGate.ts`,只改:`deps.webSessions/credentials/tokenManager` 引用改走參數 `deps`;**相依 import 一併搬**(`parseCookies` 自 `./cookies.js`、`WebSessionStore`/`CredentialStore`/`TokenManager` 型別 import);檔頭加一句說明「confirmRoutes 與 ssoRoutes 共用的 web-session 登入 gate(kind gate + 死 session 清理 + touch),自 confirmRoutes 抽出,行為不變」。confirmRoutes 若因此不再用到 `parseCookies` 則移除該 import(以 `npm run ci` 的 typecheck 為準)。
+- [ ] **Step 2: confirmRoutes 改用** — 刪本地函式,`import { requireSession } from './sessionGate.js'`,**四個**呼叫處(GET `/confirm/:id`、POST approve、POST cancel、POST reject)改 `await requireSession({ webSessions: deps.webSessions, credentials: deps.credentials, tokenManager: deps.tokenManager }, req)`(可先在 router 頂部宣告一次 `gateDeps` 常數共用)。
 - [ ] **Step 3: 驗證行為不變** — `npm run ci` 全綠(特別看 `confirmRoutes*.test.ts`、`phase2bSecurity.test.ts`)。
 - [ ] **Step 4: Commit** — `git add src/server/sessionGate.ts src/server/confirmRoutes.ts && git commit -m "refactor(confirm): requireSession 抽成共用 sessionGate(行為不變)"`
 
@@ -559,6 +561,10 @@ beforeEach(async () => {
 afterEach(() => new Promise<void>(r => http.close(() => { db.close(); r() })))
 
 const get = (cookie?: string) => fetch(`${base}/confirm/connections`, { redirect: 'manual', headers: cookie ? { cookie } : {} })
+// 關鍵:server 端 baseOrigin 由 config.port=0 組成 = 'http://127.0.0.1:0',與 harness 的實際
+// 隨機 listening port(base)不同。合法 Origin 測試一律送 SERVER_ORIGIN;harness 的 base 反而
+// 是「同 host 異 port」的天然錯誤樣本。
+const SERVER_ORIGIN = 'http://127.0.0.1:0'
 const post = (cookie: string, origin?: string) => fetch(`${base}/confirm/connections/revoke-all`, {
   method: 'POST', redirect: 'manual',
   headers: { cookie, ...(origin ? { origin } : {}) },
@@ -583,14 +589,15 @@ describe('/confirm/connections(spec §6)', () => {
     expect(html).toContain('斷開所有 Claude 連線')
     expect(html).toContain('static bearer')             // 邊界文案(spec §6.2)
   })
-  it('POST 無 Origin → 403;同 host 異 port Origin → 403;store 無變化', async () => {
+  it('POST 無 Origin → 403;同 host 異 port Origin(含 harness 實際 port)→ 403;store 無變化', async () => {
     seedConnection('I1', 'u@kkday.com'); seedSession('sid1', 'I1')
     expect((await post('be2mcp_sid=sid1')).status).toBe(403)
     expect((await post('be2mcp_sid=sid1', 'http://127.0.0.1:9999')).status).toBe(403)
+    expect((await post('be2mcp_sid=sid1', base)).status).toBe(403)   // harness 的實際 port ≠ server baseOrigin
     expect(oauth.countRefreshByIdentity('I1')).toBe(1)
   })
   it('POST 未登入(正確 Origin)→ 403', async () => {
-    expect((await post('be2mcp_sid=nope', base)).status).toBe(403)
+    expect((await post('be2mcp_sid=nope', SERVER_ORIGIN)).status).toBe(403)
   })
   it('正確 Origin POST → 撤同 userLabel 全部連線、303 PRG、web session 仍活、別人/static_bearer 不動', async () => {
     seedConnection('I1', 'u@kkday.com')
@@ -598,7 +605,7 @@ describe('/confirm/connections(spec §6)', () => {
     seedConnection('I9', 'other@kkday.com')
     creds.insert({ credHash: 'sb1', identityId: 'I1', kind: 'static_bearer', expiresAt: null, updatedAt: 1 })
     seedSession('sid1', 'I1')
-    const r = await post('be2mcp_sid=sid1', base)
+    const r = await post('be2mcp_sid=sid1', SERVER_ORIGIN)
     expect(r.status).toBe(303)
     expect(r.headers.get('location')).toBe('/confirm/connections?revoked=2')
     expect(oauth.countRefreshByIdentity('I1')).toBe(0)
@@ -614,7 +621,7 @@ describe('/confirm/connections(spec §6)', () => {
   })
   it('稽核:逐連線記 tool=confirm_connections_revoke_all', async () => {
     seedConnection('I1', 'u@kkday.com'); seedConnection('I2', 'u@kkday.com'); seedSession('sid1', 'I1')
-    await post('be2mcp_sid=sid1', base)
+    await post('be2mcp_sid=sid1', SERVER_ORIGIN)
     const n = (db.prepare("SELECT COUNT(*) c FROM audit_log WHERE tool = 'confirm_connections_revoke_all'").get() as { c: number }).c
     expect(n).toBe(2)
   })
@@ -744,3 +751,5 @@ headless static bearer 也不受影響(生命週期歸 `bootstrap-user`/ops 管)
 1. **Spec coverage**:§4(Task 3)、§5(Task 3)、§6(Task 5)、§7 store(Task 1)+ helper(Task 2)+ 接線(Task 3/5)+ sessionGate(Task 4)、§9 測試 #1–#9(Task 3)#10–#16(Task 4/5)、§8 邊界(Task 6 runbook)。無缺。
 2. **Placeholder scan**:無 TBD/TODO;每步有完整程式碼。
 3. **Type consistency**:`revokeGrant(deps, identityId)` 簽名 Task 2 定義、Task 3/5 使用一致;`SessionUser`/`SessionGateDeps` Task 4 定義、Task 5 使用一致;`RevokeDeps`/`SsoDeps` 欄位與 app.ts 接線一致。
+
+<!-- agy-peer-reviewed: 2026-08-21T05:46:07Z rounds=2 verdict=approved -->
