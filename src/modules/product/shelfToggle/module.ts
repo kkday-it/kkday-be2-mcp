@@ -6,6 +6,7 @@ import { computeShelfDiff } from './diff.js'
 import { itemKey } from './keys.js'
 import { executeShelfToggle } from './executor.js'
 import { renderConfirm } from './renderer.js'
+import { shelfToggleProductWizard, shelfTogglePlanWizard } from './ui.js'
 
 const itemSchemaProduct = z.object({ prod_oid: z.string().min(1), target_is_active: z.boolean() })
 const itemSchemaPlan = z.object({ prod_oid: z.string().min(1), pkg_oid: z.string().min(1), target_is_active: z.boolean() })
@@ -47,7 +48,8 @@ export const shelfToggleProductModule: ActionModule<ChangeSetItem, DiffItem> = {
   },
   itemKey,
   execute: executeShelfToggle,
-  renderConfirm: (rec, diff, version, banner) => renderConfirm(rec, diff as DiffItem[], version, banner)
+  renderConfirm: (rec, diff, version, banner) => renderConfirm(rec, diff as DiffItem[], version, banner),
+  wizard: shelfToggleProductWizard
 }
 
 export const shelfTogglePlanModule: ActionModule<ChangeSetItem, DiffItem> = {
@@ -71,5 +73,6 @@ export const shelfTogglePlanModule: ActionModule<ChangeSetItem, DiffItem> = {
   },
   itemKey,
   execute: executeShelfToggle,
-  renderConfirm: (rec, diff, version, banner) => renderConfirm(rec, diff as DiffItem[], version, banner)
+  renderConfirm: (rec, diff, version, banner) => renderConfirm(rec, diff as DiffItem[], version, banner),
+  wizard: shelfTogglePlanWizard
 }

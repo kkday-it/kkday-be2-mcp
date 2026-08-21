@@ -6,6 +6,7 @@ import { itemKey } from './keys.js'
 import { executeBundleToggle } from './executor.js'
 import { renderConfirm } from './renderer.js'
 import type { BundleItem, BundleDiffItem } from './types.js'
+import { shelfToggleBundleWizard } from './ui.js'
 
 const itemSchema = z.object({
   prod_oid: z.string().min(1),
@@ -52,4 +53,5 @@ export const shelfToggleBundleModule: ActionModule<BundleItem, BundleDiffItem> =
   itemKey,
   execute: executeBundleToggle,
   renderConfirm: (rec, diff, version, banner) => renderConfirm(rec, diff as BundleDiffItem[], version, banner),
+  wizard: shelfToggleBundleWizard,
 }
