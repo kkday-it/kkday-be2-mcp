@@ -122,6 +122,12 @@ npm run oauth-purge
 邊界：這不等於 be2-web SSO 登出——auth-service 端 JWT 在 TTL（~50min）內仍有效；
 headless static bearer 也不受影響（生命週期歸 `bootstrap-user`/ops 管）。
 
+**Live 驗收（2026-08-22，真人 Claude Desktop 對 SIT :8787）：PASS**——實斷 2 條連線（audit 逐筆、
+store 全清、web_session 保留）→ Desktop 撞 401 → 自動 re-auth 換 token 成功、工具恢復；二輪重測亦過。
+**操作注意**：撤銷後若同時有多份 mcp-remote 副本（主對話 + Cowork/Code shared-pool），每份會**各自
+re-auth、同時跳多個授權分頁**；因共用同一 loopback callback port，**只能完成其中一個、其餘關掉**——
+兩個都登會互撞（code 換不走，見上方 mcp-remote SOP「舊分頁重放」同族行為）。
+
 ## 疑難排解
 
 | 症狀 | 原因 | 處理 |
