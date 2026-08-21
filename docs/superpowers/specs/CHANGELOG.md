@@ -5,6 +5,10 @@
 >
 > 追溯補記（2026-08-19 起才有本規則，先前的 spec 異動追溯登記於下）。
 
+## 2026-08-22
+
+- `2026-08-22-be2-mcp-workbench-design.md`（全檔，新建）/ 功能彙整工作台設計：把 4 個散落面板彙整成單一「be2 工作台」（版型 B 左功能列 + 次模式），新增 `be2_open_workbench` + `ui://be2/workbench.html` 取代 `be2_open_batch_wizard`/`be2_open_announcement_wizard`，v1 收全部 7 個 action_type（上下架含 bundle+schedule、庫存含 platform、公告），重用 change-set 引擎/scope-gate/scheduler 不動 core；新增 `shelfToggle/ui.ts` + 上下架強制單一方向 validate、拆批 ≤20/批（公告 prodOids 陣列例外）、公告 ingest-only（skill 15 語系 JSON、可勾選語系）/ 使用者要「功能列點選切換、不用來回對話」；經 UI prototype 深度迭代釘定 8 項決策 + 三功能真實 API 契約（含公告 create endpoint），brainstorming 後半段收斂成 spec。
+
 ## 2026-08-21
 
 - `2026-08-21-be2-mcp-logout-revoke-design.md` §6.2/§7/§9(agy review round 1 四修)/ (1) CSRF 改顯式 Origin 檢查(SameSite 對 127.0.0.1 不分 port,同機異 port 可跨站 POST 固定路徑的 revoke-all);(2) SsoDeps 接線補 oauthStore+baseOrigin;(3) requireSession 抽共用 sessionGate;(4) revoke-all 改 POST-Redirect-GET / agy 抓到 localhost CSRF 與缺依賴注入是真問題(rounds=2 APPROVED;「family 已亡 edge 不可能」的質疑經 oauth-purge 場景推翻獲 CONCEDE)。
