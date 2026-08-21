@@ -192,8 +192,11 @@ describe('app_get_batch_view — inputShape 邊界', () => {
   it('0 個 prod_oids 拒絕', () => {
     expect(schema.safeParse({ action_type: 'inventory_platform', prod_oids: [] }).success).toBe(false)
   })
-  it('action_type 只接受 inventory_platform|shelf_schedule', () => {
-    expect(schema.safeParse({ action_type: 'shelf_toggle_product', prod_oids: ['1'] }).success).toBe(false)
+  it('action_type 接受 6 種批次型別、拒絕未知型別', () => {
+    for (const at of ['inventory_platform', 'shelf_schedule', 'inventory_setting', 'shelf_toggle_product', 'shelf_toggle_plan', 'shelf_toggle_bundle']) {
+      expect(schema.safeParse({ action_type: at, prod_oids: ['1'] }).success).toBe(true)
+    }
+    expect(schema.safeParse({ action_type: 'bogus_type', prod_oids: ['1'] }).success).toBe(false)
   })
 })
 
