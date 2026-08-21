@@ -13,6 +13,8 @@ export function buildDiscoveryRouter({ baseUrl }: { baseUrl: string }): express.
       authorization_endpoint: `${baseUrl}/oauth/authorize`,
       token_endpoint: `${baseUrl}/oauth/token`,
       registration_endpoint: `${baseUrl}/oauth/register`,
+      revocation_endpoint: `${baseUrl}/oauth/revoke`,
+      revocation_endpoint_auth_methods_supported: ['none'],
       response_types_supported: ['code'],
       grant_types_supported: ['authorization_code', 'refresh_token'],
       code_challenge_methods_supported: ['S256'],

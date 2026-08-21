@@ -38,6 +38,8 @@ describe('OAuth discovery', () => {
     expect(body.authorization_endpoint).toBe(`${body.issuer}/oauth/authorize`)
     expect(body.token_endpoint).toBe(`${body.issuer}/oauth/token`)
     expect(body.registration_endpoint).toBe(`${body.issuer}/oauth/register`)
+    expect(body.revocation_endpoint).toBe(`${body.issuer}/oauth/revoke`)
+    expect(body.revocation_endpoint_auth_methods_supported).toEqual(['none'])
   })
 
   it('protected-resource metadata 指向本 AS', async () => {
