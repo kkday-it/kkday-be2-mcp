@@ -139,11 +139,11 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
     const conns = listConnections(who.userLabel)
     const revokedRaw = String(req.query.revoked ?? '')
     const notice = /^\d{1,4}$/.test(revokedRaw) ? `<p style="color:green">已斷開 ${revokedRaw} 條 Claude 連線。</p>` : ''
-    const fmtWall = (ms: number) => new Intl.DateTimeFormat('zh-TW', {
+    const wallFmt = new Intl.DateTimeFormat('zh-TW', {
       timeZone: deps.scheduleTz, dateStyle: 'medium', timeStyle: 'medium', hour12: false,
-    }).format(new Date(ms))
+    })
     const rows = conns.map(c =>
-      `<li data-conn="${esc(c.identityId)}">連線(最後活動 ${esc(fmtWall(c.updatedAt))} ${esc(deps.scheduleTz)})</li>`).join('')
+      `<li data-conn="${esc(c.identityId)}">連線(最後活動 ${esc(wallFmt.format(new Date(c.updatedAt)))} ${esc(deps.scheduleTz)})</li>`).join('')
     res.status(200).send(`<!doctype html><meta charset=utf-8><title>Claude 連線管理</title>
 <body style="font-family:sans-serif;max-width:640px;margin:2rem auto">
 <h1>Claude 連線管理</h1>
