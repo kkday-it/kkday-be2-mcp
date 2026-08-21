@@ -28,4 +28,7 @@ export class CredentialStore {
   countByIdentity(identityId: string): number {
     return (this.db.prepare('SELECT COUNT(*) c FROM credentials WHERE identity_id = ?').get(identityId) as { c: number }).c
   }
+  countByIdentityAndKind(identityId: string, kind: CredentialKind): number {
+    return (this.db.prepare('SELECT COUNT(*) c FROM credentials WHERE identity_id = ? AND kind = ?').get(identityId, kind) as { c: number }).c
+  }
 }

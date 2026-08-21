@@ -52,14 +52,26 @@ export class OAuthStore {
       VALUES (@refreshHash,@identityId,@clientId,@exp,@consumed,@accessCredHash)`)
       .run({ ...rec, accessCredHash: rec.accessCredHash ?? null })
   }
-  getRefresh(refreshHash: string): OAuthRefresh | undefined {
-    const r = this.db.prepare('SELECT * FROM oauth_refresh WHERE refresh_hash = ?').get(refreshHash) as Record<string, unknown> | undefined
-    if (!r) return undefined
+  private rowToRefresh(r: Record<string, unknown>): OAuthRefresh {
     return {
       refreshHash: r.refresh_hash as string, identityId: r.identity_id as string, clientId: r.client_id as string,
       exp: r.exp as number, consumed: r.consumed as number,
       accessCredHash: (r.access_cred_hash as string | null) ?? undefined,
     }
+  }
+
+  getRefresh(refreshHash: string): OAuthRefresh | undefined {
+    const r = this.db.prepare('SELECT * FROM oauth_refresh WHERE refresh_hash = ?').get(refreshHash) as Record<string, unknown> | undefined
+    return r ? this.rowToRefresh(r) : undefined
+  }
+
+  getRefreshByAccessCredHash(accessCredHash: string): OAuthRefresh | undefined {
+    const r = this.db.prepare('SELECT * FROM oauth_refresh WHERE access_cred_hash = ?').get(accessCredHash) as Record<string, unknown> | undefined
+    return r ? this.rowToRefresh(r) : undefined
+  }
+
+  countRefreshByIdentity(identityId: string): number {
+    return (this.db.prepare('SELECT COUNT(*) c FROM oauth_refresh WHERE identity_id = ?').get(identityId) as { c: number }).c
   }
   markRefreshConsumed(refreshHash: string): void {
     this.db.prepare('UPDATE oauth_refresh SET consumed = 1 WHERE refresh_hash = ?').run(refreshHash)

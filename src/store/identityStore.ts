@@ -5,12 +5,18 @@ export interface Identity {
 }
 export class IdentityStore {
   constructor(private db: Database.Database) {}
-  get(identityId: string): Identity | undefined {
-    const r = this.db.prepare('SELECT * FROM be2_identities WHERE identity_id = ?').get(identityId) as Record<string, unknown> | undefined
-    if (!r) return undefined
+  private rowToIdentity(r: Record<string, unknown>): Identity {
     return { identityId: r.identity_id as string, userLabel: r.user_label as string, accessToken: r.access_token as string,
       refreshToken: r.refresh_token as string, businessList: JSON.parse(r.business_list_json as string),
       accessExpiresAt: r.access_expires_at as number, updatedAt: r.updated_at as number }
+  }
+  get(identityId: string): Identity | undefined {
+    const r = this.db.prepare('SELECT * FROM be2_identities WHERE identity_id = ?').get(identityId) as Record<string, unknown> | undefined
+    return r ? this.rowToIdentity(r) : undefined
+  }
+  listByUserLabel(userLabel: string): Identity[] {
+    const rows = this.db.prepare('SELECT * FROM be2_identities WHERE lower(trim(user_label)) = lower(trim(?))').all(userLabel) as Array<Record<string, unknown>>
+    return rows.map(r => this.rowToIdentity(r))
   }
   upsert(rec: Identity): void {
     this.db.prepare(`INSERT INTO be2_identities (identity_id,user_label,access_token,refresh_token,business_list_json,access_expires_at,updated_at)
