@@ -5,6 +5,10 @@
 >
 > 追溯補記（2026-08-19 起才有本規則，先前的 spec 異動追溯登記於下）。
 
+## 2026-08-21
+
+- `2026-08-10-be2-mcp-phase3a-inventory-design.md` §0/§3/§4/§5(縮編記帳,spec 本文未改)/ 模組化重建後的現制 `inventorySetting` module 刻意縮窄為「fullday 絕對值 set」:`{item_oid, supplier_oid, quantity}`,**不含** 3a spec 的 `dates[]` 逐日、`op: set|adjust`、`would_go_negative`、per-date `partial`;安全護欄 busy guard、per-key mutex、AFTER_READ_FAILED 隔離**已移植保留**(`src/modules/product/inventorySetting/executor.ts`)。後端契約原生支援 per-date 與 adjust(`sit-write-contracts.md` §inventory:`remain_qty` 吃 `{date:{fullday|event:qty}}`、`modify_type 0`=add/subtract),故此為**產品範圍決策非技術限制** / 使用者拍板(2026-08-21):先縮編記帳,per-date/adjust 列 backlog 等 pilot 回饋(power-user 逐日批改形狀出現 = 回移觸發條件);詳見 `docs/be2-mcp/TODO-consolidated-2026-08-21.md` §F1。
+
 ## 2026-08-16
 
 - `2026-08-16-be2-mcp-modularization-design.md`（全檔，新建）/ Phase 5 模組化設計：ActionModule 介面 + registry、5 熱點收斂、純重構 DoD / 把「加一個 action_type 碰 8 檔」收斂成「一包 module 註冊」。
