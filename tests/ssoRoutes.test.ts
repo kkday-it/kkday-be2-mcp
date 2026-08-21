@@ -7,6 +7,8 @@ import { CredentialStore } from '../src/store/credentialStore.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 import { buildSsoRouter } from '../src/server/ssoRoutes.js'
 import { runLauncherScript } from './launcherHarness.js'
+import { OAuthStore } from '../src/oauth/oauthStore.js'
+import { AuditLog } from '../src/audit/auditLog.js'
 
 function fakeJwt(claims: object): string {
   const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url')
@@ -19,7 +21,7 @@ beforeEach(async () => {
   webSessions = new WebSessionStore(db, { now: () => 1000 })
   const jwt = fakeJwt({ authKey: 'approver@kkday.com', exp: Math.floor(Date.now() / 1000) + 3000 })
   const authServiceClient = { exchangeCode: async (_c: string) => ({ accessToken: jwt, refreshToken: 'r', businessList: [] }) } as never
-  const router = buildSsoRouter({ authServiceClient, identities, credentials, webSessions, authOrigin: 'https://auth-220.sit.kkday.com', now: () => 1000 })
+  const router = buildSsoRouter({ authServiceClient, identities, credentials, webSessions, authOrigin: 'https://auth-220.sit.kkday.com', now: () => 1000, oauthStore: new OAuthStore(db), audit: new AuditLog(db), tokenManager: ({ getFreshByCredHash: async () => { throw new Error('unused') } }) as never, baseOrigin: 'http://127.0.0.1:1' })
   const app = express(); app.use(express.json()); app.use(router)
   server = app.listen(0); await new Promise(r => server.on('listening', r as () => void))
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`

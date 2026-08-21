@@ -273,7 +273,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // matches routes in registration order, not by specificity — if the confirm router mounted
   // first, /confirm/:id would swallow /confirm/login (treating "login" as a change-set id) and
   // the login page would be unreachable. The SSO router MUST be mounted first.
-  app.use(buildSsoRouter({ authServiceClient, identities, credentials, webSessions, authOrigin, now: Date.now }))
+  app.use(buildSsoRouter({ authServiceClient, identities, credentials, webSessions, authOrigin, now: Date.now, oauthStore, tokenManager, audit, baseOrigin: baseUrl }))
   app.use(buildConfirmRouter({
     // Task 5: requireSession's credential-kind gate needs the same CredentialStore instance the
     // SSO router mints web_session credentials into — the shared `credentials` above (no
