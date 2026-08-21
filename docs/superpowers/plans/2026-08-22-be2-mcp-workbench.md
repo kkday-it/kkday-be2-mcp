@@ -202,7 +202,7 @@ export const shelfTogglePlanWizard: WizardDescriptor = {
   itemKey,
   buildItems(rows: WizardRowInput[], opts: { target?: string }): unknown[] {
     const active = opts.target === 'on'
-    return rows.filter(r => r.checked && r.pkg_oid).map(r => ({ prod_oid: r.prod_oid, pkg_oid: r.pkg_oid, target_is_active: active }))
+    return rows.filter(r => r.checked && r.pkg_oid && !r.is_bundle).map(r => ({ prod_oid: r.prod_oid, pkg_oid: r.pkg_oid, target_is_active: active }))
   },
   renderDiffCard: renderShelfCard,
 }
@@ -610,6 +610,8 @@ git commit -m "feat(workbench): 統一工作台面板(版型B)+註冊 ui:// reso
 
 **Files:**
 - Modify: `src/server/app.ts`（imports + `TOOLS` 陣列）
+- Modify: `tests/serverIntegration.test.ts`（既有測試 `client.listTools()` 斷言精確 TOOLS 清單、含舊兩個 wizard；**必須同步更新**：移除 `be2_open_batch_wizard` / `be2_open_announcement_wizard`、加 `be2_open_workbench`，否則 `npm run ci` 必爆）
+- Modify: `tests/toolAnnotations.test.ts`（其 `modelTools` 陣列寫死 `openBatchWizardTool`；換成 `openWorkbenchTool` 以單測新 tool 的 annotations）
 - Test: `tests/serverTools.test.ts`（若無則新建；斷言 TOOLS 名單）
 
 **Interfaces:**
@@ -640,6 +642,9 @@ Run: `npx vitest run tests/serverTools.test.ts`　Expected: FAIL（現況相反�
 - [ ] **Step 3: 實作**
 
 `src/server/app.ts`：加 `import { openWorkbenchTool } from '../tools/openWorkbench.js'`；`TOOLS` 陣列把 `openBatchWizardTool` / `openAnnouncementWizardTool` 兩行換成 `openWorkbenchTool as ToolDef`；移除那兩個 import。若 `TOOLS` 目前非 `export`，加 `export`（僅測試用途，不影響行為）。
+同步更新既有測試（否則 CI 爆）：
+- `tests/serverIntegration.test.ts`：找 `client.listTools()` 斷言的期望陣列，移除 `be2_open_batch_wizard` / `be2_open_announcement_wizard`、加入 `be2_open_workbench`。
+- `tests/toolAnnotations.test.ts`：把 `modelTools` 陣列裡的 `openBatchWizardTool` 換成 `openWorkbenchTool`（import 一併換）。
 
 - [ ] **Step 4: 跑測試 + 全綠 CI + build-ui + healthz 冒煙**
 
@@ -650,7 +655,7 @@ Run（冒煙）: 啟 dev server 後 `curl -s http://127.0.0.1:$BE2_MCP_PORT/heal
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/server/app.ts tests/serverTools.test.ts
+git add src/server/app.ts tests/serverTools.test.ts tests/serverIntegration.test.ts tests/toolAnnotations.test.ts
 git commit -m "feat(workbench): TOOLS 換上 be2_open_workbench,移除 batch/announcement 舊入口"
 ```
 
@@ -661,14 +666,15 @@ git commit -m "feat(workbench): TOOLS 換上 be2_open_workbench,移除 batch/ann
 新增工作台的 agent-eval 案例（仿既有 `eval/` 案例）。無 `ANTHROPIC_API_KEY` 時 `npm run eval` SKIP、不算失敗。
 
 **Files:**
-- Create/Modify: `eval/`（實作前 `ls eval/` 對齊既有案例檔格式）
+- Modify: `eval/run-eval.ts`（**必先修**：其 `tools` 陣列寫死 `openBatchWizardTool`、`SYSTEM` 提示提及 `be2_open_batch_wizard`；換成 `openWorkbenchTool` / `be2_open_workbench`，否則新案例的 model 拿不到工作台 tool、全數失敗）
+- Create/Modify: `eval/`（新增 4 案例；實作前對齊既有案例檔格式）
 
 **Interfaces:**
 - Produces: 4 個案例——(1) 上下架混方向被拒（單一方向）、(2) draft-only：未經批准不得宣稱完成、(3) scope-gate：未載入商品即 stage 被擋、(4) 公告：貼上 skill JSON→勾選語系→草稿（不直接寫）。
 
-- [ ] **Step 1: 對齊既有 eval 格式**
+- [ ] **Step 1: 修 run-eval.ts 的 tool 注入 + 對齊既有 eval 格式**
 
-Run: `ls eval/ && sed -n '1,40p' eval/*.ts 2>/dev/null | head -60`（了解案例 schema）。
+先讀 `eval/run-eval.ts`：把 `import { openBatchWizardTool }` 換成 `import { openWorkbenchTool }`、`tools` 陣列對應替換、`SYSTEM` 提示裡 `be2_open_batch_wizard` 改 `be2_open_workbench`。再讀既有案例檔了解 schema（案例陣列/斷言形狀）。
 
 - [ ] **Step 2: 新增 4 案例**（照既有格式，內容如上 Interfaces）
 
@@ -695,3 +701,5 @@ git commit -m "test(workbench): 新增 4 個工作台 eval 案例"
 ## 未竟項（帶進實作、非阻擋）
 
 見 spec §10：公告 startTime/endTime 時區語意、prodOids 陣列上限（若有上限，Task 7 Step 2 的公告送出改「按上限分塊多次 create」）、shelf_toggle_bundle live 寫入契約、live 寫入授權 403、名稱搜尋 v2。
+
+<!-- agy-peer-reviewed: 2026-08-21T17:18:06Z rounds=3 verdict=approved -->
