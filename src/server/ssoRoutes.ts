@@ -17,8 +17,9 @@ export interface SsoDeps {
   authServiceClient: AuthServiceClient; identities: IdentityStore; credentials: CredentialStore; webSessions: WebSessionStore
   authOrigin: string; now: () => number
   // A2(spec §7 接線):連線管理頁需要 —— oauthStore(連線判定/撤銷)、tokenManager(sessionGate)、
-  // audit(逐連線稽核)、baseOrigin(revoke-all 的 CSRF Origin 檢查基準)。
-  oauthStore: OAuthStore; tokenManager: TokenManager; audit: AuditLog; baseOrigin: string
+  // audit(逐連線稽核)、baseOrigin(revoke-all 的 CSRF Origin 檢查基準)、scheduleTz(「最後活動」
+  // 時間以人看的牆鐘時區渲染,不吐 UTC ISO——live 驗收回饋 2026-08-22)。
+  oauthStore: OAuthStore; tokenManager: TokenManager; audit: AuditLog; baseOrigin: string; scheduleTz: string
 }
 
 // Task 4: shared "exchangeCode -> minted identity" step, factored out of the POPUP /confirm/session
@@ -138,8 +139,11 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
     const conns = listConnections(who.userLabel)
     const revokedRaw = String(req.query.revoked ?? '')
     const notice = /^\d{1,4}$/.test(revokedRaw) ? `<p style="color:green">已斷開 ${revokedRaw} 條 Claude 連線。</p>` : ''
+    const fmtWall = (ms: number) => new Intl.DateTimeFormat('zh-TW', {
+      timeZone: deps.scheduleTz, dateStyle: 'medium', timeStyle: 'medium', hour12: false,
+    }).format(new Date(ms))
     const rows = conns.map(c =>
-      `<li data-conn="${esc(c.identityId)}">連線(最後活動 ${esc(new Date(c.updatedAt).toISOString())})</li>`).join('')
+      `<li data-conn="${esc(c.identityId)}">連線(最後活動 ${esc(fmtWall(c.updatedAt))} ${esc(deps.scheduleTz)})</li>`).join('')
     res.status(200).send(`<!doctype html><meta charset=utf-8><title>Claude 連線管理</title>
 <body style="font-family:sans-serif;max-width:640px;margin:2rem auto">
 <h1>Claude 連線管理</h1>

@@ -21,7 +21,7 @@ beforeEach(async () => {
   webSessions = new WebSessionStore(db, { now: () => 1000 })
   const jwt = fakeJwt({ authKey: 'approver@kkday.com', exp: Math.floor(Date.now() / 1000) + 3000 })
   const authServiceClient = { exchangeCode: async (_c: string) => ({ accessToken: jwt, refreshToken: 'r', businessList: [] }) } as never
-  const router = buildSsoRouter({ authServiceClient, identities, credentials, webSessions, authOrigin: 'https://auth-220.sit.kkday.com', now: () => 1000, oauthStore: new OAuthStore(db), audit: new AuditLog(db), tokenManager: ({ getFreshByCredHash: async () => { throw new Error('unused') } }) as never, baseOrigin: 'http://127.0.0.1:1' })
+  const router = buildSsoRouter({ authServiceClient, identities, credentials, webSessions, authOrigin: 'https://auth-220.sit.kkday.com', now: () => 1000, oauthStore: new OAuthStore(db), audit: new AuditLog(db), tokenManager: ({ getFreshByCredHash: async () => { throw new Error('unused') } }) as never, baseOrigin: 'http://127.0.0.1:1', scheduleTz: 'Asia/Taipei' })
   const app = express(); app.use(express.json()); app.use(router)
   server = app.listen(0); await new Promise(r => server.on('listening', r as () => void))
   base = `http://127.0.0.1:${(server.address() as { port: number }).port}`

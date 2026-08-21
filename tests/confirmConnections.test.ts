@@ -75,6 +75,9 @@ describe('/confirm/connections(spec §6)', () => {
     expect(html.match(/data-conn=/g)?.length).toBe(2)   // I1 + I2
     expect(html).toContain('斷開所有 Claude 連線')
     expect(html).toContain('static bearer')             // 邊界文案(spec §6.2)
+    // 「最後活動」以 scheduleTz 牆鐘渲染並標明時區,不吐 UTC ISO(live 驗收回饋 2026-08-22)
+    expect(html).toContain('Asia/Taipei')
+    expect(html).not.toMatch(/最後活動 \d{4}-\d{2}-\d{2}T/)
   })
   it('POST 無 Origin → 403;同 host 異 port Origin(含 harness 實際 port)→ 403;store 無變化', async () => {
     seedConnection('I1', 'u@kkday.com'); seedSession('sid1', 'I1')
