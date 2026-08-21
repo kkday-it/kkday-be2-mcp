@@ -7,6 +7,7 @@
 
 ## 2026-08-21
 
+- `2026-08-21-be2-mcp-logout-revoke-design.md`(全檔,新建)/ A2 登出/撤銷設計:RFC 7009 `POST /oauth/revoke`(grant 級撤銷 = identity 的 oauth_refresh family + oauth_access,保留 web_session)+ discovery 宣告 `revocation_endpoint` + `/confirm/connections` 連線管理頁(同 userLabel 橫跨 identity「斷開所有 Claude 連線」)/ OAuth 連線先前無使用者主動撤銷手段,只能等 30 天過期;方案 1 使用者拍板(2026-08-21),grant 級語義與既有 refresh-reuse family revoke 同形狀。
 - `2026-08-10-be2-mcp-phase3a-inventory-design.md` §0/§3/§4/§5(縮編記帳,spec 本文未改)/ 模組化重建後的現制 `inventorySetting` module 刻意縮窄為「fullday 絕對值 set」:`{item_oid, supplier_oid, quantity}`,**不含** 3a spec 的 `dates[]` 逐日、`op: set|adjust`、`would_go_negative`、per-date `partial`;安全護欄 busy guard、per-key mutex、AFTER_READ_FAILED 隔離**已移植保留**(`src/modules/product/inventorySetting/executor.ts`)。後端契約原生支援 per-date 與 adjust(`sit-write-contracts.md` §inventory:`remain_qty` 吃 `{date:{fullday|event:qty}}`、`modify_type 0`=add/subtract),故此為**產品範圍決策非技術限制** / 使用者拍板(2026-08-21):先縮編記帳,per-date/adjust 列 backlog 等 pilot 回饋(power-user 逐日批改形狀出現 = 回移觸發條件);詳見 `docs/be2-mcp/TODO-consolidated-2026-08-21.md` §F1。
 
 ## 2026-08-16
