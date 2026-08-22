@@ -106,6 +106,28 @@ npm run oauth-purge
 
 **建議排程**：仿 dev-tools 的 `oauth:purge` CronJob（`reference-dev-tools-architecture.md`），每日跑一次（例如 K8s CronJob 或本機 `cron`/`launchd`，Phase 1a 的 SIT 部署階段可先手動定期執行）。目前**不做** ghost `oauth_clients`（DCR 註冊但從未使用的孤兒 client）自動清理——需要一個寬限期判斷（避免砍掉剛註冊、還沒換過 token 的 client），複雜度較高、風險相對低，留待未來若有需要再補（見 `scripts/oauth-purge.ts` 檔頭註解）。
 
+## 使用者主動撤銷（A2，2026-08-21）
+
+兩個入口，同一個 grant 級撤銷語義（`src/oauth/revocation.ts` 的 `revokeGrant`：刪該 identity 的
+`oauth_refresh` 全家 + `oauth_access` credentials；`web_session`/`static_bearer` 不碰；identity 無引用即清）：
+
+1. **RFC 7009 `POST /oauth/revoke`**（公開端點，discovery 已宣告 `revocation_endpoint`）：
+   `token`（必填，access/refresh 皆可）、`token_type_hint`/`client_id` 選填。一律 200 空 body
+   （不洩漏 token 存在性）；`client_id` 有給且與紀錄不符視為 unknown（no-op）。
+2. **`/confirm/connections` 連線管理頁**：be2-auth SSO 登入後，列出同一 be2 帳號名下所有
+   Claude 連線，「斷開所有 Claude 連線」一鍵全撤（POST 有 Origin 同源檢查擋 localhost CSRF）。
+
+撤銷後的 client 端行為：Claude Code/Desktop 快取的 token 下次 tool call 撞 401 →
+依 `WWW-Authenticate` 自動重走 OAuth（需重新登入 be2）。DCR client 紀錄不受影響。
+邊界：這不等於 be2-web SSO 登出——auth-service 端 JWT 在 TTL（~50min）內仍有效；
+headless static bearer 也不受影響（生命週期歸 `bootstrap-user`/ops 管）。
+
+**Live 驗收（2026-08-22，真人 Claude Desktop 對 SIT :8787）：PASS**——實斷 2 條連線（audit 逐筆、
+store 全清、web_session 保留）→ Desktop 撞 401 → 自動 re-auth 換 token 成功、工具恢復；二輪重測亦過。
+**操作注意**：撤銷後若同時有多份 mcp-remote 副本（主對話 + Cowork/Code shared-pool），每份會**各自
+re-auth、同時跳多個授權分頁**；因共用同一 loopback callback port，**只能完成其中一個、其餘關掉**——
+兩個都登會互撞（code 換不走，見上方 mcp-remote SOP「舊分頁重放」同族行為）。
+
 ## 疑難排解
 
 | 症狀 | 原因 | 處理 |

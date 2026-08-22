@@ -6,10 +6,20 @@ import { CredentialStore } from '../store/credentialStore.js'
 import { WebSessionStore } from './webSessionStore.js'
 import { decodeJwtClaims, decodeJwtExpMs } from '../auth/jwt.js'
 import { parseCookies, serializeSetCookie } from './cookies.js'
+import type { AuditLog } from '../audit/auditLog.js'
+import type { OAuthStore } from '../oauth/oauthStore.js'
+import type { TokenManager } from '../auth/tokenManager.js'
+import { requireSession } from './sessionGate.js'
+import { revokeGrant } from '../oauth/revocation.js'
+import { esc } from '../core/changeset/html.js'
 
 export interface SsoDeps {
   authServiceClient: AuthServiceClient; identities: IdentityStore; credentials: CredentialStore; webSessions: WebSessionStore
   authOrigin: string; now: () => number
+  // A2(spec §7 接線):連線管理頁需要 —— oauthStore(連線判定/撤銷)、tokenManager(sessionGate)、
+  // audit(逐連線稽核)、baseOrigin(revoke-all 的 CSRF Origin 檢查基準)、scheduleTz(「最後活動」
+  // 時間以人看的牆鐘時區渲染,不吐 UTC ISO——live 驗收回饋 2026-08-22)。
+  oauthStore: OAuthStore; tokenManager: TokenManager; audit: AuditLog; baseOrigin: string; scheduleTz: string
 }
 
 // Task 4: shared "exchangeCode -> minted identity" step, factored out of the POPUP /confirm/session
@@ -114,5 +124,55 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
     res.setHeader('Set-Cookie', serializeSetCookie('be2mcp_sid', '', { httpOnly: true, sameSite: 'Lax', path: '/confirm', maxAgeSec: 0 }))
     res.status(200).send('logged out')
   }))
+
+  const gateDeps = { webSessions: deps.webSessions, credentials: deps.credentials, tokenManager: deps.tokenManager }
+  // 「Claude 連線」定義(spec §6.1):有至少一顆 oauth_access 或至少一列 oauth_refresh 的 identity。
+  const isConnection = (identityId: string): boolean =>
+    deps.oauthStore.countRefreshByIdentity(identityId) > 0 ||
+    deps.credentials.countByIdentityAndKind(identityId, 'oauth_access') > 0
+  const listConnections = (userLabel: string) =>
+    deps.identities.listByUserLabel(userLabel).filter(i => isConnection(i.identityId))
+
+  r.get('/confirm/connections', h(async (req, res) => {
+    const who = await requireSession(gateDeps, req)
+    if (!who) { res.redirect(302, `/confirm/login?next=${encodeURIComponent('/confirm/connections')}`); return }
+    const conns = listConnections(who.userLabel)
+    const revokedRaw = String(req.query.revoked ?? '')
+    const notice = /^\d{1,4}$/.test(revokedRaw) ? `<p style="color:green">已斷開 ${revokedRaw} 條 Claude 連線。</p>` : ''
+    const wallFmt = new Intl.DateTimeFormat('zh-TW', {
+      timeZone: deps.scheduleTz, dateStyle: 'medium', timeStyle: 'medium', hour12: false,
+    })
+    const rows = conns.map(c =>
+      `<li data-conn="${esc(c.identityId)}">連線(最後活動 ${esc(wallFmt.format(new Date(c.updatedAt)))} ${esc(deps.scheduleTz)})</li>`).join('')
+    res.status(200).send(`<!doctype html><meta charset=utf-8><title>Claude 連線管理</title>
+<body style="font-family:sans-serif;max-width:640px;margin:2rem auto">
+<h1>Claude 連線管理</h1>
+<p>帳號:${esc(who.userLabel)}</p>${notice}
+<p>目前共 ${conns.length} 條 Claude 連線:</p><ul>${rows}</ul>
+<form method="post" action="/confirm/connections/revoke-all">
+  <button type="submit" ${conns.length === 0 ? 'disabled' : ''}>斷開所有 Claude 連線</button></form>
+<p style="opacity:.7;font-size:.9em">斷開後 Claude 端需重新走 OAuth 登入;headless static bearer 不受此操作影響。</p>
+</body>`)
+  }))
+
+  r.post('/confirm/connections/revoke-all', h(async (req, res) => {
+    // CSRF(spec §6.2):SameSite 對 127.0.0.1 不分 port,同機異 port 可跨站 POST 這條固定路徑,
+    // 故要求 Origin 存在且完全等於自身 origin;絕不 fallback 到 Referer。
+    if (req.header('origin') !== deps.baseOrigin) { res.status(403).send('forbidden'); return }
+    const who = await requireSession(gateDeps, req)
+    if (!who) { res.status(403).send('forbidden'); return }
+    let n = 0
+    for (const conn of listConnections(who.userLabel)) {
+      revokeGrant(deps, conn.identityId)
+      deps.audit.record({
+        userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-connections',
+        tool: 'confirm_connections_revoke_all', params: { identity_id: conn.identityId },
+        status: 'ok', traceId: '-', durationMs: 0,
+      })
+      n++
+    }
+    res.redirect(303, `/confirm/connections?revoked=${n}`)
+  }))
+
   return r
 }

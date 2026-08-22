@@ -27,6 +27,7 @@ import { buildDiscoveryRouter } from '../oauth/discoveryRoutes.js'
 import { buildRegisterRouter } from '../oauth/registerRoutes.js'
 import { buildAuthorizeRouter } from '../oauth/authorizeRoutes.js'
 import { buildTokenRouter } from '../oauth/tokenRoutes.js'
+import { buildRevokeRouter } from '../oauth/revokeRoutes.js'
 import { OAuthStore } from '../oauth/oauthStore.js'
 import { registerAppResources } from './appResources.js'
 import { buildDevPanelRouter } from './devPanelRoutes.js'
@@ -265,12 +266,14 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // code 一次性、refresh rotation + reuse-detection family revoke）。公開端點（OAuth 2.1
   // public client 用 PKCE 取代 client secret 作身分驗證，不掛 bearer middleware）。
   app.use(buildTokenRouter({ oauthStore, credentials, identities, now: Date.now }))
+  // A2:RFC 7009 revocation——公開端點,與 token endpoint 同姿態(public client 持有 token 即授權)。
+  app.use(buildRevokeRouter({ oauthStore, credentials, identities, audit }))
   // CRITICAL route order (agy T4 finding): buildSsoRouter registers GET /confirm/login (+ POST
   // /confirm/session, /confirm/logout); buildConfirmRouter registers GET /confirm/:id. Express
   // matches routes in registration order, not by specificity — if the confirm router mounted
   // first, /confirm/:id would swallow /confirm/login (treating "login" as a change-set id) and
   // the login page would be unreachable. The SSO router MUST be mounted first.
-  app.use(buildSsoRouter({ authServiceClient, identities, credentials, webSessions, authOrigin, now: Date.now }))
+  app.use(buildSsoRouter({ authServiceClient, identities, credentials, webSessions, authOrigin, now: Date.now, oauthStore, tokenManager, audit, baseOrigin: baseUrl, scheduleTz: config.scheduleTz }))
   app.use(buildConfirmRouter({
     // Task 5: requireSession's credential-kind gate needs the same CredentialStore instance the
     // SSO router mints web_session credentials into — the shared `credentials` above (no
