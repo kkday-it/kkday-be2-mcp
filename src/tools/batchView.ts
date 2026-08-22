@@ -121,7 +121,9 @@ export async function buildBatchView(
     readOidSet.add(prodOid)
     const name = infoR.status === 'fulfilled' ? extractProductInfo(infoR.value).name : undefined
     let productIsActive: boolean | undefined
-    if (actionType.startsWith('shelf_toggle')) {
+    // 只有「立即上/下架」（shelf_toggle_product）用得到商品整體現況；plan/bundle 模式用方案層
+    // is_active（來自 package-configs），不必為每個商品多發一次 switch 讀取。
+    if (actionType === 'shelf_toggle_product') {
       try {
         const sw = await gateway.get(`/product/api/v1/product-configs/${oid}/switch`, accessToken) as Record<string, unknown>
         if (typeof sw?.is_active === 'boolean') productIsActive = sw.is_active

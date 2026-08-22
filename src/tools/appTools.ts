@@ -209,6 +209,9 @@ export const appGetAnnouncementViewTool: AppToolDef = {
     
     // 既有公告數：一次查全部 prod_oids，事後依 prod_oid 分組計數（免 N+1）。
     // best-effort：client 建不起來 / 查詢失敗 / 回傳項無法對應 prod_oid → 全部降級為 null（未知）。
+    // 已知取捨（best-effort、僅供「是否重建公告」的參考數字）：listByProdOids 固定 perPage=100，
+    // 這 100 筆上限由本批 ≤10 個 prod_oids 共用——跨商品公告總數 >100 時，靠後的商品可能低報；
+    // 且分組依賴回傳項帶 prod_oid/prodOid（live svc-b2c 形狀尚未實證）。真正跑 live 前需按實際形狀校準。
     let counts: Map<string, number> | null = null
     if (client) {
       try {

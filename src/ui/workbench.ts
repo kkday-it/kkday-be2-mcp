@@ -7,7 +7,7 @@
 // item 形狀（欄位名對齊 announcement-wizard.ts + announcement/create/module.ts itemSchema）。
 
 import { connectApp, renderText } from './panelShared.js'
-import { parseOidInput, splitBatches, ingestAnnouncement } from './workbenchLogic.js'
+import { parseOidInput, ingestAnnouncement } from './workbenchLogic.js'
 import { inventoryPlatformWizard } from '../modules/product/inventoryPlatform/ui.js'
 import { inventorySettingWizard } from '../modules/product/inventorySetting/ui.js'
 import { shelfScheduleWizard } from '../modules/product/shelfSchedule/ui.js'
@@ -869,6 +869,9 @@ export function initWorkbench(app: WizardApp): void {
 
       const items = wiz.buildItems(rowInputs, { target }) as Array<Record<string, unknown>>
       if (items.length === 0) { showFallback(fallbackEl, '請至少勾選一筆並填妥必要欄位'); return }
+      // 單一 change-set 上限 20 筆（server createChangesetCore 的硬性 zod .max(20)）。超過時明確擋下
+      // 並請使用者分批，而非讓 server 端 zod 丟出難懂的錯誤。（自動拆成多個 change-set 的流程未實作。）
+      if (items.length > 20) { showFallback(fallbackEl, `本次共 ${items.length} 筆，一次最多送出 20 筆；請減少勾選後分批送出。`); return }
 
       clearFallback(fallbackEl)
       statusEl.textContent = '建立變更中…'
@@ -1175,10 +1178,10 @@ export function initWorkbench(app: WizardApp): void {
       }
     }
 
-    // splitBatches display
+    // 本次批次筆數（已在 doNextBatch 以 ≤20 為前提擋過，此處恆為單一 change-set）
     const batchSummary = document.createElement('div')
     batchSummary.style.cssText = 'font-size:.875rem;color:var(--bw-muted);margin-bottom:.75rem'
-    renderText(batchSummary, `本次 = ${currentDiffItems.length} 筆變更，${currentDiffItems.length > 20 ? `將拆成 ${Math.ceil(currentDiffItems.length / 20)} 個 change-set` : '1 個 change-set'}`)
+    renderText(batchSummary, `本次 = ${currentDiffItems.length} 筆變更（1 個 change-set）`)
     workspaceEl.appendChild(batchSummary)
 
     // Diff cards
