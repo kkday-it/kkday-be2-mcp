@@ -7,7 +7,7 @@
 // item 形狀（欄位名對齊 announcement-wizard.ts + announcement/create/module.ts itemSchema）。
 
 import { connectApp, renderText } from './panelShared.js'
-import { parseOidInput, ingestAnnouncement } from './workbenchLogic.js'
+import { parseOidInput, buildActionChunks, ingestAnnouncement } from './workbenchLogic.js'
 import { inventoryPlatformWizard } from '../modules/product/inventoryPlatform/ui.js'
 import { inventorySettingWizard } from '../modules/product/inventorySetting/ui.js'
 import { shelfScheduleWizard } from '../modules/product/shelfSchedule/ui.js'
@@ -374,6 +374,12 @@ export function initWorkbench(app: WizardApp): void {
   let currentDiffVersion: string | undefined
   let currentDiffItems: Array<Record<string, unknown>> = []
   let lastViewRec: Record<string, unknown> | undefined
+
+  // 多 change-set 拆批執行狀態：>20 筆會用 splitBatches 拆成多個 change-set，逐批
+  // create→view→confirm；accumChunkResults 跨批彙總，最後一批批准後一次呈現全部結果。
+  let pendingChunks: Array<{ action_type: string; items: Array<Record<string, unknown>> }> = []
+  let chunkIndex = 0
+  let accumChunkResults: Array<Record<string, unknown>> = []
 
   // product data rows
   let rows: RowState[] = []
@@ -869,29 +875,40 @@ export function initWorkbench(app: WizardApp): void {
 
       const items = wiz.buildItems(rowInputs, { target }) as Array<Record<string, unknown>>
       if (items.length === 0) { showFallback(fallbackEl, '請至少勾選一筆並填妥必要欄位'); return }
-      // 單一 change-set 上限 20 筆（server createChangesetCore 的硬性 zod .max(20)）。超過時明確擋下
-      // 並請使用者分批，而非讓 server 端 zod 丟出難懂的錯誤。（自動拆成多個 change-set 的流程未實作。）
-      if (items.length > 20) { showFallback(fallbackEl, `本次共 ${items.length} 筆，一次最多送出 20 筆；請減少勾選後分批送出。`); return }
 
-      clearFallback(fallbackEl)
-      statusEl.textContent = '建立變更中…'
-      try {
-        const createR = await app.callServerTool({
-          name: 'app_create_changeset',
-          arguments: { action_type: serverActionType(currentSubMode), items },
-        })
-        if (createR.isError) {
-          const errText = tryParseErrorText(createR)
-          showFallback(fallbackEl, errText ? `建立變更失敗：${errText}` : '建立變更失敗'); return
-        }
-        const created = createR.structuredContent?.items?.[0] as { changeset_id?: string } | undefined
-        if (!created?.changeset_id) { showFallback(fallbackEl, '建立變更失敗：未取得 changeset_id'); return }
-        changesetId = created.changeset_id
-        const rec = await loadView()
-        if (!rec) return
-        renderStep2(rec)
-      } catch (e) { showFallback(fallbackEl, '建立變更失敗：' + String(e)) }
+      // server createChangesetCore 每個 change-set 硬上限 20 筆 → 用 splitBatches 拆成多個 change-set，
+      // 逐批 create→view→confirm。此 submode 只有單一 action_type，splitBatches 的分組在此為單組；
+      // 用它以對齊 plan/測試。tag action_type 供 splitBatches 分組，送出前再剝除（server itemSchema 不收多餘鍵）。
+      pendingChunks = buildActionChunks(items, serverActionType(currentSubMode), 20)
+      chunkIndex = 0
+      accumChunkResults = []
+      await stageChunk()
     }
+  }
+
+  // 建立並檢視當前批（pendingChunks[chunkIndex]）——batch 與 announcement 共用。
+  async function stageChunk(): Promise<void> {
+    const chunk = pendingChunks[chunkIndex]
+    if (!chunk) { showFallback(fallbackEl, '無可送出的變更'); return }
+    clearFallback(fallbackEl)
+    statusEl.textContent = pendingChunks.length > 1
+      ? `建立第 ${chunkIndex + 1}/${pendingChunks.length} 批變更中…` : '建立變更中…'
+    try {
+      const createR = await app.callServerTool({
+        name: 'app_create_changeset',
+        arguments: { action_type: chunk.action_type, items: chunk.items },
+      })
+      if (createR.isError) {
+        const errText = tryParseErrorText(createR)
+        showFallback(fallbackEl, errText ? `建立變更失敗：${errText}` : '建立變更失敗'); return
+      }
+      const created = createR.structuredContent?.items?.[0] as { changeset_id?: string } | undefined
+      if (!created?.changeset_id) { showFallback(fallbackEl, '建立變更失敗：未取得 changeset_id'); return }
+      changesetId = created.changeset_id
+      const rec = await loadView()
+      if (!rec) return
+      renderStep2(rec)
+    } catch (e) { showFallback(fallbackEl, '建立變更失敗：' + String(e)) }
   }
 
   // =====================================================================
@@ -1072,24 +1089,11 @@ export function initWorkbench(app: WizardApp): void {
         langs,
         contents,
       }
-      clearFallback(fallbackEl)
-      statusEl.textContent = '建立變更中…'
-      try {
-        const createR = await app.callServerTool({
-          name: 'app_create_changeset',
-          arguments: { action_type: 'announcement', items: [item] },
-        })
-        if (createR.isError) {
-          const errText = tryParseErrorText(createR)
-          showFallback(fallbackEl, errText ? `建立變更失敗：${errText}` : '建立變更失敗'); return
-        }
-        const created = createR.structuredContent?.items?.[0] as { changeset_id?: string } | undefined
-        if (!created?.changeset_id) { showFallback(fallbackEl, '建立變更失敗：未取得 changeset_id'); return }
-        changesetId = created.changeset_id
-        const rec = await loadView()
-        if (!rec) return
-        renderStep2(rec)
-      } catch (e) { showFallback(fallbackEl, '建立變更失敗：' + String(e)) }
+      // 公告一律單一 change-set（一筆 item 內含所有 prod_oids）；走同一套 stageChunk/批准流程。
+      pendingChunks = [{ action_type: 'announcement', items: [item as unknown as Record<string, unknown>] }]
+      chunkIndex = 0
+      accumChunkResults = []
+      await stageChunk()
     }
   }
 
@@ -1178,10 +1182,12 @@ export function initWorkbench(app: WizardApp): void {
       }
     }
 
-    // 本次批次筆數（已在 doNextBatch 以 ≤20 為前提擋過，此處恆為單一 change-set）
+    // 批次進度：>20 筆會拆成多個 change-set 逐批批准，此處標示第幾批 / 共幾批。
     const batchSummary = document.createElement('div')
     batchSummary.style.cssText = 'font-size:.875rem;color:var(--bw-muted);margin-bottom:.75rem'
-    renderText(batchSummary, `本次 = ${currentDiffItems.length} 筆變更（1 個 change-set）`)
+    renderText(batchSummary, pendingChunks.length > 1
+      ? `第 ${chunkIndex + 1}/${pendingChunks.length} 批 · 本批 ${currentDiffItems.length} 筆（總筆數超過 20，已拆成 ${pendingChunks.length} 個 change-set 逐批批准）`
+      : `本次 = ${currentDiffItems.length} 筆變更（1 個 change-set）`)
     workspaceEl.appendChild(batchSummary)
 
     // Diff cards
@@ -1262,7 +1268,14 @@ export function initWorkbench(app: WizardApp): void {
       if (err?.code === 'DIFF_STALE') { renderStaleNotice(); return }
       if (err) { showFallback(fallbackEl, `批准失敗：${err.code ?? ''} ${err.message ?? ''}`); return }
       const rec = (env?.items?.[0] as { results?: unknown[] } | undefined) ?? {}
-      renderStep4((rec.results as Array<Record<string, unknown>> | undefined) ?? [])
+      accumChunkResults.push(...((rec.results as Array<Record<string, unknown>> | undefined) ?? []))
+      if (chunkIndex < pendingChunks.length - 1) {
+        // 還有下一批：建立並檢視下一個 change-set（逐批 create→view→confirm）。
+        chunkIndex++
+        await stageChunk()
+      } else {
+        renderStep4(accumChunkResults)
+      }
     } catch (e) { showFallback(fallbackEl, '送出失敗：' + String(e)) }
   }
 

@@ -1,6 +1,6 @@
 // tests/workbenchLogic.test.ts
 import { describe, it, expect } from 'vitest'
-import { parseOidInput, splitBatches, ingestAnnouncement } from '../src/ui/workbenchLogic.js'
+import { parseOidInput, splitBatches, buildActionChunks, ingestAnnouncement } from '../src/ui/workbenchLogic.js'
 
 describe('parseOidInput', () => {
   it('多分隔 + 去重 + 去空', () => {
@@ -22,6 +22,25 @@ describe('splitBatches', () => {
     const b = splitBatches(items as never, 20)
     expect(b).toHaveLength(2)
     expect(b[0].items).toHaveLength(20); expect(b[1].items).toHaveLength(5)
+  })
+})
+describe('buildActionChunks', () => {
+  it('45 筆 → 3 個 change-set 批次 [20,20,5]，且 items 不帶 action_type 標記、原欄位保留', () => {
+    const items = Array.from({ length: 45 }, (_, i) => ({ prod_oid: String(i), target_is_active: false }))
+    const chunks = buildActionChunks(items, 'shelf_toggle_product', 20)
+    expect(chunks.map(c => c.items.length)).toEqual([20, 20, 5])
+    expect(chunks.every(c => c.action_type === 'shelf_toggle_product')).toBe(true)
+    // 送出前必須剝除 tag：server itemSchema 為 strict，多餘 action_type 鍵會被 zod 拒絕
+    expect(chunks[0].items[0]).toEqual({ prod_oid: '0', target_is_active: false })
+    expect(chunks[0].items[0]).not.toHaveProperty('action_type')
+  })
+  it('≤cap → 單一批次', () => {
+    const chunks = buildActionChunks([{ item_oid: '1', quantity: 5 }], 'inventory_setting', 20)
+    expect(chunks).toHaveLength(1)
+    expect(chunks[0].items).toEqual([{ item_oid: '1', quantity: 5 }])
+  })
+  it('空 items → 空批次陣列', () => {
+    expect(buildActionChunks([], 'shelf_toggle_product', 20)).toEqual([])
   })
 })
 describe('ingestAnnouncement', () => {
