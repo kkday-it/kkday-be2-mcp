@@ -1,10 +1,21 @@
-// src/ui/workbench.ts — 統一工作台面板（版型 B）。左功能列（上下架/庫存/公告）→ 次模式 →
-// 商品載入 → 多商品 tab → 步驟條（選擇→檢視→批准→結果）→ 拆批 → 批准。
-// 結構移植自 batch-wizard.ts（host bridge、STYLE 常數、step bar、多商品 tab、callServerTool
-// 序列、DIFF_STALE 重載），行為對齊 prototype workbench-prototype.html 版型 B。
+// src/ui/workbench.ts — be2 統一工作台面板（版型 B）。
 //
-// 各次模式組合對應 WizardDescriptor 的 buildItems / renderDiffCard；公告走 announcement 專屬
-// item 形狀（欄位名對齊 announcement-wizard.ts + announcement/create/module.ts itemSchema）。
+// 版型 B 結構：左側「深色」導覽列（商品上下架 / 商品庫存 / 商品公告）＋ 品牌 ＋ 身分頁腳；
+// 主區為步驟條（選擇→檢視→批准→結果，可回退）。選擇頁為兩欄：左編輯區 + 右「本次變更」
+// 常駐即時摘要（大數字 + 依商品可折疊清單 + 檢視全部）。
+//
+// 上下架採「單一方向」分段（全部上架/全部下架）+ 多商品頁籤 + 單一整合清單（整個商品列 + 各方案列
+// 同框）+ 底部全域「排程」勾選 + 時間。庫存保留「逐日數量」與「平台切換」兩子模式（小分段切換）。
+//
+// 真實工具 wiring（沿用、未 mock）：connectApp host bridge、app_get_batch_view（載入商品→方案+現況）、
+// app_create_changeset（建 draft）、app_get_changeset_view（diff+nonce）、app_confirm_changeset（nonce 批准）、
+// buildActionChunks（>20 筆拆多個 change-set，逐批 create→view→confirm）、各 module 的 WizardDescriptor
+// （buildItems/renderDiffCard/itemKey）、公告 item 形狀（AnnouncementCreateItem + announcementItemKey）、
+// resultNameByKey（結果 item_key → 商品名·方案名）、parseOidInput/ingestAnnouncement、toUtcDateTime。
+//
+// 上下架 → 後端 action_type 路由：整個商品→shelf_toggle_product；一般方案→shelf_toggle_plan；
+// 組合方案(is_bundle)→shelf_toggle_bundle（各自一組 change-set）；全域排程 ON → 只有一般方案可排程 →
+// shelf_schedule（單一時間轉成一筆 reserve_queue {reserve_date_utc, reserve_status: 方向==上架}）。
 
 import { connectApp, renderText } from './panelShared.js'
 import { parseOidInput, buildActionChunks, ingestAnnouncement } from './workbenchLogic.js'
@@ -18,57 +29,27 @@ import type { WizardDescriptor, WizardRowInput, DomHelpers } from '../core/chang
 import type { AnnouncementCreateItem } from '../core/changeset/types.js'
 
 // ---------------------------------------------------------------------------
-// Types
+// Types & constants
 // ---------------------------------------------------------------------------
 
 type FuncKey = 'shelf' | 'inventory' | 'announce'
-type SubMode =
-  | 'shelf_toggle_product' | 'shelf_toggle_bundle' | 'shelf_schedule'
-  | 'shelf_toggle_plan'
-  | 'inventory_setting' | 'inventory_platform'
-  | 'announcement'
+type InvMode = 'inventory_setting' | 'inventory_platform'
+type ChunkActionType =
+  | 'shelf_toggle_product' | 'shelf_toggle_plan' | 'shelf_toggle_bundle' | 'shelf_schedule'
+  | 'inventory_setting' | 'inventory_platform' | 'announcement'
 
-interface FuncDesc {
-  key: FuncKey
-  label: string
-  subLabel: string
-  subModes: Array<{ key: SubMode; label: string }>
-  risk?: string
-}
-
+interface FuncDesc { key: FuncKey; label: string; sub: string; risk: string }
 const FUNCS: FuncDesc[] = [
-  {
-    key: 'shelf', label: '商品上下架', subLabel: '商品 / 方案（含組合方案）',
-    risk: '方案或商品上下架會即時改變前台可售並清快取。',
-    // 次模式由「對象 × 時機」兩軸取代（見 renderSubModes 的 shelf 分支）；此陣列僅保留 nav 預設用。
-    subModes: [
-      { key: 'shelf_toggle_product', label: '立即上 / 下架' },
-    ],
-  },
-  {
-    key: 'inventory', label: '商品庫存', subLabel: '逐日數量 / 平台切換',
-    risk: '庫存寫入會即時反映前台可售並清 cache。',
-    subModes: [
-      { key: 'inventory_setting', label: '逐日數量' },
-      { key: 'inventory_platform', label: '平台切換' },
-    ],
-  },
-  {
-    key: 'announce', label: '商品公告', subLabel: '公告內容',
-    subModes: [
-      { key: 'announcement', label: '公告' },
-    ],
-  },
+  { key: 'shelf', label: '商品上下架', sub: '商品 / 方案 · 排程', risk: '方案或商品上下架會即時改變前台可售並清快取。' },
+  { key: 'inventory', label: '商品庫存', sub: '逐日數量 / 平台切換', risk: '庫存寫入會即時反映前台可售並清 cache。' },
+  { key: 'announce', label: '商品公告', sub: '公告內容 · 多語系', risk: '' },
 ]
 
-// action_type sent to server tools — for announcement we use 'announcement'
-function serverActionType(sm: SubMode): string {
-  if (sm === 'announcement') return 'announcement'
-  return sm
-}
+const STEP_LABELS = ['選擇', '檢視', '批准', '結果']
+const BATCH_CAP = 20
 
-// Map sub-modes to WizardDescriptors (announcement has none — it builds items directly)
-const WIZARDS: Partial<Record<SubMode, WizardDescriptor>> = {
+// WizardDescriptor per non-announcement action_type
+const WIZARDS: Partial<Record<ChunkActionType, WizardDescriptor>> = {
   shelf_toggle_product: shelfToggleProductWizard,
   shelf_toggle_plan: shelfTogglePlanWizard,
   shelf_toggle_bundle: shelfToggleBundleWizard,
@@ -92,24 +73,22 @@ function toUtcDateTime(dateStr: string, timeStr: string, tz: string): string {
   return res
 }
 
-function formatDualDisplay(reserveDateUtc: string, tz: string): string {
+function formatDualDisplay(reserveDateUtc: string, tz: string): { local: string; utc: string } {
   const offset = TZ_OFFSET_HOURS[tz] ?? 0
   const ms = Date.parse(reserveDateUtc.replace(' ', 'T') + 'Z')
-  if (Number.isNaN(ms)) return reserveDateUtc
+  if (Number.isNaN(ms)) return { local: reserveDateUtc, utc: '' }
   const local = new Date(ms + offset * 3600_000)
-  const localStr = `${local.getUTCFullYear()}-${pad2(local.getUTCMonth() + 1)}-${pad2(local.getUTCDate())} ${pad2(local.getUTCHours())}:${pad2(local.getUTCMinutes())}:${pad2(local.getUTCSeconds())}`
+  const localStr = `${local.getUTCFullYear()}-${pad2(local.getUTCMonth() + 1)}-${pad2(local.getUTCDate())} ${pad2(local.getUTCHours())}:${pad2(local.getUTCMinutes())}`
   const sign = offset >= 0 ? '+' : '-'
-  return `${localStr} (GMT${sign}${Math.abs(offset)}) / ${reserveDateUtc} UTC`
+  return { local: `${localStr} (GMT${sign}${Math.abs(offset)})`, utc: `${reserveDateUtc} UTC` }
 }
 
 const PLATFORM_LABELS: Record<string, string> = {
-  BE2: 'BE2 管理',
-  BE2_SCM: 'BE2 / SCM 管理',
-  EXTERNAL: '串接外部庫存（包含 rezio）',
+  BE2: 'BE2 管理', BE2_SCM: 'BE2 / SCM 管理', EXTERNAL: '串接外部庫存（含 rezio）',
 }
 const platformLabel = (v: string | null | undefined): string => (v == null ? '無法讀取' : (PLATFORM_LABELS[v] ?? v))
 
-// 公告 15 語系（對齊 prototype ANN_LOCALES 與 kkday-announcement-translate skill 契約）
+// 公告 15 語系（對齊 kkday-announcement-translate skill 契約；順序照 canonical）
 const ANN_LOCALES: Array<{ code: string; name: string }> = [
   { code: 'zh-tw', name: '繁體中文（台灣）' }, { code: 'zh-hk', name: '繁體中文（香港）' },
   { code: 'zh-cn', name: '简体中文' }, { code: 'zh-my', name: '简体中文（马来西亚）' },
@@ -120,152 +99,146 @@ const ANN_LOCALES: Array<{ code: string; name: string }> = [
 ]
 
 // ---------------------------------------------------------------------------
-// Style — injected once, same pattern as batch-wizard.ts
+// Style — ported from workbench-prototype.html (版型 B), injected once.
 // ---------------------------------------------------------------------------
-
 const STYLE = `
-:root{--bw-tint:#0A84FF;--bw-danger:#FF3B30;--bw-text:#1d1d1f;--bw-muted:#6e6e73;--bw-border:rgba(0,0,0,.08);--bw-bg-page:#f5f5f7}
-*{box-sizing:border-box}
-[hidden]{display:none!important}
-html,body{background:var(--bw-bg-page)}
-body{font:100%/1.5 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--bw-text);max-width:760px;margin:0 auto;padding:1.5rem 1.25rem 3rem}
-#status{font-size:.8125rem;color:var(--bw-muted);margin-bottom:.5rem}
-
-/* ---- nav: function list ---- */
-.wb-nav{display:flex;gap:.5rem;margin-bottom:1rem;flex-wrap:wrap}
-.wb-nav-btn{display:flex;flex-direction:column;gap:2px;padding:.625rem 1rem;border-radius:10px;border:1px solid var(--bw-border);background:#fff;cursor:pointer;text-align:left;font-family:inherit;transition:background-color 120ms}
-.wb-nav-btn:hover{background:var(--bw-bg-page)}
-.wb-nav-btn[aria-pressed=true]{background:var(--bw-tint);color:#fff;border-color:var(--bw-tint)}
-.wb-nav-btn[aria-pressed=true]:hover{background:#0974e0}
-.wb-nav-title{font-weight:600;font-size:.875rem}
-.wb-nav-sub{font-size:.75rem;opacity:.72}
-.wb-nav-btn:disabled{opacity:.4;cursor:not-allowed}
-
-/* ---- sub-mode pills ---- */
-.wb-submodes{display:flex;gap:4px;margin-bottom:1rem;flex-wrap:wrap}
-.wb-submode{padding:.375rem .875rem;border-radius:999px;border:1px solid var(--bw-border);background:#fff;cursor:pointer;font:inherit;font-size:.8125rem;font-weight:600;color:var(--bw-muted);transition:120ms}
-.wb-submode:hover{background:var(--bw-bg-page)}
-.wb-submode[aria-pressed=true]{background:var(--bw-tint);color:#fff;border-color:var(--bw-tint)}
-
-/* ---- step progress ---- */
-.bw-progress{display:flex;align-items:center;margin:0 0 1.5rem}
-.bw-step{display:flex;flex-direction:column;align-items:center;gap:.25rem;flex:0 0 auto}
-.bw-step-circle{width:1.75rem;height:1.75rem;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.8125rem;font-weight:600;border:1.5px solid #d2d2d7;color:var(--bw-muted);background:#fff;transition:150ms}
-.bw-step-current .bw-step-circle{border-color:var(--bw-tint);color:var(--bw-tint)}
-.bw-step-done .bw-step-circle{background:var(--bw-tint);border-color:var(--bw-tint);color:#fff}
-.bw-step-label{font-size:.75rem;color:var(--bw-muted);white-space:nowrap}
-.bw-step-current .bw-step-label{color:var(--bw-text);font-weight:600}
-.bw-connector{flex:1 1 auto;height:1.5px;background:#d2d2d7;margin:0 .25rem 1.1rem;transition:150ms}
-.bw-connector-done{background:var(--bw-tint)}
-
-/* ---- cards ---- */
-.bw-card{background:#fff;border:1px solid var(--bw-border);border-radius:14px;box-shadow:0 1px 2px rgba(0,0,0,.04),0 4px 12px rgba(0,0,0,.04);padding:1rem 1.125rem;margin-bottom:1rem}
-.bw-card-title{font-size:.8125rem;font-weight:600;color:var(--bw-muted);margin:0 0 .625rem;text-transform:uppercase;letter-spacing:.02em}
-.bw-row-inline{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
-.bw-row-footer{display:flex;justify-content:flex-end;align-items:center;gap:.75rem}
-
-/* ---- tabs ---- */
-.bw-tabbar{display:inline-flex;gap:2px;margin-bottom:1rem;padding:3px;background:#e5e5ea;border-radius:10px;overflow-x:auto;max-width:100%}
-.bw-tab{display:flex;flex-direction:column;gap:.125rem;padding:.375rem 1rem;border-radius:7px;cursor:pointer;border:none;background:transparent;text-align:center;font-family:inherit;color:var(--bw-muted);transition:150ms}
-.bw-tab:hover{background:rgba(0,0,0,.04)}
-.bw-tab-active{background:#fff;color:var(--bw-tint);box-shadow:0 1px 3px rgba(0,0,0,.12),0 1px 2px rgba(0,0,0,.04)}
-.bw-tab-active:hover{background:#fff}
-.bw-tab-danger{color:var(--bw-danger)}
-.bw-tab-active.bw-tab-danger{color:var(--bw-danger)}
-.bw-tab-name{font-size:.8125rem;font-weight:600;color:inherit}
-.bw-tab-oid{font-size:.6875rem;opacity:0.8;color:inherit}
-.bw-not-found-msg{padding:1rem .5rem;color:var(--bw-danger);font-size:.875rem;text-align:center}
-
-/* ---- inputs ---- */
-.bw-input,.bw-select{height:2rem;padding:0 .625rem;border-radius:8px;border:1px solid rgba(0,0,0,.14);font:inherit;font-size:.875rem;background:#fff;color:var(--bw-text)}
-textarea.bw-input{height:auto;padding:.375rem .625rem}
-.bw-input:focus-visible,.bw-select:focus-visible{outline:2px solid var(--bw-tint);outline-offset:1px;border-color:var(--bw-tint)}
-.bw-input:disabled,.bw-select:disabled{opacity:.5;cursor:not-allowed;background:#f5f5f7}
-input.bw-input[type=text]{flex:1 1 auto;min-width:8rem}
-input.bw-input[type=number]{width:4.5rem}
-
-/* ---- buttons ---- */
-.bw-btn{height:2rem;padding:0 1.1rem;border-radius:8px;border:1px solid transparent;font:inherit;font-size:.875rem;font-weight:500;cursor:pointer;transition:120ms}
-.bw-btn:active{transform:scale(0.97)}
-.bw-btn-primary{background:var(--bw-tint);color:#fff}
-.bw-btn-primary:hover{background:#0974e0}
-.bw-btn-secondary{background:#f0f0f2;color:var(--bw-text)}
-.bw-btn-secondary:hover{background:#e5e5ea}
-
-/* ---- plan table ---- */
-.bw-table-toolbar{display:flex;gap:.5rem;margin-bottom:.75rem}
-.bw-radio-bar{display:flex;gap:1rem;margin-bottom:.75rem;font-size:.875rem}
-.bw-radio-bar label{display:flex;align-items:center;gap:.35rem}
-.bw-plan-row,.bw-plan-head{display:grid;grid-template-columns:1.5rem 1fr 6.5rem 8.5rem 6rem;align-items:center;gap:.75rem;padding:.5rem .25rem;border-radius:8px;transition:120ms}
-.bw-plan-head{font-size:.75rem;color:var(--bw-muted);font-weight:600;padding-bottom:.5rem;border-bottom:1px solid var(--bw-border);margin-bottom:.25rem}
-.bw-plan-row:hover{background:#f5f5f7}
-.bw-plan-row-checked{background:rgba(10,132,255,.08)}
-.bw-plan-row-bundle{opacity:.55}
-.bw-plan-name{display:flex;flex-direction:column;gap:.125rem;min-width:0}
-.bw-plan-name-top{display:flex;align-items:center;gap:.375rem}
-.bw-plan-name-oid{font-size:.75rem;color:var(--bw-muted)}
-.bw-bundle-tag{font-size:.6875rem;color:var(--bw-muted);background:#f0f0f2;padding:.05rem .4rem;border-radius:6px}
-.bw-co-badge{font-size:.6875rem;background:rgba(10,132,255,.12);color:var(--bw-tint);padding:.1rem .5rem;border-radius:999px;justify-self:start}
-.bw-status-badge{display:flex;align-items:center;gap:.375rem;font-size:.8125rem}
-.bw-dot{width:.5rem;height:.5rem;border-radius:50%;flex:0 0 auto}
-.bw-dot-green{background:#34c759}
-.bw-dot-red{background:var(--bw-danger)}
-.bw-dot-gray{background:#c7c7cc}
-.bw-plan-row-wrapper{display:flex;flex-direction:column;margin-bottom:.25rem}
-.bw-detail-row{padding:.5rem 1rem .5rem 2.5rem;font-size:.8125rem;color:var(--bw-muted);background:rgba(10,132,255,.04);border-radius:0 0 8px 8px;margin-top:-4px}
-.bw-target-preview{color:var(--bw-tint);font-weight:500}
-.bw-preview-noop{color:var(--bw-muted);font-weight:400}
-.bw-detail-muted{color:#a1a1a6}
-.bw-ext-warning{margin-top:.5rem;font-size:.8125rem;color:#b8281f;background:rgba(255,59,48,.1);padding:.375rem .75rem;border-radius:6px}
-
-/* ---- direction bar (shelf toggle forced single direction) ---- */
-.wb-dirbar{display:flex;gap:.75rem;align-items:center;margin-bottom:.75rem;flex-wrap:wrap}
-.wb-seg{display:inline-flex;background:#e5e5ea;border-radius:999px;padding:3px}
-.wb-seg button{border:0;background:transparent;padding:.375rem 1rem;border-radius:999px;font-weight:600;font-size:.8125rem;color:var(--bw-muted);cursor:pointer}
-.wb-seg button[aria-pressed=true]{background:#fff;color:var(--bw-text);box-shadow:0 1px 2px rgba(0,0,0,.12)}
-
-/* ---- banners ---- */
-.bw-banner{border-radius:10px;padding:.625rem .875rem;font-size:.875rem;margin-bottom:1rem}
-.bw-banner-danger{background:rgba(255,59,48,.1);color:#b8281f}
-.bw-banner-warn{background:rgba(255,159,10,.12);color:#b35900}
-
-/* ---- diff cards ---- */
-.bw-diff-card{padding:.625rem 0;border-bottom:1px solid var(--bw-border)}
-.bw-diff-card:last-child{border-bottom:none}
-.bw-diff-title{font-size:.875rem;font-weight:600;margin-bottom:.375rem}
-.bw-diff-row{display:flex;align-items:center;gap:.625rem;flex-wrap:wrap}
-.bw-diff-arrow{color:var(--bw-muted)}
-.bw-diff-target{font-weight:600;color:var(--bw-tint)}
-.bw-diff-side{display:flex;flex-direction:column;gap:.375rem}
-.bw-queue-line{display:flex;flex-direction:column}
-.bw-time-local{font-size:.875rem}
-.bw-time-utc{font-size:.75rem;color:var(--bw-muted);font-family:ui-monospace,SFMono-Regular,monospace}
-.bw-queue-empty{font-size:.8125rem;color:var(--bw-muted)}
-.bw-noop-badge{font-size:.6875rem;color:var(--bw-muted);margin-top:.375rem}
-
-/* ---- ledger (step 4) ---- */
-.bw-ledger-row{display:flex;align-items:center;gap:.625rem;padding:.5rem .25rem;border-bottom:1px solid var(--bw-border)}
-.bw-ledger-row:last-child{border-bottom:none}
-.bw-ledger-key{font-size:.875rem}
-.bw-ledger-row .bw-plan-name{flex:1 1 auto;min-width:0}
-.bw-ledger-status{flex:0 0 auto;margin-left:auto;font-size:.75rem;font-weight:600;padding:.2rem .625rem;border-radius:999px;white-space:nowrap}
-.bw-ledger-status-ok{background:rgba(48,209,88,.15);color:#1d8a3c}
-.bw-ledger-status-skip{background:#f0f0f2;color:var(--bw-muted)}
-.bw-ledger-status-error{background:rgba(255,59,48,.12);color:var(--bw-danger)}
-.bw-ledger-code{font-family:ui-monospace,SFMono-Regular,monospace;font-size:.75rem;color:var(--bw-danger)}
-
-/* announcement form specifics */
-.wb-lang-row{display:flex;flex-direction:column;gap:.25rem;margin-bottom:.5rem}
-.wb-field{display:flex;flex-direction:column;gap:.25rem;margin-bottom:.75rem}
-.wb-field label{font-size:.8125rem;color:var(--bw-muted)}
-
-/* transitions */
-#workspace>*{animation:bwFadeIn 180ms ease-out}
-@keyframes bwFadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-@media (prefers-reduced-motion:reduce){
-  #workspace>*{animation:none}
-  .bw-btn:active{transform:none}
+:root{
+  --ground:#F4F5F7;--surface:#FFFFFF;--surface-2:#FAFBFC;
+  --border:#E4E7EC;--border-strong:#D0D5DD;
+  --ink:#191C22;--muted:#667085;--faint:#98A2B3;
+  --accent:#E85D04;--accent-ink:#B84a03;--accent-wash:#FDEEE2;
+  --good:#1F9D6B;--good-wash:#E7F6EF;
+  --crit:#D92D20;--crit-wash:#FEE4E2;
+  --nav:#1D2430;--nav-ink:#C7CDD6;
+  --r:10px;--r-sm:6px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif;
 }
+*{box-sizing:border-box}
+html,body{background:var(--ground)}
+body{margin:0;color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4,h5{margin:0;text-wrap:balance}
+button{font-family:inherit;cursor:pointer}
+[hidden]{display:none!important}
+.tnum{font-variant-numeric:tabular-nums}
+.oid{font-family:var(--mono);color:var(--faint);font-size:12px}.mono{font-family:var(--mono)}
+.eyebrow{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.muted{color:var(--muted)}.mt8{margin-top:8px}.mt12{margin-top:12px}.mt16{margin-top:16px}
+
+#status{display:none}
+#fallback{white-space:pre-wrap}
+.wb-banner{background:var(--crit-wash);color:#912018;border:1px solid #FDA29B;border-radius:var(--r-sm);padding:10px 12px;font-size:13px;margin:0 0 12px}
+
+.wrap{max-width:1120px;margin:16px auto;padding:0 16px}
+.shell{display:grid;grid-template-columns:216px 1fr;border:1px solid var(--border);border-radius:var(--r);overflow:hidden;background:var(--surface);min-height:620px}
+.nav{background:var(--nav);color:var(--nav-ink);padding:16px 12px;display:flex;flex-direction:column;gap:4px}
+.nav .brand{color:#fff;font-weight:800;font-size:15px;padding:2px 8px 14px}
+.nav .brand small{display:block;font-weight:500;color:var(--nav-ink);font-size:11px;letter-spacing:.05em;margin-top:2px}
+.navbtn{display:flex;flex-direction:column;gap:1px;text-align:left;background:transparent;border:0;color:var(--nav-ink);padding:10px;border-radius:var(--r-sm);width:100%}
+.navbtn .t{font-weight:600;font-size:13px}.navbtn .s{font-size:11px;opacity:.72}
+.navbtn:hover{background:rgba(255,255,255,.07);color:#fff}
+.navbtn[aria-pressed=true]{background:var(--accent);color:#fff}
+.navbtn[aria-pressed=true] .s{opacity:.92}
+.navbtn:disabled{opacity:.4;cursor:not-allowed}
+.navfoot{margin-top:auto;font-size:11px;color:var(--faint);padding:8px;line-height:1.6}
+
+.main{display:flex;flex-direction:column;min-width:0}
+.steprail{display:flex;border-bottom:1px solid var(--border);background:var(--surface-2)}
+.steprail .st{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;font-size:12px;color:var(--muted);padding:11px 4px;border-bottom:2px solid transparent;background:transparent;border-top:0;border-left:0;border-right:0}
+.steprail .st .n{width:20px;height:20px;border-radius:50%;background:#E4E7EC;color:var(--muted);display:grid;place-items:center;font-size:11px;font-weight:700}
+.steprail .st.on{color:var(--ink);border-bottom-color:var(--accent);font-weight:700}
+.steprail .st.on .n{background:var(--accent);color:#fff}
+.steprail .st.done{color:var(--good)}.steprail .st.done .n{background:var(--good);color:#fff}
+.steprail .st.clk{cursor:pointer}.steprail .st.clk:hover{background:#EFF1F4}
+
+.cols{display:grid;grid-template-columns:1fr 272px}
+.work{padding:18px 20px;border-right:1px solid var(--border);min-width:0}
+.side{padding:18px 16px;display:flex;flex-direction:column}
+.page{padding:20px 22px}
+
+.loader{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r);padding:14px}
+.loader .addrow{display:flex;gap:8px;align-items:center;margin-top:8px}
+.loader input[type=text]{flex:1;font-family:inherit;font-size:13px;border:1px solid var(--border-strong);border-radius:var(--r-sm);padding:8px 10px;background:var(--surface)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.chip{display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--border-strong);border-radius:999px;padding:4px 6px 4px 11px;font-size:12px;font-weight:600}
+.chip .x{border:0;background:transparent;color:var(--faint);font-size:15px;line-height:1;padding:0 2px}.chip .x:hover{color:var(--crit)}
+.btn{border:1px solid var(--border-strong);background:var(--surface);color:var(--ink);padding:8px 14px;border-radius:var(--r-sm);font-weight:600;font-size:13px}
+.btn:hover{background:var(--surface-2)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}.btn.primary:hover{background:var(--accent-ink)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--muted)}
+.btn.sm{padding:5px 10px;font-size:12px}.btn:disabled{opacity:.45;cursor:not-allowed}
+
+.dirbar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:16px}
+.seg{display:inline-flex;background:#EDEFF2;border-radius:999px;padding:3px}
+.seg button{border:0;background:transparent;padding:6px 16px;border-radius:999px;font-weight:600;font-size:13px;color:var(--muted)}
+.seg button[aria-pressed=true]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(16,24,40,.12)}
+
+.tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--border);margin-top:16px}
+.tab{flex:none;display:flex;align-items:center;gap:7px;background:transparent;border:1px solid transparent;border-bottom:0;padding:9px 13px;border-radius:var(--r-sm) var(--r-sm) 0 0;color:var(--muted);font-size:13px;font-weight:600;position:relative;top:1px}
+.tab:hover{background:var(--surface-2);color:var(--ink)}
+.tab[aria-pressed=true]{background:var(--surface);border-color:var(--border);color:var(--ink)}
+.tab .dotp{width:7px;height:7px;border-radius:50%}.dotp.on{background:var(--good)}.dotp.off{background:var(--faint)}
+.tab .cnt{background:var(--accent);color:#fff;border-radius:999px;font-size:10px;padding:0 6px;line-height:16px;min-width:16px;text-align:center}
+.tab.nf{color:var(--crit)}
+
+.panebox{border:1px solid var(--border);border-radius:var(--r-sm);padding:4px 0;margin-top:0}
+.selrow{display:flex;align-items:center;gap:10px;padding:9px 14px;border-bottom:1px solid var(--border)}.selrow:last-child{border-bottom:0}
+.selrow.lead{background:var(--surface-2)}
+.selrow label{display:flex;align-items:center;gap:10px;flex:1;cursor:pointer;font-size:13px}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:2px 9px;border-radius:999px}
+.pill.on{background:var(--good-wash);color:var(--good)}.pill.off{background:#F2F4F7;color:var(--muted)}.pill.sched{background:var(--accent-wash);color:var(--accent-ink)}
+.to{color:var(--muted);font-size:12px}
+table{border-collapse:collapse;width:100%}th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);font-size:13px}
+th{font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.scroll-x{overflow-x:auto}
+input[type=text],input[type=number],input[type=datetime-local],input[type=date],input[type=time],textarea,select{font-family:inherit;font-size:13px;line-height:1.4;color:var(--ink);background:var(--surface);border:1px solid var(--border-strong);border-radius:var(--r-sm);padding:8px 10px}
+input[type=text],input[type=number],input[type=datetime-local],input[type=date],input[type=time],select{height:38px}
+select{appearance:none;-webkit-appearance:none;padding-right:30px;cursor:pointer}
+input:focus-visible,textarea:focus-visible,select:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.chk{width:15px;height:15px;accent-color:var(--accent);margin:0;flex:none}
+
+.riskbar{display:flex;gap:8px;align-items:flex-start;background:var(--crit-wash);border:1px solid #FDA29B;border-radius:var(--r-sm);padding:10px 12px;color:var(--crit);font-size:13px;margin-top:14px}
+.schedbox{display:flex;gap:10px;align-items:center;flex-wrap:wrap;background:var(--accent-wash);border:1px dashed var(--accent);border-radius:var(--r-sm);padding:10px 12px;margin-top:14px}
+.spread{display:flex;justify-content:space-between;align-items:center;gap:12px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.fld{margin-top:14px}.annpane{padding:14px}
+.sublabel{font-size:11px;color:var(--muted);margin-bottom:4px}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:6px}
+@media (max-width:760px){.grid3{grid-template-columns:1fr}}
+.anntbl td{vertical-align:top}.anntbl tr.annoff{opacity:.42}
+.empty{color:var(--faint);text-align:center;padding:26px 8px;font-size:13px}
+.side .big{font-size:30px;font-weight:800}
+.sumgrp{margin-top:8px}
+.grphd{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;background:transparent;border:0;border-bottom:1px solid var(--border);padding:7px 0;font-weight:700;font-size:12px;color:var(--muted);cursor:pointer;text-align:left}
+.grphd:hover{color:var(--ink)}
+.sumitem{display:flex;gap:8px;align-items:center;padding:5px 0 5px 6px;border-bottom:1px dashed var(--border);font-size:12px}
+.sumitem .d{width:7px;height:7px;border-radius:50%;flex:none;background:var(--accent)}
+
+.rvhead{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+.batchcard{border:1px solid var(--border);border-radius:var(--r);margin-top:14px;overflow:hidden}
+.batchhd{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:11px 14px;background:var(--surface-2);border-bottom:1px solid var(--border);cursor:pointer}
+.batchhd .lbl{display:flex;align-items:center;gap:10px}
+.batchhd .bn{background:var(--ink);color:#fff;border-radius:var(--r-sm);font-size:11px;font-weight:700;padding:2px 8px}
+.batchbody{padding:6px 0}
+.rvgrp{padding:6px 14px}.rvgrp h5{font-size:12px;margin:0 0 4px;color:var(--muted)}
+.rvitem{display:flex;gap:10px;align-items:flex-start;padding:5px 0 5px 8px;font-size:13px;border-bottom:1px dashed var(--border)}.rvitem:last-child{border-bottom:0}
+.rvitem .d{width:8px;height:8px;border-radius:50%;flex:none;margin-top:5px}
+.d.ok{background:var(--good)}.d.sched{background:var(--accent)}.d.err{background:var(--crit)}.d.pend{background:var(--faint)}.d.skip{background:var(--faint)}
+.barfoot{display:flex;justify-content:space-between;gap:8px;margin-top:18px}
+
+/* diff card internals (module renderDiffCard emits bw-* classes) */
+.bw-diff-card{padding:.4rem 0}
+.bw-diff-title{font-weight:600;font-size:13px;margin-bottom:3px}
+.bw-diff-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.bw-diff-arrow{color:var(--muted)}.bw-diff-target{font-weight:700;color:var(--accent-ink)}
+.bw-diff-side{display:flex;flex-direction:column;gap:3px}
+.bw-queue-line{display:flex;flex-direction:column}.bw-time-local{font-size:13px}.bw-time-utc{font-size:11px;color:var(--muted);font-family:var(--mono)}
+.bw-queue-empty{font-size:12px;color:var(--muted)}.bw-noop-badge{font-size:11px;color:var(--muted);margin-top:4px}
+.ledger-status{font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap;margin-left:auto}
+.ls-ok{background:var(--good-wash);color:var(--good)}.ls-skip{background:#F2F4F7;color:var(--muted)}.ls-err{background:var(--crit-wash);color:var(--crit)}.ls-sched{background:var(--accent-wash);color:var(--accent-ink)}
+.ext-warning{margin-top:8px;font-size:12px;color:#b8281f;background:rgba(255,59,48,.1);padding:6px 10px;border-radius:6px}
+
+@media (prefers-reduced-motion:no-preference){.navbtn,.btn,.chip,.tab{transition:.12s ease}}
+@media (max-width:900px){.shell{grid-template-columns:1fr}.cols{grid-template-columns:1fr}.side{border-top:1px solid var(--border)}.work{border-right:0}}
 `
 
 let stylesInjected = false
@@ -278,9 +251,8 @@ function injectStyles(): void {
 }
 
 // ---------------------------------------------------------------------------
-// WizardApp — duck-typed subset of ext-apps App (same as batch-wizard.ts)
+// WizardApp — duck-typed subset of ext-apps App
 // ---------------------------------------------------------------------------
-
 export interface WizardApp {
   callServerTool(params: { name: string; arguments: Record<string, unknown> }): Promise<{
     isError?: boolean
@@ -290,1178 +262,1137 @@ export interface WizardApp {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// DOM helpers
 // ---------------------------------------------------------------------------
-
-function showFallback(el: HTMLElement, m: string): void { el.hidden = false; el.textContent = m }
-function clearFallback(el: HTMLElement): void { el.hidden = true; el.textContent = '' }
-
-function primaryBtn(text: string, role: string, onclick: () => void): HTMLButtonElement {
-  const b = document.createElement('button')
-  b.textContent = text; b.className = 'bw-btn bw-btn-primary'; b.dataset.role = role; b.onclick = onclick
-  return b
+function el(tag: string, cls?: string): HTMLElement { const e = document.createElement(tag); if (cls) e.className = cls; return e }
+function txt(node: HTMLElement, s: unknown): void { renderText(node, s) }
+function btn(label: string, cls: string, onclick: () => void): HTMLButtonElement {
+  const b = document.createElement('button'); b.className = cls; txt(b, label); b.onclick = onclick; return b
 }
-function secondaryBtn(text: string, role: string, onclick: () => void): HTMLButtonElement {
-  const b = document.createElement('button')
-  b.textContent = text; b.className = 'bw-btn bw-btn-secondary'; b.dataset.role = role; b.onclick = onclick
-  return b
-}
-
-// ---------------------------------------------------------------------------
-// RowState — per-plan row state (reused from batch-wizard pattern)
-// ---------------------------------------------------------------------------
-interface RowState {
-  checkbox: HTMLInputElement
-  badge: HTMLElement
-  rowEl: HTMLElement
-  wrapperEl: HTMLElement
-  detailEl?: HTMLElement
-  prod_oid: string
-  pkg_oid: string
-  pkg_name: string
-  item_oid?: string
-  supplier_oid?: string
-  supplier_name?: string
-  is_bundle?: boolean
-  is_active?: boolean
-  current_platform?: string | null
-  inventory_mode?: string
-  queue: ScheduleEntry[]
-  cleared?: boolean
-  quantityInput?: HTMLInputElement
-}
-
-function updateRowChecked(r: RowState, dimBundle: boolean): void {
-  const cls = ['bw-plan-row']
-  if (r.checkbox.checked) cls.push('bw-plan-row-checked')
-  if (r.is_bundle && dimBundle) cls.push('bw-plan-row-bundle')
-  r.rowEl.className = cls.join(' ')
-}
-
-function renderQueueBadge(r: RowState): void {
-  if (r.cleared) { renderText(r.badge, '將清除排程'); r.badge.hidden = false; return }
-  if (r.queue.length === 0) { r.badge.hidden = true; return }
-  const parts = [...r.queue]
-    .sort((a, b) => (a.reserve_date_utc < b.reserve_date_utc ? -1 : 1))
-    .map(q => `${q.reserve_date_utc.slice(5, 16)} ${q.reserve_status ? '上架' : '下架'}`)
-  renderText(r.badge, `待送(UTC)：${parts.join('、')}`)
-  r.badge.hidden = false
+function warnSvg(): SVGElement {
+  const ns = 'http://www.w3.org/2000/svg'
+  const svg = document.createElementNS(ns, 'svg')
+  svg.setAttribute('width', '16'); svg.setAttribute('height', '16'); svg.setAttribute('viewBox', '0 0 16 16'); svg.setAttribute('fill', 'none')
+  const p1 = document.createElementNS(ns, 'path'); p1.setAttribute('d', 'M8 1.5 15 14H1L8 1.5Z'); p1.setAttribute('stroke', 'currentColor'); p1.setAttribute('stroke-width', '1.4'); p1.setAttribute('stroke-linejoin', 'round')
+  const p2 = document.createElementNS(ns, 'path'); p2.setAttribute('d', 'M8 6v3.5M8 11.2v.3'); p2.setAttribute('stroke', 'currentColor'); p2.setAttribute('stroke-width', '1.4'); p2.setAttribute('stroke-linecap', 'round')
+  svg.appendChild(p1); svg.appendChild(p2); return svg as SVGElement
 }
 
 // ---------------------------------------------------------------------------
-// Main: initWorkbench
+// Loaded product data model (from app_get_batch_view / app_get_announcement_view)
+// ---------------------------------------------------------------------------
+interface PlanData {
+  pkg_oid: string; name?: string; item_oid?: string; supplier_oid?: string; supplier_name?: string
+  is_active?: boolean; is_bundle?: boolean
+  current_platform?: string | null; inventory_mode?: string; current_quantity?: number | null
+  reserve_queue?: ScheduleEntry[]
+}
+interface ProductData { prod_oid: string; name?: string; is_active?: boolean; not_found?: boolean; existing_count?: number | null; plans: PlanData[] }
+
+// ---------------------------------------------------------------------------
+// Main
 // ---------------------------------------------------------------------------
 export function initWorkbench(app: WizardApp): void {
   injectStyles()
 
-  const navEl = document.getElementById('nav')!
+  const hostNav = document.getElementById('nav')!
   const statusEl = document.getElementById('status')!
   const workspaceEl = document.getElementById('workspace')!
   const fallbackEl = document.getElementById('fallback') as HTMLPreElement
 
-  // ---- State ----
-  let currentFunc: FuncKey = 'shelf'
-  let currentSubMode: SubMode = 'shelf_toggle_product'
-  let step = 1
-  let shelfDir: 'on' | 'off' = 'on'
-  let lastTz = 'Asia/Taipei'
-  // 上下架改成「對象 × 時機」兩軸（使用者心智模型）：對象 = 商品 / 方案（方案清單含一般方案 + 組合方案）；
-  // 時機 = 立即 / 時間(排程)。currentSubMode 由這兩軸推導；方案+立即會同時產出 plan/bundle 兩種 change-set。
-  // be2 無商品層排程 → 對象=商品時「時間」灰掉；組合方案 be2 不支援排程 → 方案+時間時組合方案列灰掉。
-  let shelfObject: 'product' | 'plan' = 'product'
-  let shelfTiming: 'immediate' | 'schedule' = 'immediate'
-  // 逐批 create→view→confirm 時，當前批的 action_type（可能與 currentSubMode 不同：方案+立即會拆成
-  // shelf_toggle_plan 與 shelf_toggle_bundle 兩批）——renderDiffCard/批准取 itemKey 都以「本批」為準。
-  let currentChunkActionType = ''
+  hostNav.hidden = true
+  statusEl.hidden = true
 
-  function resolveShelfSubMode(): void {
-    if (currentFunc !== 'shelf') return
-    if (shelfObject === 'product') { shelfTiming = 'immediate'; currentSubMode = 'shelf_toggle_product'; return }
-    currentSubMode = shelfTiming === 'schedule' ? 'shelf_schedule' : 'shelf_toggle_plan'
-  }
+  // ---- shell skeleton (built once) ----
+  const wrap = el('div', 'wrap')
+  const shell = el('div', 'shell')
+  const navEl = el('nav', 'nav')
+  const mainEl = el('div', 'main')
+  shell.appendChild(navEl); shell.appendChild(mainEl)
+  wrap.appendChild(shell)
+  workspaceEl.textContent = ''
+  workspaceEl.appendChild(wrap)
 
-  // batch-wizard style changeset state
-  let changesetId: string | undefined
-  let currentNonce: string | undefined
-  let currentDiffVersion: string | undefined
-  let currentDiffItems: Array<Record<string, unknown>> = []
-  let lastViewRec: Record<string, unknown> | undefined
+  function setStatus(s: string): void { statusEl.textContent = s }
+  function showFallback(m: string): void { fallbackEl.hidden = false; fallbackEl.textContent = m }
+  function clearFallback(): void { fallbackEl.hidden = true; fallbackEl.textContent = '' }
 
-  // 多 change-set 拆批執行狀態：>20 筆會用 splitBatches 拆成多個 change-set，逐批
-  // create→view→confirm；accumChunkResults 跨批彙總，最後一批批准後一次呈現全部結果。
-  let pendingChunks: Array<{ action_type: string; items: Array<Record<string, unknown>> }> = []
-  let chunkIndex = 0
-  let accumChunkResults: Array<Record<string, unknown>> = []
-
-  // product data rows
-  let rows: RowState[] = []
-  let radioButtons: HTMLInputElement[] = []
-  let loadedProdOids: string[] = []
-  // item_key(各 module 的 itemKey 格式) → 「商品名 · 方案名」，供結果頁把 item_oid:supplier_oid 之類的
-  // 純數字 key 顯示成人看得懂的名稱（載入時建，涵蓋 prod_oid / prod:pkg / item:supplier 三種 key 形狀）。
-  let resultNameByKey = new Map<string, string>()
-
-  // announcement state
-  let annState = resetAnnState()
-  function resetAnnState() {
-    return {
+  // =====================================================================
+  // State
+  // =====================================================================
+  const S = {
+    func: 'shelf' as FuncKey,
+    invMode: 'inventory_setting' as InvMode,
+    step: 1,                       // 1 選擇 / 2 檢視 / 3 批准 / 4 結果
+    products: [] as ProductData[],
+    loadedProdOids: [] as string[],
+    oidDraft: '',                  // 尚未載入的輸入框內容
+    activeIdx: 0,
+    // shelf
+    shelfDir: 'up' as 'up' | 'down',
+    shelfSelProduct: new Set<string>(),   // prod_oid
+    shelfSelPlan: new Set<string>(),      // pkg_oid（含 bundle）
+    shelfSched: false,
+    shelfSchedAt: '',                     // datetime-local "YYYY-MM-DDTHH:MM"
+    shelfSchedTz: 'Asia/Taipei',
+    // inventory_setting: key `${item_oid}:${supplier_oid}` -> raw string
+    invQty: new Map<string, string>(),
+    // inventory_platform
+    platSel: new Set<string>(),           // pkg_oid
+    platTarget: 'BE2' as string,
+    // announcement
+    ann: {
       name: '', isEnabled: true,
       startDate: '', startTime: '00:00', startTz: 'Asia/Taipei',
       endDate: '', endTime: '00:00', endTz: 'Asia/Taipei',
+      paste: '',
       langContents: new Map<string, string>(),
       selectedLangs: new Set<string>(),
+    },
+    // ui collapse
+    sideOpen: new Set<string>(),
+    grpCollapsed: new Set<string>(),
+    batchCollapsed: false,
+    // chunk / server flow
+    pendingChunks: [] as Array<{ action_type: ChunkActionType; items: Array<Record<string, unknown>> }>,
+    chunkIndex: 0,
+    accumResults: [] as Array<Record<string, unknown>>,
+    changesetId: undefined as string | undefined,
+    nonce: undefined as string | undefined,
+    diffVersion: undefined as string | undefined,
+    diffItems: [] as Array<Record<string, unknown>>,
+    currentChunkActionType: '' as ChunkActionType | '',
+    lastTz: 'Asia/Taipei',
+  }
+
+  // item_key → 「商品名 · 方案名」（結果頁把純數字 key 顯示成人看得懂）
+  let resultNameByKey = new Map<string, string>()
+
+  const funcDesc = (): FuncDesc => FUNCS.find(f => f.key === S.func)!
+  const dirActive = (): boolean => S.shelfDir === 'up'
+  const dirLabel = (): string => (S.shelfDir === 'up' ? '上架' : '下架')
+
+  function resetEdits(): void {
+    S.shelfSelProduct = new Set(); S.shelfSelPlan = new Set()
+    S.shelfSched = false; S.shelfSchedAt = ''
+    S.invQty = new Map(); S.platSel = new Set(); S.platTarget = 'BE2'
+    S.sideOpen = new Set(); S.grpCollapsed = new Set(); S.batchCollapsed = false
+  }
+  function resetAnn(): void {
+    S.ann = {
+      name: '', isEnabled: true,
+      startDate: '', startTime: '00:00', startTz: 'Asia/Taipei',
+      endDate: '', endTime: '00:00', endTz: 'Asia/Taipei',
+      paste: '', langContents: new Map(), selectedLangs: new Set(),
     }
   }
-
-  // ---- Step bar (選擇→檢視→批准→結果) ----
-  const progressEl = document.createElement('div')
-  progressEl.className = 'bw-progress'
-  const STEP_LABELS = ['選擇', '檢視', '批准', '結果']
-  function renderProgress(): void {
-    progressEl.textContent = ''
-    STEP_LABELS.forEach((label, i) => {
-      const n = i + 1
-      if (i > 0) {
-        const c = document.createElement('span')
-        c.className = `bw-connector${n - 1 < step ? ' bw-connector-done' : ''}`
-        progressEl.appendChild(c)
-      }
-      const s = document.createElement('span')
-      s.className = `bw-step ${n < step ? 'bw-step-done' : n === step ? 'bw-step-current' : 'bw-step-pending'}`
-      const circle = document.createElement('span'); circle.className = 'bw-step-circle'
-      renderText(circle, n < step ? '✓' : String(n)); s.appendChild(circle)
-      const lab = document.createElement('span'); lab.className = 'bw-step-label'
-      renderText(lab, label); s.appendChild(lab)
-      progressEl.appendChild(s)
-    })
+  function resetServerFlow(): void {
+    S.pendingChunks = []; S.chunkIndex = 0; S.accumResults = []
+    S.changesetId = undefined; S.nonce = undefined; S.diffVersion = undefined
+    S.diffItems = []; S.currentChunkActionType = ''
   }
-  function setStep(n: number): void { step = n; renderProgress() }
 
-  // ---- Nav rendering ----
+  // =====================================================================
+  // 本次變更（live summary）— 顯示用，實際 items 於 doNext 才由 module buildItems 產生
+  // =====================================================================
+  interface Change { grp: string; label: string; sched?: boolean }
+  function changesList(): Change[] {
+    const out: Change[] = []
+    if (S.products.length === 0) return out
+    if (S.func === 'shelf') {
+      if (S.shelfSched) {
+        const when = S.shelfSchedAt ? S.shelfSchedAt.replace('T', ' ') : '（未設時間）'
+        for (const p of S.products) {
+          for (const pl of p.plans) {
+            if (pl.is_bundle) continue
+            if (S.shelfSelPlan.has(pl.pkg_oid)) out.push({ grp: p.name ?? p.prod_oid, label: `${pl.name ?? pl.pkg_oid} → 排程 ${dirLabel()} @ ${when}`, sched: true })
+          }
+        }
+      } else {
+        for (const p of S.products) {
+          if (S.shelfSelProduct.has(p.prod_oid)) out.push({ grp: p.name ?? p.prod_oid, label: `整個商品 → ${dirLabel()}` })
+          for (const pl of p.plans) {
+            if (S.shelfSelPlan.has(pl.pkg_oid)) out.push({ grp: p.name ?? p.prod_oid, label: `${pl.name ?? pl.pkg_oid}${pl.is_bundle ? '（組合方案）' : ''} → ${dirLabel()}` })
+          }
+        }
+      }
+    } else if (S.func === 'inventory' && S.invMode === 'inventory_setting') {
+      for (const p of S.products) {
+        for (const pl of p.plans) {
+          if (!pl.item_oid || !pl.supplier_oid) continue
+          const raw = S.invQty.get(`${pl.item_oid}:${pl.supplier_oid}`)
+          if (raw != null && raw.trim() !== '' && !Number.isNaN(Number(raw))) {
+            const cur = pl.current_quantity != null ? String(pl.current_quantity) : '未設'
+            out.push({ grp: p.name ?? p.prod_oid, label: `${pl.name ?? pl.pkg_oid} 庫存 → ${raw.trim()}（原 ${cur}）` })
+          }
+        }
+      }
+    } else if (S.func === 'inventory' && S.invMode === 'inventory_platform') {
+      const seen = new Set<string>()
+      for (const p of S.products) {
+        for (const pl of p.plans) {
+          if (!S.platSel.has(pl.pkg_oid) || !pl.item_oid || !pl.supplier_oid) continue
+          const k = `${pl.item_oid}:${pl.supplier_oid}`
+          if (seen.has(k)) continue
+          seen.add(k)
+          out.push({ grp: p.name ?? p.prod_oid, label: `${pl.name ?? pl.pkg_oid} 平台 → ${platformLabel(S.platTarget)}` })
+        }
+      }
+    } else if (S.func === 'announce') {
+      if (annValid()) {
+        out.push({ grp: `公告：${S.ann.name || '未命名'}`, label: `${S.loadedProdOids.length} 個商品 · ${annSelectedCodes().length} 語系 · ${S.ann.isEnabled ? '啟用' : '停用'}` })
+      }
+    }
+    return out
+  }
+  function changesCount(): number { return changesList().length }
+  function groupBy(arr: Change[]): Map<string, string[]> {
+    const g = new Map<string, string[]>()
+    for (const c of arr) { const a = g.get(c.grp) ?? []; a.push(c.label); g.set(c.grp, a) }
+    return g
+  }
+
+  function annSelectedCodes(): string[] {
+    return ANN_LOCALES.filter(l => S.ann.selectedLangs.has(l.code) && (S.ann.langContents.get(l.code) ?? '').trim()).map(l => l.code)
+  }
+  function annValid(): boolean {
+    const a = S.ann
+    return S.loadedProdOids.length > 0 && a.name.trim() !== '' && a.startDate !== '' && annSelectedCodes().length > 0
+  }
+
+  // =====================================================================
+  // Render root
+  // =====================================================================
+  function render(): void {
+    clampIdx()
+    renderNav()
+    mainEl.textContent = ''
+    mainEl.appendChild(renderSteprail())
+    fallbackEl.remove()             // 移進主區頂端（步驟條之下）
+    if (S.step === 1) mainEl.appendChild(renderSelect())
+    else if (S.step === 2) mainEl.appendChild(renderReview())
+    else if (S.step === 3) mainEl.appendChild(renderApprove())
+    else mainEl.appendChild(renderResult())
+    // 錯誤 banner 常駐在內容之上
+    const first = mainEl.querySelector('.cols, .page')
+    if (first) first.prepend(fallbackEl); else mainEl.appendChild(fallbackEl)
+  }
+  function clampIdx(): void { if (S.activeIdx >= S.products.length) S.activeIdx = Math.max(0, S.products.length - 1) }
+
   function renderNav(): void {
     navEl.textContent = ''
-    navEl.className = 'wb-nav'
+    const brand = el('div', 'brand'); brand.appendChild(document.createTextNode('be2 工作台'))
+    const small = el('small'); txt(small, '批次 · 排程 · 送審'); brand.appendChild(small)
+    navEl.appendChild(brand)
     for (const f of FUNCS) {
-      const btn = document.createElement('button')
-      btn.className = 'wb-nav-btn'
-      btn.setAttribute('aria-pressed', String(currentFunc === f.key))
-      if (step > 1) btn.disabled = true
-      const t = document.createElement('span'); t.className = 'wb-nav-title'; renderText(t, f.label)
-      const s = document.createElement('span'); s.className = 'wb-nav-sub'; renderText(s, f.subLabel)
-      btn.appendChild(t); btn.appendChild(s)
-      btn.onclick = () => {
-        if (step > 1) return
-        currentFunc = f.key
-        shelfObject = 'product'; shelfTiming = 'immediate'
-        currentSubMode = f.subModes[0].key
-        resolveShelfSubMode()
-        shelfDir = 'on'
-        rows = []; radioButtons = []; loadedProdOids = []
-        annState = resetAnnState()
-        clearFallback(fallbackEl)
-        renderNav()
-        renderWorkspace()
+      const b = el('button', 'navbtn') as HTMLButtonElement
+      b.setAttribute('aria-pressed', String(S.func === f.key))
+      if (S.step > 1) b.disabled = true
+      const t = el('span', 't'); txt(t, f.label)
+      const s = el('span', 's'); txt(s, f.sub)
+      b.appendChild(t); b.appendChild(s)
+      b.onclick = () => {
+        if (S.step > 1) return
+        S.func = f.key; S.activeIdx = 0
+        S.products = []; S.loadedProdOids = []; S.oidDraft = ''
+        S.shelfDir = 'up'; S.invMode = 'inventory_setting'
+        resetEdits(); resetAnn(); clearFallback()
+        render()
       }
-      navEl.appendChild(btn)
+      navEl.appendChild(b)
+    }
+    const foot = el('div', 'navfoot')
+    txt(foot, '身分由 token 推導 · businessList 授權 · 寫入一律人工批准')
+    navEl.appendChild(foot)
+  }
+
+  function renderSteprail(): HTMLElement {
+    const rail = el('div', 'steprail')
+    const n = changesCount()
+    STEP_LABELS.forEach((label, i) => {
+      const idx = i + 1
+      const b = el('button', 'st') as HTMLButtonElement
+      if (idx === S.step) b.classList.add('on')
+      else if (idx < S.step) b.classList.add('done')
+      // 可回退：已完成步驟可點；選擇頁有變更時「檢視」可點前進
+      const canBack = idx < S.step
+      const canFwdView = idx === 2 && S.step === 1 && n > 0
+      if (canBack || canFwdView) { b.classList.add('clk'); b.onclick = () => railGoto(idx) }
+      const circle = el('span', 'n'); txt(circle, idx < S.step ? '✓' : String(idx)); b.appendChild(circle)
+      const lab = el('span'); txt(lab, label); b.appendChild(lab)
+      if (idx === 2 && n > 0 && S.step === 1) { const c = el('span', 'oid'); txt(c, `(${n})`); b.appendChild(c) }
+      rail.appendChild(b)
+    })
+    return rail
+  }
+  function railGoto(idx: number): void {
+    if (idx === S.step) return
+    if (idx > S.step) { if (idx === 2 && S.step === 1) void doNext(); return }
+    // going back
+    if (S.step === 4) { startNew(); return }
+    if (S.step === 2 || S.step === 3) {
+      // 有開啟的 change-set → 回選擇需先 reject（維持 draft-only 不變式）
+      if (idx === 1) { rejectOpen(); S.step = 1; clearFallback(); render(); return }
+      if (idx === 2 && S.step === 3) { S.step = 2; render(); return }
     }
   }
 
-  // ---- Sub-mode pills ----
-  function renderSubModes(container: HTMLElement): void {
-    // 上下架：對象(商品/方案) × 時機(立即/時間) 兩軸，取代舊的 4 個平行次模式。
-    if (currentFunc === 'shelf') { renderShelfAxes(container); return }
-    const func = FUNCS.find(f => f.key === currentFunc)!
-    if (func.subModes.length <= 1) return // no sub-mode bar for single-mode functions (公告)
-    const bar = document.createElement('div')
-    bar.className = 'wb-submodes'
-    for (const sm of func.subModes) {
-      const btn = document.createElement('button')
-      btn.className = 'wb-submode'
-      btn.setAttribute('aria-pressed', String(currentSubMode === sm.key))
-      renderText(btn, sm.label)
-      btn.onclick = () => {
-        currentSubMode = sm.key
-        rows = []; radioButtons = []; loadedProdOids = []
-        clearFallback(fallbackEl)
-        renderWorkspace()
-      }
-      bar.appendChild(btn)
-    }
-    container.appendChild(bar)
+  // =====================================================================
+  // STEP 1 — 選擇（兩欄）
+  // =====================================================================
+  function renderSelect(): HTMLElement {
+    const cols = el('div', 'cols')
+    cols.appendChild(renderWork())
+    cols.appendChild(renderSide())
+    return cols
   }
 
-  function renderShelfAxes(container: HTMLElement): void {
-    const reset = () => { resolveShelfSubMode(); rows = []; radioButtons = []; loadedProdOids = []; clearFallback(fallbackEl); renderWorkspace() }
-    const pill = (label: string, pressed: boolean, disabled: boolean, onClick: () => void): HTMLButtonElement => {
-      const b = document.createElement('button'); b.className = 'wb-submode'
-      b.setAttribute('aria-pressed', String(pressed)); if (disabled) b.disabled = true
-      renderText(b, label); if (!disabled) b.onclick = onClick
+  function renderWork(): HTMLElement {
+    const f = funcDesc()
+    const work = el('div', 'work')
+    const eyebrow = el('div', 'eyebrow'); txt(eyebrow, `${f.sub} · 支援批次`); work.appendChild(eyebrow)
+    const h = el('h2'); h.style.cssText = 'font-size:19px;margin-bottom:2px'; txt(h, f.label); work.appendChild(h)
+
+    // 庫存子模式分段
+    if (S.func === 'inventory') work.appendChild(renderInvModeToggle())
+
+    // 商品載入
+    const loaderWrap = el('div', 'mt12'); loaderWrap.appendChild(renderLoader()); work.appendChild(loaderWrap)
+
+    if (S.products.length === 0) {
+      const empty = el('div', 'empty'); txt(empty, `載入商品後，這裡會出現「${f.label}」的批次編輯內容`); work.appendChild(empty)
+      return work
+    }
+
+    if (S.func === 'announce') { work.appendChild(renderAnnounceBlock()); return work }
+
+    // 上下架方向分段
+    if (S.func === 'shelf') work.appendChild(renderDirBar())
+
+    // 多商品頁籤
+    work.appendChild(renderTabs())
+
+    // 主清單
+    const oid = S.products[S.activeIdx]?.prod_oid
+    const active = S.products.find(p => p.prod_oid === oid)
+    if (active) {
+      if (S.func === 'shelf') work.appendChild(renderShelfList(active))
+      else if (S.invMode === 'inventory_setting') work.appendChild(renderInvSettingPane(active))
+      else work.appendChild(renderInvPlatformPane(active))
+    }
+
+    // 排程（僅上下架）
+    if (S.func === 'shelf') work.appendChild(renderSchedBox())
+
+    // 高風險提示
+    if (f.risk) {
+      const rb = el('div', 'riskbar'); rb.appendChild(warnSvg())
+      const d = el('div'); const b = el('b'); txt(b, '高風險：立即影響前台。'); d.appendChild(b); d.appendChild(document.createTextNode(f.risk))
+      rb.appendChild(d); work.appendChild(rb)
+    }
+    return work
+  }
+
+  function renderInvModeToggle(): HTMLElement {
+    const bar = el('div', 'dirbar')
+    const lbl = el('span', 'eyebrow'); txt(lbl, '庫存作業'); bar.appendChild(lbl)
+    const seg = el('div', 'seg')
+    const mk = (mode: InvMode, label: string): HTMLButtonElement => {
+      const b = el('button') as HTMLButtonElement
+      b.setAttribute('aria-pressed', String(S.invMode === mode)); txt(b, label)
+      b.onclick = () => {
+        if (S.invMode === mode) return
+        S.invMode = mode; resetEdits(); clearFallback()
+        if (S.loadedProdOids.length > 0) void doLoad(S.loadedProdOids)  // 換 action_type 重載現況
+        else render()
+      }
       return b
     }
-    // 對象軸
-    const objRow = document.createElement('div'); objRow.className = 'wb-submodes'
-    const objLbl = document.createElement('span'); objLbl.style.cssText = 'font-size:.8125rem;color:var(--bw-muted);align-self:center;margin-right:.25rem'
-    renderText(objLbl, '對象'); objRow.appendChild(objLbl)
-    objRow.appendChild(pill('商品', shelfObject === 'product', false, () => { shelfObject = 'product'; reset() }))
-    objRow.appendChild(pill('方案', shelfObject === 'plan', false, () => { shelfObject = 'plan'; reset() }))
-    container.appendChild(objRow)
-    // 時機軸
-    const timeRow = document.createElement('div'); timeRow.className = 'wb-submodes'
-    const timeLbl = document.createElement('span'); timeLbl.style.cssText = 'font-size:.8125rem;color:var(--bw-muted);align-self:center;margin-right:.25rem'
-    renderText(timeLbl, '時機'); timeRow.appendChild(timeLbl)
-    timeRow.appendChild(pill('立即', shelfTiming === 'immediate', false, () => { shelfTiming = 'immediate'; reset() }))
-    const scheduleDisabled = shelfObject === 'product'
-    timeRow.appendChild(pill('時間', shelfTiming === 'schedule' && !scheduleDisabled, scheduleDisabled, () => { shelfTiming = 'schedule'; reset() }))
-    if (scheduleDisabled) {
-      const hint = document.createElement('span'); hint.style.cssText = 'font-size:.75rem;color:var(--bw-muted);align-self:center'
-      renderText(hint, 'be2 目前無商品層排程，未來可於 MCP 支援')
-      timeRow.appendChild(hint)
-    }
-    container.appendChild(timeRow)
+    seg.appendChild(mk('inventory_setting', '逐日數量')); seg.appendChild(mk('inventory_platform', '平台切換'))
+    bar.appendChild(seg)
+    return bar
   }
 
-  // ---- Main workspace rendering (step 1) ----
-  function renderWorkspace(): void {
-    setStep(1)
-    workspaceEl.textContent = ''
-    renderNav()
-
-    workspaceEl.appendChild(progressEl)
-
-    // Sub-mode pills
-    renderSubModes(workspaceEl)
-
-    if (currentSubMode === 'announcement') {
-      renderAnnouncementStep1()
+  function renderLoader(): HTMLElement {
+    const box = el('div', 'loader')
+    const head = el('div', 'spread')
+    const eb = el('div', 'eyebrow'); txt(eb, '批次載入商品（可多個）'); head.appendChild(eb)
+    box.appendChild(head)
+    const addrow = el('div', 'addrow')
+    const input = el('input') as HTMLInputElement
+    input.type = 'text'; input.placeholder = '輸入商品 oid，逗號或空白分隔…'; input.value = S.oidDraft
+    input.oninput = () => { S.oidDraft = input.value }
+    input.onkeydown = (e) => { if ((e as KeyboardEvent).key === 'Enter') { void doLoad(parseOidInput(input.value)) } }
+    addrow.appendChild(input)
+    addrow.appendChild(btn('載入', 'btn primary sm', () => { void doLoad(parseOidInput(input.value)) }))
+    if (S.loadedProdOids.length > 0) addrow.appendChild(btn('清空', 'btn ghost sm', () => { S.products = []; S.loadedProdOids = []; S.oidDraft = ''; resetEdits(); render() }))
+    box.appendChild(addrow)
+    // chips
+    const chips = el('div', 'chips')
+    if (S.products.length === 0) {
+      const m = el('span', 'muted'); m.style.fontSize = '12px'; txt(m, '尚未載入商品——先載入，下方才會出現可編輯內容。'); chips.appendChild(m)
     } else {
-      renderBatchStep1()
+      for (const p of S.products) {
+        const chip = el('span', 'chip')
+        chip.appendChild(document.createTextNode(p.name ?? p.prod_oid))
+        const oid = el('span', 'oid'); txt(oid, `#${p.prod_oid}`); chip.appendChild(oid)
+        chips.appendChild(chip)
+      }
     }
+    box.appendChild(chips)
+    return box
   }
 
-  // =====================================================================
-  // BATCH FLOW (all non-announcement sub-modes)
-  // =====================================================================
-
-  function renderBatchStep1(): void {
-    const wizard = WIZARDS[currentSubMode]!
-
-    // Direction bar for shelf toggle modes
-    const isShelfToggle = currentSubMode === 'shelf_toggle_product' || currentSubMode === 'shelf_toggle_plan' || currentSubMode === 'shelf_toggle_bundle'
-    if (isShelfToggle) {
-      const dirBar = document.createElement('div')
-      dirBar.className = 'wb-dirbar'
-      const lbl = document.createElement('span'); lbl.style.fontSize = '.8125rem'; lbl.style.color = 'var(--bw-muted)'
-      renderText(lbl, '這批動作（強制單一方向）')
-      dirBar.appendChild(lbl)
-      const seg = document.createElement('div'); seg.className = 'wb-seg'
-      const upBtn = document.createElement('button'); renderText(upBtn, '全部上架'); upBtn.setAttribute('aria-pressed', String(shelfDir === 'on'))
-      const downBtn = document.createElement('button'); renderText(downBtn, '全部下架'); downBtn.setAttribute('aria-pressed', String(shelfDir === 'off'))
-      upBtn.onclick = () => { shelfDir = 'on'; upBtn.setAttribute('aria-pressed', 'true'); downBtn.setAttribute('aria-pressed', 'false') }
-      downBtn.onclick = () => { shelfDir = 'off'; upBtn.setAttribute('aria-pressed', 'true'); downBtn.setAttribute('aria-pressed', 'false'); /* fix: swap */ upBtn.setAttribute('aria-pressed', 'false'); downBtn.setAttribute('aria-pressed', 'true') }
-      seg.appendChild(upBtn); seg.appendChild(downBtn)
-      dirBar.appendChild(seg)
-      const note = document.createElement('span'); note.style.cssText = 'font-size:.75rem;color:var(--bw-muted)'
-      renderText(note, '一次操作不得同時含上架與下架；另一方向請另開一批。')
-      dirBar.appendChild(note)
-      workspaceEl.appendChild(dirBar)
+  function renderTabs(): HTMLElement {
+    const tabs = el('div', 'tabs'); tabs.setAttribute('role', 'tablist')
+    S.products.forEach((p, i) => {
+      const b = el('button', 'tab' + (p.not_found ? ' nf' : '')) as HTMLButtonElement
+      b.setAttribute('role', 'tab'); b.setAttribute('aria-pressed', String(i === S.activeIdx))
+      const dot = el('span', `dotp ${p.is_active ? 'on' : 'off'}`); b.appendChild(dot)
+      b.appendChild(document.createTextNode(p.not_found ? '找不到商品' : (p.name ?? p.prod_oid)))
+      const c = selCountForProduct(p)
+      if (c > 0) { const cnt = el('span', 'cnt tnum'); txt(cnt, String(c)); b.appendChild(cnt) }
+      b.onclick = () => { S.activeIdx = i; render() }
+      tabs.appendChild(b)
+    })
+    return tabs
+  }
+  function selCountForProduct(p: ProductData): number {
+    if (S.func === 'shelf') {
+      if (S.shelfSched) return p.plans.filter(pl => !pl.is_bundle && S.shelfSelPlan.has(pl.pkg_oid)).length
+      return (S.shelfSelProduct.has(p.prod_oid) ? 1 : 0) + p.plans.filter(pl => S.shelfSelPlan.has(pl.pkg_oid)).length
     }
-
-    // OID input card
-    const inputCard = document.createElement('div'); inputCard.className = 'bw-card'
-    const inputCardTitle = document.createElement('div'); inputCardTitle.className = 'bw-card-title'
-    renderText(inputCardTitle, '商品')
-    inputCard.appendChild(inputCardTitle)
-    const inputRow = document.createElement('div'); inputRow.className = 'bw-row-inline'
-    const prodInput = document.createElement('input') as HTMLInputElement
-    prodInput.type = 'text'; prodInput.className = 'bw-input'; prodInput.placeholder = '商品 oid，逗號或空白分隔'
-    prodInput.value = loadedProdOids.join(', '); prodInput.dataset.role = 'prodOidsInput'
-    inputRow.appendChild(prodInput)
-    inputRow.appendChild(primaryBtn('載入', 'loadBtn', () => { void doLoadBatch(prodInput.value) }))
-    inputCard.appendChild(inputRow)
-    workspaceEl.appendChild(inputCard)
-
-    // Plan table placeholder
-    const planTableEl = document.createElement('div'); planTableEl.className = 'bw-card'; planTableEl.dataset.role = 'planTable'
-    workspaceEl.appendChild(planTableEl)
-
-    // Schedule bar (shelf_schedule only, reuses batch-wizard pattern)
-    if (currentSubMode === 'shelf_schedule') {
-      workspaceEl.appendChild(renderDefaultTimeBar())
+    if (S.func === 'inventory' && S.invMode === 'inventory_setting') {
+      return p.plans.filter(pl => pl.item_oid && pl.supplier_oid && (S.invQty.get(`${pl.item_oid}:${pl.supplier_oid}`) ?? '').trim() !== '').length
     }
-
-    // Footer with next button
-    const footerCard = document.createElement('div'); footerCard.className = 'bw-card bw-row-footer'
-    footerCard.appendChild(primaryBtn('下一步：檢視', 'nextBtn', () => { void doNextBatch() }))
-    workspaceEl.appendChild(footerCard)
-
-    // ---- doLoad ----
-    async function doLoadBatch(raw: string): Promise<void> {
-      const prodOids = parseOidInput(raw)
-      if (prodOids.length === 0) { showFallback(fallbackEl, '請輸入至少一個商品 oid'); return }
-      loadedProdOids = prodOids
-      statusEl.textContent = '載入中…'
-      clearFallback(fallbackEl)
-      try {
-        const r = await app.callServerTool({
-          name: 'app_get_batch_view',
-          arguments: { action_type: serverActionType(currentSubMode), prod_oids: prodOids },
-        })
-        if (r.isError) { showFallback(fallbackEl, '載入失敗'); return }
-        const sc = r.structuredContent as { items?: unknown[]; errors?: Array<{ code?: string; message?: string }> } | undefined
-        const item0 = sc?.items?.[0] as { products?: unknown[] } | undefined
-        const products = (item0?.products ?? []) as Array<{ prod_oid: string; name?: string; not_found?: boolean; is_active?: boolean; plans: Array<Record<string, unknown>> }>
-        const nfErrors = (sc?.errors ?? []).filter(e => e.code === 'PRODUCT_NOT_FOUND')
-        if (nfErrors.length > 0) showFallback(fallbackEl, nfErrors.map(e => e.message).join('\n'))
-        else clearFallback(fallbackEl)
-        renderPlanTable(planTableEl, products)
-        statusEl.textContent = `已載入 ${products.length} 個商品`
-      } catch (e) { showFallback(fallbackEl, '載入失敗：' + String(e)) }
+    if (S.func === 'inventory' && S.invMode === 'inventory_platform') {
+      return p.plans.filter(pl => S.platSel.has(pl.pkg_oid)).length
     }
+    return 0
+  }
 
-    // ---- Plan table rendering ----
-    let activeProdOid: string | undefined
-    let notFoundDivs: Array<{ prod_oid: string; el: HTMLElement }> = []
+  function renderDirBar(): HTMLElement {
+    const bar = el('div', 'dirbar')
+    const eb = el('span', 'eyebrow'); txt(eb, '這批動作（強制單一方向）'); bar.appendChild(eb)
+    const seg = el('div', 'seg')
+    const up = el('button') as HTMLButtonElement; up.setAttribute('aria-pressed', String(dirActive())); txt(up, '全部上架')
+    const down = el('button') as HTMLButtonElement; down.setAttribute('aria-pressed', String(!dirActive())); txt(down, '全部下架')
+    up.onclick = () => { if (S.shelfDir !== 'up') { S.shelfDir = 'up'; S.shelfSelProduct = new Set(); S.shelfSelPlan = new Set(); render() } }
+    down.onclick = () => { if (S.shelfDir !== 'down') { S.shelfDir = 'down'; S.shelfSelProduct = new Set(); S.shelfSelPlan = new Set(); render() } }
+    seg.appendChild(up); seg.appendChild(down); bar.appendChild(seg)
+    const note = el('span', 'muted'); note.style.fontSize = '12px'; txt(note, '一次操作不得同時含上架與下架；另一方向請另開一批。'); bar.appendChild(note)
+    return bar
+  }
 
-    function applyVisibility(): void {
-      for (const r of rows) {
-        const inActiveTab = !activeProdOid || r.prod_oid === activeProdOid
-        r.wrapperEl.hidden = !inActiveTab
-      }
-      for (const nf of notFoundDivs) nf.el.hidden = !activeProdOid || nf.prod_oid !== activeProdOid
+  // 上下架整合清單：整個商品列 + 各方案列同框
+  function renderShelfList(p: ProductData): HTMLElement {
+    const box = el('div', 'panebox')
+    if (p.not_found) { const m = el('div', 'empty'); txt(m, '查無此商品，請確認 prod_oid'); box.appendChild(m); return box }
+    const targetActive = dirActive()
+
+    // 整個商品列
+    const lead = el('div', 'selrow lead')
+    if (S.shelfSched) {
+      // 排程模式：無商品層排程 → 灰掉
+      const lab = el('label'); lab.style.opacity = '.5'
+      const cb = el('input') as HTMLInputElement; cb.type = 'checkbox'; cb.className = 'chk'; cb.disabled = true
+      const span = el('span'); const b = el('b'); txt(b, '整個商品'); span.appendChild(b); span.appendChild(document.createTextNode(` — ${p.name ?? p.prod_oid} `))
+      const oid = el('span', 'oid'); txt(oid, `#${p.prod_oid}`); span.appendChild(oid)
+      lab.appendChild(cb); lab.appendChild(span); lead.appendChild(lab)
+      const hint = el('span', 'to'); txt(hint, 'be2 無商品層排程'); lead.appendChild(hint)
+    } else {
+      const eligible = p.is_active !== targetActive
+      const lab = el('label'); if (!eligible) lab.style.opacity = '.5'
+      const cb = el('input') as HTMLInputElement; cb.type = 'checkbox'; cb.className = 'chk'
+      cb.checked = S.shelfSelProduct.has(p.prod_oid); cb.disabled = !eligible
+      cb.onchange = () => { if (cb.checked) S.shelfSelProduct.add(p.prod_oid); else S.shelfSelProduct.delete(p.prod_oid); render() }
+      const span = el('span'); const b = el('b'); txt(b, '整個商品'); span.appendChild(b); span.appendChild(document.createTextNode(` — ${p.name ?? p.prod_oid} `))
+      const oid = el('span', 'oid'); txt(oid, `#${p.prod_oid}`); span.appendChild(oid)
+      lab.appendChild(cb); lab.appendChild(span); lead.appendChild(lab)
+      if (eligible) { const to = el('span', 'to'); const bb = el('b'); txt(bb, dirLabel()); to.appendChild(document.createTextNode('→ 切為 ')); to.appendChild(bb); lead.appendChild(to) }
+      else { const pill = el('span', `pill ${p.is_active ? 'on' : 'off'}`); txt(pill, `已是${p.is_active ? '上架' : '下架'}`); lead.appendChild(pill) }
     }
+    box.appendChild(lead)
 
-    function renderPlanTable(container: HTMLElement, products: Array<{ prod_oid: string; name?: string; not_found?: boolean; is_active?: boolean; plans: Array<Record<string, unknown>> }>): void {
-      container.textContent = ''
-      rows = []; radioButtons = []; notFoundDivs = []
-      activeProdOid = products.length > 1 ? products[0]?.prod_oid : undefined
+    // 方案列
+    for (const pl of p.plans) {
+      const rowEl = el('div', 'selrow')
+      const isBundle = pl.is_bundle === true
+      let eligible: boolean; let disabled: boolean
+      if (S.shelfSched) { eligible = !isBundle; disabled = isBundle }         // 排程：組合方案不可
+      else { eligible = pl.is_active !== targetActive; disabled = !eligible } // 立即：現況異於方向才可
+      const lab = el('label'); if (disabled) lab.style.opacity = '.5'
+      const cb = el('input') as HTMLInputElement; cb.type = 'checkbox'; cb.className = 'chk'
+      cb.checked = S.shelfSelPlan.has(pl.pkg_oid); cb.disabled = disabled
+      cb.onchange = () => { if (cb.checked) S.shelfSelPlan.add(pl.pkg_oid); else S.shelfSelPlan.delete(pl.pkg_oid); render() }
+      const span = el('span'); span.appendChild(document.createTextNode((pl.name ?? pl.pkg_oid) + ' '))
+      if (isBundle) { const tag = el('span', 'oid'); txt(tag, '· 組合方案'); span.appendChild(tag) }
+      const oid = el('span', 'oid'); txt(oid, ` 方案 #${pl.pkg_oid}`); span.appendChild(oid)
+      lab.appendChild(cb); lab.appendChild(span); rowEl.appendChild(lab)
+      if (S.shelfSched && isBundle) { const pill = el('span', 'pill off'); txt(pill, '不支援排程'); rowEl.appendChild(pill) }
+      else if (eligible) { const to = el('span', 'to'); const bb = el('b'); txt(bb, dirLabel()); to.appendChild(document.createTextNode(S.shelfSched ? '→ 排程 ' : '→ 切為 ')); to.appendChild(bb); rowEl.appendChild(to) }
+      else { const pill = el('span', `pill ${pl.is_active ? 'on' : 'off'}`); txt(pill, `已是${pl.is_active ? '上架' : '下架'}`); rowEl.appendChild(pill) }
+      box.appendChild(rowEl)
+    }
+    return box
+  }
 
-      // 建結果頁名稱查表：涵蓋各 module 的 itemKey 形狀（prod_oid / prod:pkg / item:supplier）。
-      resultNameByKey = new Map<string, string>()
-      for (const prod of products) {
-        const pn = prod.name ?? prod.prod_oid
-        resultNameByKey.set(prod.prod_oid, pn)   // 商品層（shelf_toggle_product itemKey = prod_oid）
-        for (const plan of prod.plans) {
-          const label = `${pn} · ${(plan.name as string | undefined) ?? String(plan.pkg_oid)}`
-          resultNameByKey.set(`${prod.prod_oid}:${plan.pkg_oid}`, label)  // plan/bundle/schedule
-          if (plan.item_oid != null && plan.supplier_oid != null) {
-            resultNameByKey.set(`${plan.item_oid}:${plan.supplier_oid}`, label)  // inventory
-          }
-        }
-      }
+  function renderSchedBox(): HTMLElement {
+    const box = el('div', 'schedbox')
+    const lab = el('label', 'row')
+    const cb = el('input') as HTMLInputElement; cb.type = 'checkbox'; cb.className = 'chk'; cb.checked = S.shelfSched
+    cb.onchange = () => { S.shelfSched = cb.checked; S.shelfSelProduct = new Set(); S.shelfSelPlan = new Set(); render() }
+    const b = el('b'); txt(b, '排程')
+    lab.appendChild(cb); lab.appendChild(b); lab.appendChild(document.createTextNode('（不立即執行，到點自動送出）')); box.appendChild(lab)
+    const dt = el('input') as HTMLInputElement; dt.type = 'datetime-local'; dt.value = S.shelfSchedAt; dt.disabled = !S.shelfSched
+    if (!S.shelfSched) dt.style.opacity = '.5'
+    dt.onchange = () => { S.shelfSchedAt = dt.value }
+    box.appendChild(dt)
+    const tz = el('select') as HTMLSelectElement; tz.disabled = !S.shelfSched
+    for (const z of Object.keys(TZ_OFFSET_HOURS)) { const o = el('option') as HTMLOptionElement; o.value = z; txt(o, z); if (z === S.shelfSchedTz) o.selected = true; tz.appendChild(o) }
+    tz.onchange = () => { S.shelfSchedTz = tz.value }
+    box.appendChild(tz)
+    const note = el('span', 'muted'); note.style.fontSize = '12px'; txt(note, S.shelfSched ? '僅一般方案可排程；商品/組合方案不排程' : '留白＝立即執行')
+    box.appendChild(note)
+    return box
+  }
 
-      const cardTitle = document.createElement('div'); cardTitle.className = 'bw-card-title'
-      renderText(cardTitle, '方案清單'); container.appendChild(cardTitle)
-
-      // Multi-product tabs
-      if (products.length > 1) {
-        const tabbar = document.createElement('div'); tabbar.className = 'bw-tabbar'
-        for (const prod of products) {
-          const isNF = prod.not_found === true
-          const tab = document.createElement('button')
-          tab.className = `bw-tab ${prod.prod_oid === activeProdOid ? 'bw-tab-active' : ''}${isNF ? ' bw-tab-danger' : ''}`
-          const nameSpan = document.createElement('span'); nameSpan.className = 'bw-tab-name'
-          renderText(nameSpan, isNF ? '找不到商品' : (prod.name ?? prod.prod_oid))
-          const oidSpan = document.createElement('span'); oidSpan.className = 'bw-tab-oid'
-          renderText(oidSpan, isNF ? prod.prod_oid : `${prod.prod_oid} · ${prod.plans.length} 方案`)
-          tab.appendChild(nameSpan); tab.appendChild(oidSpan)
-          tab.onclick = () => {
-            activeProdOid = prod.prod_oid
-            for (const t of tabbar.querySelectorAll('.bw-tab')) t.className = t.className.replace(' bw-tab-active', '')
-            tab.className += ' bw-tab-active'
-            applyVisibility()
-          }
-          tabbar.appendChild(tab)
-        }
-        container.appendChild(tabbar)
-      }
-
-      // Shelf_toggle_product: product-level checkbox (using is_active from batch_view)
-      if (currentSubMode === 'shelf_toggle_product') {
-        // For product-level toggling, we add a product-level checkbox row
-        // Product rows have no pkg_oid — buildItems filters them
-        for (const prod of products) {
-          if (prod.not_found) {
-            const msgDiv = document.createElement('div'); msgDiv.className = 'bw-not-found-msg'
-            renderText(msgDiv, '查無此商品'); container.appendChild(msgDiv)
-            notFoundDivs.push({ prod_oid: prod.prod_oid, el: msgDiv })
-            continue
-          }
-          const wrapper = document.createElement('div'); wrapper.className = 'bw-plan-row-wrapper'
-          const row = document.createElement('div'); row.className = 'bw-plan-row'
-          const cb = document.createElement('input'); cb.type = 'checkbox'
-          // Determine if eligible: product's current state differs from target direction
-          const targetActive = shelfDir === 'on'
-          const eligible = prod.is_active !== targetActive
-          if (!eligible) cb.disabled = true
-          const badge = document.createElement('span'); badge.className = 'bw-co-badge'; badge.hidden = true
-          const rs: RowState = {
-            checkbox: cb, badge, rowEl: row, wrapperEl: wrapper,
-            prod_oid: prod.prod_oid, pkg_oid: '', pkg_name: prod.name ?? prod.prod_oid,
-            is_bundle: false, is_active: prod.is_active, queue: [],
-          }
-          rows.push(rs)
-          cb.onclick = () => { updateRowChecked(rs, false) }
-          row.appendChild(cb)
-          const nameCell = document.createElement('div'); nameCell.className = 'bw-plan-name'
-          const nameSpan = document.createElement('span'); renderText(nameSpan, `整個商品 — ${rs.pkg_name}`)
-          nameCell.appendChild(nameSpan)
-          const oidSpan = document.createElement('span'); oidSpan.className = 'bw-plan-name-oid'; renderText(oidSpan, prod.prod_oid)
-          nameCell.appendChild(oidSpan)
-          row.appendChild(nameCell)
-          // status
-          const statusWrap = document.createElement('span'); statusWrap.className = 'bw-status-badge'
-          if (!eligible) {
-            renderText(statusWrap, `已是${prod.is_active ? '上架' : '下架'}`)
-          } else {
-            renderText(statusWrap, `→ 切為${targetActive ? '上架' : '下架'}`)
-          }
-          row.appendChild(statusWrap)
-          row.appendChild(badge)
-          wrapper.appendChild(row)
-          container.appendChild(wrapper)
-        }
+  // 庫存逐日數量
+  function renderInvSettingPane(p: ProductData): HTMLElement {
+    const box = el('div', 'panebox'); box.style.padding = '4px 0'
+    if (p.not_found) { const m = el('div', 'empty'); txt(m, '查無此商品'); box.appendChild(m); return box }
+    for (const pl of p.plans) {
+      const rowEl = el('div', 'selrow')
+      const span = el('span'); span.style.flex = '1'
+      span.appendChild(document.createTextNode((pl.name ?? pl.pkg_oid) + ' '))
+      const oid = el('span', 'oid'); txt(oid, pl.supplier_name ? `· ${pl.supplier_name}` : `方案 #${pl.pkg_oid}`); span.appendChild(oid)
+      rowEl.appendChild(span)
+      const supported = pl.inventory_mode === 'item_by_amount' && pl.item_oid && pl.supplier_oid
+      if (!supported) {
+        const pill = el('span', 'pill off'); txt(pill, pl.item_oid ? '僅支援套餐總量模式' : '無供應商'); rowEl.appendChild(pill)
       } else {
-        // All other modes: plan-level rows (same pattern as batch-wizard.ts)
-
-        // Radio bar for inventory_platform target
-        if (currentSubMode === 'inventory_platform') {
-          const radioBar = document.createElement('div'); radioBar.className = 'bw-radio-bar'
-          const extWarning = document.createElement('div'); extWarning.className = 'bw-ext-warning'; extWarning.hidden = true
-          renderText(extWarning, '串接外部庫存（B2D/B2S/rezio 等）開啟前請先與 IT 確認')
-          for (const target of ['BE2', 'BE2_SCM', 'EXTERNAL']) {
-            const label = document.createElement('label')
-            const r = document.createElement('input'); r.type = 'radio'; r.name = 'target'; r.value = target
-            r.onchange = () => { extWarning.hidden = r.value !== 'EXTERNAL' }
-            radioButtons.push(r)
-            label.appendChild(r)
-            const span = document.createElement('span'); renderText(span, platformLabel(target))
-            label.appendChild(span)
-            radioBar.appendChild(label)
-          }
-          container.appendChild(radioBar)
-          container.appendChild(extWarning)
-        }
-
-        const headRow = document.createElement('div'); headRow.className = 'bw-plan-head'
-        for (const label of ['', '方案', '供應商', '現況', '']) {
-          const cell = document.createElement('span'); renderText(cell, label); headRow.appendChild(cell)
-        }
-        container.appendChild(headRow)
-
-        for (const prod of products) {
-          if (prod.not_found) {
-            const msgDiv = document.createElement('div'); msgDiv.className = 'bw-not-found-msg'
-            renderText(msgDiv, '查無此商品，請確認 prod_oid'); container.appendChild(msgDiv)
-            notFoundDivs.push({ prod_oid: prod.prod_oid, el: msgDiv })
-          }
-          for (const plan of prod.plans) {
-            const wrapper = document.createElement('div'); wrapper.className = 'bw-plan-row-wrapper'
-            const row = document.createElement('div')
-            const cb = document.createElement('input'); cb.type = 'checkbox'
-            cb.dataset.pkgOid = String(plan.pkg_oid)
-            const itemOid = plan.item_oid as string | undefined
-            const supplierOid = plan.supplier_oid as string | undefined
-            const isBundle = plan.is_bundle === true
-            // 方案+立即（shelf_toggle_plan）：一般方案 + 組合方案皆可勾（送出時依 is_bundle 自動分流）。
-            // 方案+時間（shelf_schedule）：組合方案 be2 不支援排程 → 灰掉。
-            if (currentSubMode === 'shelf_schedule' && isBundle) cb.disabled = true
-            const badge = document.createElement('span'); badge.className = 'bw-co-badge'; badge.hidden = true
-            renderText(badge, '將一併變更')
-            const rs: RowState = {
-              checkbox: cb, badge, rowEl: row, wrapperEl: wrapper,
-              prod_oid: prod.prod_oid, pkg_oid: String(plan.pkg_oid),
-              pkg_name: (plan.name as string | undefined) ?? String(plan.pkg_oid),
-              item_oid: itemOid, supplier_oid: supplierOid,
-              supplier_name: plan.supplier_name as string | undefined,
-              is_bundle: isBundle, is_active: plan.is_active as boolean | undefined,
-              current_platform: plan.current_platform as string | null | undefined,
-              inventory_mode: plan.inventory_mode as string | undefined, queue: [],
-            }
-            rows.push(rs)
-            updateRowChecked(rs, currentSubMode === 'shelf_schedule')
-            cb.onclick = () => {
-              clearFallback(fallbackEl)
-              if (currentSubMode === 'inventory_platform') syncSiblings(rs)
-              updateRowChecked(rs, currentSubMode === 'shelf_schedule')
-            }
-            row.appendChild(cb)
-
-            // Name + pkg_oid
-            const nameCell = document.createElement('div'); nameCell.className = 'bw-plan-name'
-            const nameTop = document.createElement('div'); nameTop.className = 'bw-plan-name-top'
-            const nameSpan = document.createElement('span'); renderText(nameSpan, rs.pkg_name); nameTop.appendChild(nameSpan)
-            if (isBundle) {
-              const bundleTag = document.createElement('span'); bundleTag.className = 'bw-bundle-tag'
-              renderText(bundleTag, currentSubMode === 'shelf_schedule' ? '組合方案·不支援排程' : '組合方案'); nameTop.appendChild(bundleTag)
-            }
-            nameCell.appendChild(nameTop)
-            const oidSpan = document.createElement('span'); oidSpan.className = 'bw-plan-name-oid'
-            renderText(oidSpan, rs.pkg_oid); nameCell.appendChild(oidSpan)
-            row.appendChild(nameCell)
-
-            // Supplier
-            const supplierSpan = document.createElement('span')
-            renderText(supplierSpan, plan.supplier_name ? String(plan.supplier_name) : '—')
-            row.appendChild(supplierSpan)
-
-            // Status
-            const statusWrap = document.createElement('span'); statusWrap.className = 'bw-status-badge'
-            if (currentSubMode === 'inventory_setting') {
-              if (plan.inventory_mode !== 'item_by_amount') {
-                cb.disabled = true
-                renderText(statusWrap, '目前不支援（僅套餐總量模式）')
-                statusWrap.style.fontSize = '0.6875rem'; statusWrap.style.color = 'var(--bw-muted)'
-              } else {
-                const input = document.createElement('input')
-                input.type = 'number'; input.min = '0'; input.step = '1'; input.className = 'bw-input'
-                input.style.width = '100%'
-                input.placeholder = plan.current_quantity != null ? String(plan.current_quantity) : '未設'
-                rs.quantityInput = input
-                statusWrap.appendChild(input)
-              }
-            } else if (currentSubMode === 'inventory_platform') {
-              const dot = document.createElement('span')
-              const hasPlatform = plan.current_platform != null
-              dot.className = `bw-dot ${hasPlatform ? 'bw-dot-green' : 'bw-dot-gray'}`
-              statusWrap.appendChild(dot)
-              const sSpan = document.createElement('span')
-              renderText(sSpan, hasPlatform ? String(plan.current_platform) : '—')
-              statusWrap.appendChild(sSpan)
-            } else if (currentSubMode === 'shelf_schedule') {
-              const dot = document.createElement('span')
-              const queueLen = Array.isArray(plan.reserve_queue) ? (plan.reserve_queue as unknown[]).length : 0
-              dot.className = `bw-dot ${isBundle ? 'bw-dot-gray' : queueLen > 0 ? 'bw-dot-green' : 'bw-dot-gray'}`
-              statusWrap.appendChild(dot)
-              const sSpan = document.createElement('span')
-              renderText(sSpan, isBundle ? '(bundle，不可個別排程)' : queueLen > 0 ? `現有 ${queueLen} 筆排程` : '（無排程）')
-              statusWrap.appendChild(sSpan)
-            } else {
-              // shelf_toggle_plan / shelf_toggle_bundle: show active status
-              const dot = document.createElement('span')
-              const active = plan.is_active as boolean | undefined
-              dot.className = `bw-dot ${active ? 'bw-dot-green' : 'bw-dot-red'}`
-              statusWrap.appendChild(dot)
-              const sSpan = document.createElement('span')
-              renderText(sSpan, active ? '上架' : '下架')
-              statusWrap.appendChild(sSpan)
-            }
-            row.appendChild(statusWrap)
-            row.appendChild(badge)
-            wrapper.appendChild(row)
-            container.appendChild(wrapper)
-          }
-        }
+        const key = `${pl.item_oid}:${pl.supplier_oid}`
+        const cur = el('span', 'muted'); cur.style.fontSize = '12px'; txt(cur, `現有 ${pl.current_quantity != null ? pl.current_quantity : '未設'} →`); rowEl.appendChild(cur)
+        const input = el('input') as HTMLInputElement
+        input.type = 'number'; input.min = '0'; input.step = '1'; input.className = 'tnum'; input.style.width = '80px'
+        input.value = S.invQty.get(key) ?? ''; input.placeholder = '—'
+        input.oninput = () => { S.invQty.set(key, input.value) }
+        input.onchange = () => { S.invQty.set(key, input.value); render() }
+        rowEl.appendChild(input)
       }
-      applyVisibility()
+      box.appendChild(rowEl)
     }
+    return box
+  }
 
-    function syncSiblings(changed: RowState): void {
-      if (!changed.item_oid) return
-      const on = changed.checkbox.checked
-      for (const r of rows) {
-        if (r !== changed && r.item_oid === changed.item_oid && r.supplier_oid === changed.supplier_oid) {
-          r.checkbox.checked = on; r.badge.hidden = !on
-          updateRowChecked(r, currentSubMode === 'shelf_schedule')
+  // 庫存平台切換
+  function renderInvPlatformPane(p: ProductData): HTMLElement {
+    const wrap = el('div')
+    // 目標平台
+    const bar = el('div', 'dirbar')
+    const eb = el('span', 'eyebrow'); txt(eb, '目標平台'); bar.appendChild(eb)
+    const sel = el('select') as HTMLSelectElement
+    for (const t of ['BE2', 'BE2_SCM', 'EXTERNAL']) { const o = el('option') as HTMLOptionElement; o.value = t; txt(o, platformLabel(t)); if (t === S.platTarget) o.selected = true; sel.appendChild(o) }
+    sel.onchange = () => { S.platTarget = sel.value; render() }
+    bar.appendChild(sel)
+    wrap.appendChild(bar)
+    if (S.platTarget === 'EXTERNAL') { const w = el('div', 'ext-warning'); txt(w, '串接外部庫存（B2D/B2S/rezio 等）開啟前請先與 IT 確認'); wrap.appendChild(w) }
+
+    const box = el('div', 'panebox')
+    if (p.not_found) { const m = el('div', 'empty'); txt(m, '查無此商品'); box.appendChild(m); wrap.appendChild(box); return wrap }
+    for (const pl of p.plans) {
+      const rowEl = el('div', 'selrow')
+      const supported = !!(pl.item_oid && pl.supplier_oid)
+      const lab = el('label'); if (!supported) lab.style.opacity = '.5'
+      const cb = el('input') as HTMLInputElement; cb.type = 'checkbox'; cb.className = 'chk'
+      cb.checked = S.platSel.has(pl.pkg_oid); cb.disabled = !supported
+      cb.onchange = () => { syncPlatformSiblings(pl, cb.checked); render() }
+      const span = el('span'); span.appendChild(document.createTextNode((pl.name ?? pl.pkg_oid) + ' '))
+      const oid = el('span', 'oid'); txt(oid, pl.supplier_name ? `· ${pl.supplier_name}` : `方案 #${pl.pkg_oid}`); span.appendChild(oid)
+      lab.appendChild(cb); lab.appendChild(span); rowEl.appendChild(lab)
+      const cur = el('span', 'row')
+      const dot = el('span'); dot.style.cssText = `width:8px;height:8px;border-radius:50%;background:${pl.current_platform ? 'var(--good)' : 'var(--faint)'}`
+      cur.appendChild(dot)
+      const cs = el('span', 'muted'); cs.style.fontSize = '12px'; txt(cs, platformLabel(pl.current_platform)); cur.appendChild(cs)
+      rowEl.appendChild(cur)
+      box.appendChild(rowEl)
+    }
+    wrap.appendChild(box)
+    return wrap
+  }
+  function syncPlatformSiblings(changed: PlanData, on: boolean): void {
+    if (!changed.item_oid || !changed.supplier_oid) return
+    for (const p of S.products) {
+      for (const pl of p.plans) {
+        if (pl.item_oid === changed.item_oid && pl.supplier_oid === changed.supplier_oid) {
+          if (on) S.platSel.add(pl.pkg_oid); else S.platSel.delete(pl.pkg_oid)
         }
       }
-      if (!on) changed.badge.hidden = true
-    }
-
-    function renderDefaultTimeBar(): HTMLElement {
-      const bar = document.createElement('div'); bar.className = 'bw-card'
-      const title = document.createElement('div'); title.className = 'bw-card-title'
-      renderText(title, '預設時間套用'); bar.appendChild(title)
-      const row = document.createElement('div'); row.className = 'bw-row-inline'
-      const date = document.createElement('input'); date.type = 'date'; date.className = 'bw-input'; date.dataset.role = 'defDate'
-      const hour = document.createElement('input') as HTMLInputElement; hour.type = 'number'; hour.value = '0'; hour.className = 'bw-input'
-      const minute = document.createElement('input') as HTMLInputElement; minute.type = 'number'; minute.value = '0'; minute.className = 'bw-input'
-      const tz = document.createElement('select') as HTMLSelectElement; tz.className = 'bw-select'
-      for (const z of ['Asia/Taipei', 'Asia/Tokyo', 'UTC']) { const opt = document.createElement('option'); opt.value = z; renderText(opt, z); tz.appendChild(opt) }
-      tz.value = 'Asia/Taipei'
-      const status = document.createElement('select') as HTMLSelectElement; status.className = 'bw-select'
-      for (const [v, label] of [['true', '上架'], ['false', '下架'], ['clear', '取消排程']]) {
-        const opt = document.createElement('option'); opt.value = v; renderText(opt, label); status.appendChild(opt)
-      }
-      status.value = 'true'
-      status.onchange = () => {
-        const isClear = status.value === 'clear'
-        date.disabled = isClear; hour.disabled = isClear; minute.disabled = isClear; tz.disabled = isClear
-      }
-      const applyBtn = secondaryBtn('套用到所有已勾選', 'applyAllBtn', () => {
-        clearFallback(fallbackEl); lastTz = tz.value
-        const isClear = status.value === 'clear'
-        if (!isClear) {
-          const hh = Number(hour.value); const mm = Number(minute.value)
-          if (!date.value || !Number.isInteger(hh) || hh < 0 || hh > 23 || !Number.isInteger(mm) || mm < 0 || mm > 59) {
-            showFallback(fallbackEl, '請先選擇日期並確認時間（時 0–23、分 0–59）'); return
-          }
-          let utc: string
-          try { utc = toUtcDateTime(date.value, `${hh}:${mm}`, tz.value).slice(0, 19) } catch { showFallback(fallbackEl, '時間格式錯誤'); return }
-          // toUtcDateTime returns full datetime; use toReserveDateUtc-compat string
-          for (const r of rows) {
-            if (r.checkbox.checked && !r.is_bundle) {
-              const existing = r.queue.find(q => q.reserve_date_utc === utc)
-              if (existing) existing.reserve_status = status.value === 'true'
-              else r.queue.push({ reserve_date_utc: utc, reserve_status: status.value === 'true' })
-              r.cleared = false
-              renderQueueBadge(r)
-            }
-          }
-        } else {
-          for (const r of rows) {
-            if (r.checkbox.checked && !r.is_bundle) { r.queue = []; r.cleared = true; renderQueueBadge(r) }
-          }
-        }
-      })
-      row.appendChild(date); row.appendChild(hour); row.appendChild(minute); row.appendChild(tz); row.appendChild(status); row.appendChild(applyBtn)
-      bar.appendChild(row); return bar
-    }
-
-    // ---- doNext: build items → create changeset ----
-    async function doNextBatch(): Promise<void> {
-      const wiz = WIZARDS[currentSubMode]
-      if (!wiz) { showFallback(fallbackEl, '此次模式無對應精靈'); return }
-
-      const target = currentSubMode === 'inventory_platform'
-        ? (radioButtons.find(r => r.checked)?.value ?? 'BE2')
-        : (shelfDir === 'on' ? 'on' : 'off')
-
-      const rowInputs: WizardRowInput[] = rows.map(r => ({
-        checked: r.checkbox.checked, is_bundle: r.is_bundle ?? false,
-        prod_oid: r.prod_oid, pkg_oid: r.pkg_oid, pkg_name: r.pkg_name,
-        item_oid: r.item_oid, supplier_oid: r.supplier_oid,
-        queue: r.queue, cleared: r.cleared ?? false,
-        quantity: r.quantityInput ? (Number.isNaN(r.quantityInput.valueAsNumber) ? undefined : r.quantityInput.valueAsNumber) : undefined,
-      }))
-
-      // 方案+立即：方案清單含一般方案 + 組合方案 → 依 is_bundle 分流成 shelf_toggle_plan / shelf_toggle_bundle
-      // 兩種 change-set（各自 ≤20 筆再拆）。splitBatches 按 action_type 分組，逐批 create→view→confirm。
-      const isPlanImmediate = currentFunc === 'shelf' && shelfObject === 'plan' && shelfTiming === 'immediate'
-      if (isPlanImmediate) {
-        const planItems = shelfTogglePlanWizard.buildItems(rowInputs, { target }) as Array<Record<string, unknown>>
-        const bundleItems = shelfToggleBundleWizard.buildItems(rowInputs, { target }) as Array<Record<string, unknown>>
-        if (planItems.length + bundleItems.length === 0) { showFallback(fallbackEl, '請至少勾選一筆並填妥必要欄位'); return }
-        pendingChunks = [
-          ...buildActionChunks(planItems, 'shelf_toggle_plan', 20),
-          ...buildActionChunks(bundleItems, 'shelf_toggle_bundle', 20),
-        ]
-      } else {
-        const items = wiz.buildItems(rowInputs, { target }) as Array<Record<string, unknown>>
-        if (items.length === 0) { showFallback(fallbackEl, '請至少勾選一筆並填妥必要欄位'); return }
-        // server createChangesetCore 每個 change-set 硬上限 20 筆 → splitBatches 拆多批（此模式單一 action_type）。
-        pendingChunks = buildActionChunks(items, serverActionType(currentSubMode), 20)
-      }
-      chunkIndex = 0
-      accumChunkResults = []
-      await stageChunk()
     }
   }
 
-  // 建立並檢視當前批（pendingChunks[chunkIndex]）——batch 與 announcement 共用。
-  async function stageChunk(): Promise<void> {
-    const chunk = pendingChunks[chunkIndex]
-    if (!chunk) { showFallback(fallbackEl, '無可送出的變更'); return }
-    currentChunkActionType = chunk.action_type   // 本批 action_type（方案+立即會逐批不同）
-    clearFallback(fallbackEl)
-    statusEl.textContent = pendingChunks.length > 1
-      ? `建立第 ${chunkIndex + 1}/${pendingChunks.length} 批變更中…` : '建立變更中…'
-    try {
-      const createR = await app.callServerTool({
-        name: 'app_create_changeset',
-        arguments: { action_type: chunk.action_type, items: chunk.items },
-      })
-      if (createR.isError) {
-        const errText = tryParseErrorText(createR)
-        showFallback(fallbackEl, errText ? `建立變更失敗：${errText}` : '建立變更失敗'); return
-      }
-      const created = createR.structuredContent?.items?.[0] as { changeset_id?: string } | undefined
-      if (!created?.changeset_id) { showFallback(fallbackEl, '建立變更失敗：未取得 changeset_id'); return }
-      changesetId = created.changeset_id
-      const rec = await loadView()
-      if (!rec) return
-      renderStep2(rec)
-    } catch (e) { showFallback(fallbackEl, '建立變更失敗：' + String(e)) }
-  }
+  // 公告表單
+  function renderAnnounceBlock(): HTMLElement {
+    const a = S.ann
+    const pane = el('div', 'panebox annpane'); pane.style.marginTop = '16px'
 
-  // =====================================================================
-  // ANNOUNCEMENT FLOW
-  // =====================================================================
+    // 內部名稱
+    const f1 = el('div', 'fld'); const e1 = el('div', 'eyebrow'); txt(e1, '公告標題（≤254）'); f1.appendChild(e1)
+    const nameInput = el('input') as HTMLInputElement; nameInput.type = 'text'; nameInput.value = a.name; nameInput.style.cssText = 'width:100%;margin-top:6px'; nameInput.placeholder = '僅供內部識別'
+    nameInput.oninput = () => { a.name = nameInput.value }; nameInput.onchange = () => { render() }
+    f1.appendChild(nameInput); pane.appendChild(f1)
 
-  function renderAnnouncementStep1(): void {
-    // OID input card
-    const inputCard = document.createElement('div'); inputCard.className = 'bw-card'
-    const title = document.createElement('div'); title.className = 'bw-card-title'; renderText(title, '商品')
-    inputCard.appendChild(title)
-    const inputRow = document.createElement('div'); inputRow.className = 'bw-row-inline'
-    const prodInput = document.createElement('input') as HTMLInputElement
-    prodInput.type = 'text'; prodInput.className = 'bw-input'; prodInput.placeholder = '商品 oid，逗號或空白分隔'
-    prodInput.value = loadedProdOids.join(', '); prodInput.dataset.role = 'prodOidsInput'
-    inputRow.appendChild(prodInput)
-    inputRow.appendChild(primaryBtn('載入', 'loadBtn', () => { void doLoadAnn(prodInput.value) }))
-    inputCard.appendChild(inputRow)
-    workspaceEl.appendChild(inputCard)
+    // 啟用
+    const f2 = el('div', 'fld'); const e2 = el('div', 'eyebrow'); txt(e2, '啟用'); f2.appendChild(e2)
+    const enLab = el('label', 'row'); enLab.style.marginTop = '6px'
+    const en = el('input') as HTMLInputElement; en.type = 'checkbox'; en.className = 'chk'; en.checked = a.isEnabled
+    en.onchange = () => { a.isEnabled = en.checked }
+    const enTxt = el('span', 'muted'); enTxt.style.fontSize = '13px'; txt(enTxt, '建立後立即啟用；取消＝建為停用')
+    enLab.appendChild(en); enLab.appendChild(enTxt); f2.appendChild(enLab); pane.appendChild(f2)
 
-    // Product list
-    const listCard = document.createElement('div'); listCard.className = 'bw-card'; listCard.dataset.role = 'prodList'; listCard.hidden = true
-    workspaceEl.appendChild(listCard)
+    // 顯示期間
+    const f3 = el('div', 'fld'); const e3 = el('div', 'eyebrow'); txt(e3, '顯示期間'); f3.appendChild(e3)
+    const grid = el('div', 'grid3')
+    const startCell = el('div'); const sl = el('div', 'sublabel'); txt(sl, '開始'); startCell.appendChild(sl)
+    const sRow = el('div', 'row')
+    const sDate = el('input') as HTMLInputElement; sDate.type = 'date'; sDate.value = a.startDate; sDate.oninput = () => { a.startDate = sDate.value }; sDate.onchange = () => render()
+    const sTime = el('input') as HTMLInputElement; sTime.type = 'time'; sTime.value = a.startTime; sTime.oninput = () => { a.startTime = sTime.value }
+    sRow.appendChild(sDate); sRow.appendChild(sTime); startCell.appendChild(sRow)
+    const endCell = el('div'); const elb = el('div', 'sublabel'); txt(elb, '結束（選填）'); endCell.appendChild(elb)
+    const eRow = el('div', 'row')
+    const eDate = el('input') as HTMLInputElement; eDate.type = 'date'; eDate.value = a.endDate; eDate.oninput = () => { a.endDate = eDate.value }
+    const eTime = el('input') as HTMLInputElement; eTime.type = 'time'; eTime.value = a.endTime; eTime.oninput = () => { a.endTime = eTime.value }
+    eRow.appendChild(eDate); eRow.appendChild(eTime); endCell.appendChild(eRow)
+    const tzCell = el('div'); const tl = el('div', 'sublabel'); txt(tl, '時區'); tzCell.appendChild(tl)
+    const tz = el('select') as HTMLSelectElement
+    for (const z of Object.keys(TZ_OFFSET_HOURS)) { const o = el('option') as HTMLOptionElement; o.value = z; txt(o, z); if (z === a.startTz) o.selected = true; tz.appendChild(o) }
+    tz.onchange = () => { a.startTz = tz.value; a.endTz = tz.value }
+    tzCell.appendChild(tz)
+    grid.appendChild(startCell); grid.appendChild(endCell); grid.appendChild(tzCell); f3.appendChild(grid); pane.appendChild(f3)
 
-    // Announcement form (shown after load)
-    const formCard = document.createElement('div'); formCard.className = 'bw-card'; formCard.hidden = true; formCard.dataset.role = 'annForm'
-    workspaceEl.appendChild(formCard)
+    // 內容貼上
+    const f4 = el('div', 'fld'); const e4 = el('div', 'eyebrow'); txt(e4, '公告內容'); f4.appendChild(e4)
+    const hint = el('div', 'muted'); hint.style.cssText = 'font-size:12px;margin:4px 0'
+    txt(hint, '先在你自己的 Claude 用 kkday-announcement-translate skill 翻譯，把整段回覆（含 ```json 區塊）貼進來。')
+    f4.appendChild(hint)
+    const ta = el('textarea') as HTMLTextAreaElement; ta.rows = 3; ta.style.width = '100%'; ta.placeholder = '把 Claude 的回覆貼在這裡'; ta.value = a.paste
+    ta.oninput = () => { a.paste = ta.value }
+    f4.appendChild(ta)
+    const btnRow = el('div', 'row'); btnRow.style.marginTop = '8px'
+    btnRow.appendChild(btn('以新貼上的內容取代', 'btn sm', () => {
+      const result = ingestAnnouncement(a.paste)
+      if (!result) { showFallback('內容格式不符：需含 kkday-announcement-translate skill 的 ```json 區塊（type=be2-announcement-content + langs[]）'); return }
+      clearFallback()
+      a.langContents = new Map(); a.selectedLangs = new Set()
+      for (const l of result.langs) { a.langContents.set(l.langCode, l.content); a.selectedLangs.add(l.langCode) }
+      render()
+    }))
+    const hasContent = a.langContents.size > 0
+    if (hasContent) btnRow.appendChild(btn('清除內容', 'btn ghost sm', () => { a.langContents = new Map(); a.selectedLangs = new Set(); a.paste = ''; render() }))
+    f4.appendChild(btnRow)
 
-    async function doLoadAnn(raw: string): Promise<void> {
-      const prodOids = parseOidInput(raw)
-      if (prodOids.length === 0) { showFallback(fallbackEl, '請輸入至少一個商品 oid'); return }
-      statusEl.textContent = '載入中…'; clearFallback(fallbackEl)
-      try {
-        const r = await app.callServerTool({ name: 'app_get_announcement_view', arguments: { prod_oids: prodOids } })
-        if (r.isError) { showFallback(fallbackEl, '載入失敗'); return }
-        const products = (r.structuredContent?.items?.[0] as { products?: Array<Record<string, unknown>> } | undefined)?.products ?? []
-        loadedProdOids = products.map(p => String(p.prod_oid))
-        renderProdList(listCard, products)
-        renderAnnForm(formCard)
-        statusEl.textContent = `已載入 ${products.length} 個商品`
-      } catch (e) { showFallback(fallbackEl, '載入失敗：' + String(e)) }
-    }
-
-    function renderProdList(container: HTMLElement, products: Array<Record<string, unknown>>): void {
-      container.hidden = false; container.textContent = ''
-      const t = document.createElement('div'); t.className = 'bw-card-title'; renderText(t, '將對這些商品建立公告'); container.appendChild(t)
-      for (const p of products) {
-        const line = document.createElement('div'); line.style.cssText = 'font-size:.875rem;padding:.25rem 0'
-        const ex = p.existing_count == null ? '（既有公告數未知）' : `（既有公告 ${Number(p.existing_count)} 筆）`
-        renderText(line, `${p.name ?? p.prod_oid}  ${p.prod_oid} ${ex}`)
-        container.appendChild(line)
-      }
-    }
-
-    function renderAnnForm(container: HTMLElement): void {
-      container.hidden = false; container.textContent = ''
-      const a = annState
-
-      // Name
-      const nameWrap = document.createElement('div'); nameWrap.className = 'wb-field'
-      const nameLabel = document.createElement('label'); renderText(nameLabel, '公告標題（≤254）'); nameWrap.appendChild(nameLabel)
-      const nameInput = document.createElement('input') as HTMLInputElement
-      nameInput.type = 'text'; nameInput.className = 'bw-input'; nameInput.value = a.name; nameInput.dataset.role = 'nameInput'
-      nameInput.oninput = () => { a.name = nameInput.value }
-      nameWrap.appendChild(nameInput); container.appendChild(nameWrap)
-
-      // isEnabled
-      const enWrap = document.createElement('div'); enWrap.className = 'wb-field'
-      const enLabel = document.createElement('label'); renderText(enLabel, '啟用'); enWrap.appendChild(enLabel)
-      const enInput = document.createElement('input') as HTMLInputElement
-      enInput.type = 'checkbox'; enInput.checked = a.isEnabled; enInput.dataset.role = 'enabledInput'
-      enInput.onchange = () => { a.isEnabled = enInput.checked }
-      enWrap.appendChild(enInput); container.appendChild(enWrap)
-
-      // Start time
-      const startWrap = document.createElement('div'); startWrap.className = 'wb-field'
-      const startLabel = document.createElement('label'); renderText(startLabel, '開始時間'); startWrap.appendChild(startLabel)
-      const startRow = document.createElement('div'); startRow.className = 'bw-row-inline'
-      const startDate = mkInput('date', 'startDate'); startDate.value = a.startDate; startDate.oninput = () => { a.startDate = startDate.value }
-      const startTime = mkInput('time', 'startTime'); startTime.value = a.startTime; startTime.oninput = () => { a.startTime = startTime.value }
-      const startTz = mkTz('startTz'); startTz.value = a.startTz; startTz.onchange = () => { a.startTz = startTz.value }
-      startRow.appendChild(startDate); startRow.appendChild(startTime); startRow.appendChild(startTz)
-      startWrap.appendChild(startRow); container.appendChild(startWrap)
-
-      // End time
-      const endWrap = document.createElement('div'); endWrap.className = 'wb-field'
-      const endLabel = document.createElement('label'); renderText(endLabel, '結束時間（選填）'); endWrap.appendChild(endLabel)
-      const endRow = document.createElement('div'); endRow.className = 'bw-row-inline'
-      const endDate = mkInput('date', 'endDate'); endDate.value = a.endDate; endDate.oninput = () => { a.endDate = endDate.value }
-      const endTime = mkInput('time', 'endTime'); endTime.value = a.endTime; endTime.oninput = () => { a.endTime = endTime.value }
-      const endTz = mkTz('endTz'); endTz.value = a.endTz; endTz.onchange = () => { a.endTz = endTz.value }
-      endRow.appendChild(endDate); endRow.appendChild(endTime); endRow.appendChild(endTz)
-      endWrap.appendChild(endRow); container.appendChild(endWrap)
-
-      // Paste area for announcement content (ingestAnnouncement)
-      const pasteWrap = document.createElement('div'); pasteWrap.className = 'wb-field'
-      const pasteLabel = document.createElement('label'); renderText(pasteLabel, '公告內容（貼上 kkday-announcement-translate skill 的回覆）')
-      pasteWrap.appendChild(pasteLabel)
-      const pasteArea = document.createElement('textarea') as HTMLTextAreaElement
-      pasteArea.className = 'bw-input'; pasteArea.rows = 3; pasteArea.placeholder = '把 Claude 的回覆貼在這裡'; pasteArea.style.width = '100%'
-      pasteWrap.appendChild(pasteArea)
-      const pasteBtn = secondaryBtn('以新貼上的內容取代', 'annReplaceBtn', () => {
-        const result = ingestAnnouncement(pasteArea.value)
-        if (!result) { showFallback(fallbackEl, '內容格式不符：需含 be2-announcement-content JSON'); return }
-        clearFallback(fallbackEl)
-        a.langContents.clear(); a.selectedLangs.clear()
-        for (const l of result.langs) { a.langContents.set(l.langCode, l.content); a.selectedLangs.add(l.langCode) }
-        renderLangList()
-      })
-      pasteWrap.appendChild(pasteBtn)
-      container.appendChild(pasteWrap)
-
-      // Lang list container
-      const langContainer = document.createElement('div'); langContainer.dataset.role = 'langList'
-      container.appendChild(langContainer)
-
-      function renderLangList(): void {
-        langContainer.textContent = ''
-        const langTitle = document.createElement('div'); langTitle.className = 'bw-card-title'; renderText(langTitle, '語系與內文')
-        langContainer.appendChild(langTitle)
-        for (const loc of ANN_LOCALES) {
-          const lr = document.createElement('div'); lr.className = 'wb-lang-row'
-          const top = document.createElement('div'); top.className = 'bw-row-inline'
-          const cb = document.createElement('input') as HTMLInputElement
-          cb.type = 'checkbox'; cb.checked = a.selectedLangs.has(loc.code)
-          const content = a.langContents.get(loc.code) ?? ''
-          if (!content) cb.disabled = true
-          cb.onchange = () => { cb.checked ? a.selectedLangs.add(loc.code) : a.selectedLangs.delete(loc.code) }
-          const cbLabel = document.createElement('span'); renderText(cbLabel, `${loc.code} — ${loc.name}`)
-          top.appendChild(cb); top.appendChild(cbLabel); lr.appendChild(top)
-          if (content) {
-            const contentDiv = document.createElement('div'); contentDiv.style.cssText = 'font-size:.8125rem;color:var(--bw-muted);padding-left:1.5rem'
-            renderText(contentDiv, content); lr.appendChild(contentDiv)
-          }
-          langContainer.appendChild(lr)
-        }
-        const selectedCount = [...a.selectedLangs].filter(c => (a.langContents.get(c) ?? '').trim()).length
-        const countNote = document.createElement('div'); countNote.style.cssText = 'font-size:.75rem;color:var(--bw-muted);margin-top:.5rem'
-        renderText(countNote, `已選 ${selectedCount} 語系`); langContainer.appendChild(countNote)
-      }
-
-      if (a.langContents.size > 0) renderLangList()
-
-      // Footer
-      const footer = document.createElement('div'); footer.className = 'bw-row-footer'
-      footer.appendChild(primaryBtn('下一步：檢視', 'nextAnnBtn', () => { void doNextAnn() }))
-      container.appendChild(footer)
-    }
-
-    async function doNextAnn(): Promise<void> {
-      const a = annState
-      if (!a.name.trim()) { showFallback(fallbackEl, '請填公告標題'); return }
-      if (!a.startDate) { showFallback(fallbackEl, '請選開始日期'); return }
-      let start_time: string
-      try { start_time = toUtcDateTime(a.startDate, a.startTime || '00:00', a.startTz) } catch { showFallback(fallbackEl, '開始時間格式錯誤'); return }
-      let end_time: string | null = null
-      if (a.endDate) {
-        try { end_time = toUtcDateTime(a.endDate, a.endTime || '00:00', a.endTz) } catch { showFallback(fallbackEl, '結束時間格式錯誤'); return }
-      }
-      const langs: string[] = []
-      const contents: Array<{ lang: string; content: string }> = []
+    // 15 語系表
+    if (hasContent) {
+      const sx = el('div', 'scroll-x'); sx.style.marginTop = '12px'
+      const table = el('table', 'anntbl')
+      const thead = el('thead'); const htr = el('tr')
+      for (const [w, t] of [['30px', ''], ['', '語系'], ['', '內容（純文字）']] as Array<[string, string]>) { const th = el('th'); if (w) th.style.width = w; txt(th, t); htr.appendChild(th) }
+      thead.appendChild(htr); table.appendChild(thead)
+      const tbody = el('tbody')
       for (const loc of ANN_LOCALES) {
-        if (a.selectedLangs.has(loc.code)) {
-          const c = (a.langContents.get(loc.code) ?? '').trim()
-          if (c) { langs.push(loc.code); contents.push({ lang: loc.code, content: c }) }
+        const c = a.langContents.get(loc.code) ?? ''
+        const on = a.selectedLangs.has(loc.code)
+        const tr = el('tr', on ? '' : 'annoff')
+        const td0 = el('td')
+        const cb = el('input') as HTMLInputElement; cb.type = 'checkbox'; cb.className = 'chk'; cb.checked = on; cb.disabled = c === ''
+        cb.onchange = () => { if (cb.checked) a.selectedLangs.add(loc.code); else a.selectedLangs.delete(loc.code); render() }
+        td0.appendChild(cb); tr.appendChild(td0)
+        const td1 = el('td'); const code = el('div', 'mono'); code.style.fontSize = '12px'; txt(code, loc.code); const nm = el('div', 'muted'); nm.style.fontSize = '12px'; txt(nm, loc.name); td1.appendChild(code); td1.appendChild(nm); tr.appendChild(td1)
+        const td2 = el('td'); td2.style.cssText = 'font-size:12px;line-height:1.55'; if (c) txt(td2, c); else { const m = el('span', 'muted'); txt(m, '（無內容）'); td2.appendChild(m) }
+        tr.appendChild(td2)
+        tbody.appendChild(tr)
+      }
+      table.appendChild(tbody); sx.appendChild(table); f4.appendChild(sx)
+      const note = el('div', 'muted mt8'); note.style.fontSize = '12px'; txt(note, `已選 ${annSelectedCodes().length} 語系；送出時做 lang_code→langCode 對映。`); f4.appendChild(note)
+    }
+    pane.appendChild(f4)
+
+    const applied = el('div', 'muted mt8'); applied.style.fontSize = '12px'; txt(applied, `公告套用到已載入的 ${S.loadedProdOids.length} 個商品（prod_oids 陣列一次送）。`)
+    pane.appendChild(applied)
+    return pane
+  }
+
+  // 右欄：本次變更 live summary
+  function renderSide(): HTMLElement {
+    const f = funcDesc()
+    const side = el('aside', 'side')
+    const eb = el('div', 'eyebrow'); txt(eb, '檢視：本次變更'); side.appendChild(eb)
+    const ch = changesList()
+    const big = el('div', 'big tnum'); txt(big, String(ch.length)); side.appendChild(big)
+    const sub = el('div', 'muted'); sub.style.fontSize = '12px'; txt(sub, `筆 · ${f.label} · ${S.products.length} 商品`); side.appendChild(sub)
+
+    const listWrap = el('div'); listWrap.style.cssText = 'flex:1;overflow-y:auto;margin-top:8px'
+    if (ch.length === 0) { const e = el('div', 'empty'); txt(e, '尚未有變更'); listWrap.appendChild(e) }
+    else {
+      for (const [g, arr] of groupBy(ch)) {
+        const grp = el('div', 'sumgrp')
+        const open = S.sideOpen.has(g)
+        const hd = el('button', 'grphd')
+        const left = el('span'); left.appendChild(document.createTextNode(g + ' ')); const cnt = el('span', 'oid'); txt(cnt, `· ${arr.length} 筆`); left.appendChild(cnt)
+        const car = el('span'); txt(car, open ? '▾' : '▸')
+        hd.appendChild(left); hd.appendChild(car)
+        hd.onclick = () => { if (open) S.sideOpen.delete(g); else S.sideOpen.add(g); render() }
+        grp.appendChild(hd)
+        if (open) for (const l of arr) { const it = el('div', 'sumitem'); const d = el('span', 'd'); it.appendChild(d); it.appendChild(document.createTextNode(l)); grp.appendChild(it) }
+        listWrap.appendChild(grp)
+      }
+    }
+    side.appendChild(listWrap)
+
+    const next = btn('檢視全部 →', 'btn primary mt12', () => { void doNext() }) as HTMLButtonElement
+    next.style.width = '100%'; next.disabled = ch.length === 0
+    side.appendChild(next)
+    const foot = el('div', 'muted mt8'); foot.style.fontSize = '11px'
+    txt(foot, ch.length > BATCH_CAP ? `共 ${ch.length} 筆，將拆成 ${Math.ceil(ch.length / BATCH_CAP)} 批（每批 ≤${BATCH_CAP}）逐批批准` : '下一步：檢視 + 批准')
+    side.appendChild(foot)
+    return side
+  }
+
+  // =====================================================================
+  // 建立變更 → 拆批 → stageChunk
+  // =====================================================================
+  async function doNext(): Promise<void> {
+    if (S.products.length === 0) { showFallback('請先載入商品'); return }
+    let chunks: Array<{ action_type: ChunkActionType; items: Array<Record<string, unknown>> }> = []
+
+    if (S.func === 'announce') {
+      const built = buildAnnouncementChunk()
+      if (!built) return
+      chunks = [built]
+    } else if (S.func === 'shelf') {
+      chunks = buildShelfChunks()
+      if (chunks === null as unknown as typeof chunks) return
+    } else if (S.invMode === 'inventory_setting') {
+      const items = inventorySettingWizard.buildItems(inventoryRowInputs(), {}) as Array<Record<string, unknown>>
+      chunks = buildActionChunks(items, 'inventory_setting', BATCH_CAP) as typeof chunks
+    } else {
+      const items = inventoryPlatformWizard.buildItems(platformRowInputs(), { target: S.platTarget }) as Array<Record<string, unknown>>
+      chunks = buildActionChunks(items, 'inventory_platform', BATCH_CAP) as typeof chunks
+    }
+
+    const total = chunks.reduce((n, c) => n + c.items.length, 0)
+    if (total === 0) { showFallback('請至少勾選一筆並填妥必要欄位'); return }
+
+    S.pendingChunks = chunks; S.chunkIndex = 0; S.accumResults = []
+    clearFallback()
+    await stageChunk()
+  }
+
+  function buildShelfChunks(): Array<{ action_type: ChunkActionType; items: Array<Record<string, unknown>> }> {
+    const target = dirActive() ? 'on' : 'off'
+    if (S.shelfSched) {
+      if (!S.shelfSchedAt) { showFallback('請先設定排程時間'); return [] }
+      const [date, time] = S.shelfSchedAt.split('T')
+      let utc: string
+      try { utc = toUtcDateTime(date, time || '00:00', S.shelfSchedTz).slice(0, 19) } catch { showFallback('排程時間格式錯誤'); return [] }
+      S.lastTz = S.shelfSchedTz
+      const entry: ScheduleEntry = { reserve_date_utc: utc, reserve_status: dirActive() }
+      const rows: WizardRowInput[] = []
+      for (const p of S.products) {
+        for (const pl of p.plans) {
+          const checked = S.shelfSelPlan.has(pl.pkg_oid) && !pl.is_bundle
+          rows.push({ checked, is_bundle: pl.is_bundle ?? false, prod_oid: p.prod_oid, pkg_oid: pl.pkg_oid, pkg_name: pl.name ?? pl.pkg_oid, item_oid: pl.item_oid, supplier_oid: pl.supplier_oid, queue: checked ? [entry] : [], cleared: false })
         }
       }
-      if (langs.length === 0) { showFallback(fallbackEl, '請至少選一個語系'); return }
-      if (loadedProdOids.length === 0) { showFallback(fallbackEl, '請先載入商品'); return }
-
-      // Build announcement item — fields align with AnnouncementCreateItem / announcement module itemSchema
-      const item: AnnouncementCreateItem = {
-        prod_oids: loadedProdOids,
-        name: a.name.trim(),
-        is_enabled: a.isEnabled,
-        start_time,
-        end_time,
-        langs,
-        contents,
+      const items = shelfScheduleWizard.buildItems(rows, { target }) as Array<Record<string, unknown>>
+      return buildActionChunks(items, 'shelf_schedule', BATCH_CAP) as Array<{ action_type: ChunkActionType; items: Array<Record<string, unknown>> }>
+    }
+    // 立即：整個商品 / 一般方案 / 組合方案 三路
+    const prodRows: WizardRowInput[] = []
+    const planRows: WizardRowInput[] = []
+    for (const p of S.products) {
+      prodRows.push({ checked: S.shelfSelProduct.has(p.prod_oid), is_bundle: false, prod_oid: p.prod_oid, pkg_oid: '', pkg_name: p.name ?? p.prod_oid, queue: [], cleared: false })
+      for (const pl of p.plans) {
+        planRows.push({ checked: S.shelfSelPlan.has(pl.pkg_oid), is_bundle: pl.is_bundle ?? false, prod_oid: p.prod_oid, pkg_oid: pl.pkg_oid, pkg_name: pl.name ?? pl.pkg_oid, item_oid: pl.item_oid, supplier_oid: pl.supplier_oid, queue: [], cleared: false })
       }
-      // 公告一律單一 change-set（一筆 item 內含所有 prod_oids）；走同一套 stageChunk/批准流程。
-      pendingChunks = [{ action_type: 'announcement', items: [item as unknown as Record<string, unknown>] }]
-      chunkIndex = 0
-      accumChunkResults = []
-      await stageChunk()
+    }
+    const productItems = shelfToggleProductWizard.buildItems(prodRows, { target }) as Array<Record<string, unknown>>
+    const planItems = shelfTogglePlanWizard.buildItems(planRows, { target }) as Array<Record<string, unknown>>
+    const bundleItems = shelfToggleBundleWizard.buildItems(planRows, { target }) as Array<Record<string, unknown>>
+    return [
+      ...buildActionChunks(productItems, 'shelf_toggle_product', BATCH_CAP),
+      ...buildActionChunks(planItems, 'shelf_toggle_plan', BATCH_CAP),
+      ...buildActionChunks(bundleItems, 'shelf_toggle_bundle', BATCH_CAP),
+    ] as Array<{ action_type: ChunkActionType; items: Array<Record<string, unknown>> }>
+  }
+
+  function inventoryRowInputs(): WizardRowInput[] {
+    const rows: WizardRowInput[] = []
+    for (const p of S.products) {
+      for (const pl of p.plans) {
+        if (!pl.item_oid || !pl.supplier_oid) continue
+        const raw = S.invQty.get(`${pl.item_oid}:${pl.supplier_oid}`)
+        const num = raw != null && raw.trim() !== '' ? Number(raw) : NaN
+        const checked = pl.inventory_mode === 'item_by_amount' && !Number.isNaN(num)
+        rows.push({ checked, is_bundle: false, prod_oid: p.prod_oid, pkg_oid: pl.pkg_oid, pkg_name: pl.name ?? pl.pkg_oid, item_oid: pl.item_oid, supplier_oid: pl.supplier_oid, queue: [], cleared: false, quantity: Number.isNaN(num) ? undefined : num })
+      }
+    }
+    return rows
+  }
+  function platformRowInputs(): WizardRowInput[] {
+    const rows: WizardRowInput[] = []
+    for (const p of S.products) {
+      for (const pl of p.plans) {
+        rows.push({ checked: S.platSel.has(pl.pkg_oid), is_bundle: pl.is_bundle ?? false, prod_oid: p.prod_oid, pkg_oid: pl.pkg_oid, pkg_name: pl.name ?? pl.pkg_oid, item_oid: pl.item_oid, supplier_oid: pl.supplier_oid, queue: [], cleared: false })
+      }
+    }
+    return rows
+  }
+
+  function buildAnnouncementChunk(): { action_type: ChunkActionType; items: Array<Record<string, unknown>> } | null {
+    const a = S.ann
+    if (!a.name.trim()) { showFallback('請填公告標題'); return null }
+    if (!a.startDate) { showFallback('請選開始日期'); return null }
+    let start_time: string
+    try { start_time = toUtcDateTime(a.startDate, a.startTime || '00:00', a.startTz) } catch { showFallback('開始時間格式錯誤'); return null }
+    let end_time: string | null = null
+    if (a.endDate) { try { end_time = toUtcDateTime(a.endDate, a.endTime || '00:00', a.endTz) } catch { showFallback('結束時間格式錯誤'); return null } }
+    const langs: string[] = []; const contents: Array<{ lang: string; content: string }> = []
+    for (const loc of ANN_LOCALES) {
+      if (a.selectedLangs.has(loc.code)) { const c = (a.langContents.get(loc.code) ?? '').trim(); if (c) { langs.push(loc.code); contents.push({ lang: loc.code, content: c }) } }
+    }
+    if (langs.length === 0) { showFallback('請至少選一個語系'); return null }
+    const item: AnnouncementCreateItem = { prod_oids: S.loadedProdOids, name: a.name.trim(), is_enabled: a.isEnabled, start_time, end_time, langs, contents }
+    return { action_type: 'announcement', items: [item as unknown as Record<string, unknown>] }
+  }
+
+  // =====================================================================
+  // 載入商品
+  // =====================================================================
+  function loadActionType(): string {
+    if (S.func === 'shelf') return 'shelf_toggle_product'   // 提供商品層 + 方案層 is_active + is_bundle
+    if (S.func === 'inventory') return S.invMode
+    return 'announcement'
+  }
+
+  async function doLoad(prodOids: string[]): Promise<void> {
+    if (prodOids.length === 0) { showFallback('請輸入至少一個商品 oid'); return }
+    setStatus('載入中…'); clearFallback()
+    try {
+      if (S.func === 'announce') { await doLoadAnnounce(prodOids); return }
+      const r = await app.callServerTool({ name: 'app_get_batch_view', arguments: { action_type: loadActionType(), prod_oids: prodOids } })
+      if (r.isError) { showFallback('載入失敗'); return }
+      const sc = r.structuredContent as { items?: unknown[]; errors?: Array<{ code?: string; message?: string }> } | undefined
+      const item0 = sc?.items?.[0] as { products?: unknown[] } | undefined
+      const products = (item0?.products ?? []) as ProductData[]
+      const nf = (sc?.errors ?? []).filter(e => e.code === 'PRODUCT_NOT_FOUND')
+      if (nf.length > 0) showFallback(nf.map(e => e.message).join('\n'))
+      else clearFallback()
+      ingestProducts(products, prodOids)
+      setStatus(`已載入 ${products.length} 個商品`)
+      render()
+    } catch (e) { showFallback('載入失敗：' + String(e)) }
+  }
+
+  async function doLoadAnnounce(prodOids: string[]): Promise<void> {
+    const r = await app.callServerTool({ name: 'app_get_announcement_view', arguments: { prod_oids: prodOids } })
+    if (r.isError) { showFallback('載入失敗'); return }
+    const products = ((r.structuredContent?.items?.[0] as { products?: ProductData[] } | undefined)?.products ?? [])
+    ingestProducts(products, prodOids)
+    setStatus(`已載入 ${products.length} 個商品`)
+    render()
+  }
+
+  function ingestProducts(products: ProductData[], prodOids: string[]): void {
+    S.products = products
+    S.loadedProdOids = products.filter(p => !p.not_found).map(p => String(p.prod_oid))
+    if (S.func === 'announce') S.loadedProdOids = products.map(p => String(p.prod_oid))
+    S.oidDraft = prodOids.join(', ')
+    S.activeIdx = 0
+    // 結果頁名稱查表
+    resultNameByKey = new Map<string, string>()
+    for (const p of products) {
+      const pn = p.name ?? p.prod_oid
+      resultNameByKey.set(String(p.prod_oid), pn)
+      for (const pl of p.plans) {
+        const label = `${pn} · ${pl.name ?? pl.pkg_oid}`
+        resultNameByKey.set(`${p.prod_oid}:${pl.pkg_oid}`, label)
+        if (pl.item_oid != null && pl.supplier_oid != null) resultNameByKey.set(`${pl.item_oid}:${pl.supplier_oid}`, label)
+      }
     }
   }
 
   // =====================================================================
-  // Shared: loadView, renderStep2, renderStep3, renderStep4
+  // Chunk flow: create → view → (approve) → next
   // =====================================================================
+  async function stageChunk(): Promise<void> {
+    const chunk = S.pendingChunks[S.chunkIndex]
+    if (!chunk) { showFallback('無可送出的變更'); return }
+    S.currentChunkActionType = chunk.action_type
+    clearFallback()
+    setStatus(S.pendingChunks.length > 1 ? `建立第 ${S.chunkIndex + 1}/${S.pendingChunks.length} 批變更中…` : '建立變更中…')
+    try {
+      const createR = await app.callServerTool({ name: 'app_create_changeset', arguments: { action_type: chunk.action_type, items: chunk.items } })
+      if (createR.isError) { showFallback(tryParseErrorText(createR) ? `建立變更失敗：${tryParseErrorText(createR)}` : '建立變更失敗'); return }
+      const created = createR.structuredContent?.items?.[0] as { changeset_id?: string } | undefined
+      if (!created?.changeset_id) { showFallback('建立變更失敗：未取得 changeset_id'); return }
+      S.changesetId = created.changeset_id
+      const ok = await loadView()
+      if (!ok) return
+      S.step = 2; render()
+    } catch (e) { showFallback('建立變更失敗：' + String(e)) }
+  }
 
-  async function loadView(): Promise<Record<string, unknown> | undefined> {
-    const r = await app.callServerTool({ name: 'app_get_changeset_view', arguments: { changeset_id: changesetId } })
-    if (r.isError) { showFallback(fallbackEl, '讀取變更失敗'); return undefined }
+  async function loadView(): Promise<boolean> {
+    const r = await app.callServerTool({ name: 'app_get_changeset_view', arguments: { changeset_id: S.changesetId } })
+    if (r.isError) { showFallback('讀取變更失敗'); return false }
     const rec = (r.structuredContent?.items?.[0] as Record<string, unknown> | undefined) ?? {}
     const diff = rec.diff as { items?: Array<Record<string, unknown>> } | undefined
-    currentDiffItems = diff?.items ?? []
-    currentNonce = rec.nonce as string | undefined
-    currentDiffVersion = rec.diff_version as string | undefined
-    return rec
+    S.diffItems = diff?.items ?? []
+    S.nonce = rec.nonce as string | undefined
+    S.diffVersion = rec.diff_version as string | undefined
+    return true
   }
 
-  function renderQueueLines(el: HTMLElement, queue: ScheduleEntry[], emptyLabel = '(空，將清除排程)'): void {
-    if (queue.length === 0) {
-      const p = document.createElement('div'); p.className = 'bw-queue-empty'; renderText(p, emptyLabel); el.appendChild(p); return
+  function rejectOpen(): void {
+    if (S.changesetId && S.nonce && S.diffVersion) {
+      app.callServerTool({ name: 'app_confirm_changeset', arguments: { changeset_id: S.changesetId, decision: 'reject', nonce: S.nonce, diff_version: S.diffVersion, confirmed_keys: [] } }).catch(() => {})
     }
+    resetServerFlow()
+  }
+
+  // ---- diff card rendering (module renderDiffCard or announcement inline) ----
+  function renderQueueLines(container: HTMLElement, queue: ScheduleEntry[], emptyLabel = '(空，將清除排程)'): void {
+    if (queue.length === 0) { const p = el('div', 'bw-queue-empty'); txt(p, emptyLabel); container.appendChild(p); return }
     for (const e of queue) {
-      const line = document.createElement('div'); line.className = 'bw-queue-line'
-      const full = formatDualDisplay(e.reserve_date_utc, lastTz)
-      const sepIdx = full.indexOf(' / ')
-      const localPart = sepIdx === -1 ? full : full.slice(0, sepIdx)
-      const utcPart = sepIdx === -1 ? '' : full.slice(sepIdx + 3)
-      const localSpan = document.createElement('span'); localSpan.className = 'bw-time-local'; renderText(localSpan, localPart); line.appendChild(localSpan)
-      if (utcPart) { const utcSpan = document.createElement('span'); utcSpan.className = 'bw-time-utc'; renderText(utcSpan, utcPart); line.appendChild(utcSpan) }
-      el.appendChild(line)
+      const line = el('div', 'bw-queue-line')
+      const { local, utc } = formatDualDisplay(e.reserve_date_utc, S.lastTz)
+      const l = el('span', 'bw-time-local'); txt(l, `${local} ${e.reserve_status ? '上架' : '下架'}`); line.appendChild(l)
+      if (utc) { const u = el('span', 'bw-time-utc'); txt(u, utc); line.appendChild(u) }
+      container.appendChild(line)
     }
   }
-
+  const domHelpers: DomHelpers = {
+    el(tag: string, className?: string) { return el(tag, className) },
+    text: txt,
+    renderQueueLines: (container: HTMLElement, q: unknown[], emptyLabel?: string) => renderQueueLines(container, q as ScheduleEntry[], emptyLabel),
+  }
   function renderDiffCard(d: Record<string, unknown>): HTMLElement {
-    const domHelpers: DomHelpers = {
-      el(tag: string, className?: string) { const e = document.createElement(tag); if (className) e.className = className; return e },
-      text: renderText,
-      renderQueueLines: (el: HTMLElement, q: unknown[], emptyLabel?: string) => renderQueueLines(el, q as ScheduleEntry[], emptyLabel),
-    }
-    const wiz = WIZARDS[currentChunkActionType as SubMode]
+    const wiz = WIZARDS[S.currentChunkActionType as ChunkActionType]
     if (wiz) return wiz.renderDiffCard(d, domHelpers)
-    // Announcement diff: inline rendering (no WizardDescriptor)
-    if (currentChunkActionType === 'announcement') {
-      const card = domHelpers.el('div', 'bw-diff-card')
-      const nm = domHelpers.el('div', 'bw-diff-title'); renderText(nm, `公告：${d.name}`); card.appendChild(nm)
-      const pr = domHelpers.el('div')
+    if (S.currentChunkActionType === 'announcement') {
+      const card = el('div', 'bw-diff-card')
+      const nm = el('div', 'bw-diff-title'); txt(nm, `公告：${d.name}`); card.appendChild(nm)
       const names = (d.product_names as string[] | undefined) ?? []
-      renderText(pr, `商品：${names.length ? names.join('、') : (d.prod_oids as string[])?.join('、') ?? ''}`)
-      card.appendChild(pr)
-      const tm = domHelpers.el('div'); renderText(tm, `生效：${d.start_time}${d.end_time ? ' ~ ' + d.end_time : ''}（UTC）`); card.appendChild(tm)
-      const lg = domHelpers.el('div'); renderText(lg, `語系：${((d.langs as string[]) ?? []).join(', ')}`); card.appendChild(lg)
-      for (const c of ((d.contents as Array<{ lang: string; content: string }>) ?? [])) {
-        const cl = domHelpers.el('div'); renderText(cl, `${c.lang}: ${c.content}`); card.appendChild(cl)
-      }
+      const pr = el('div'); txt(pr, `商品：${names.length ? names.join('、') : ((d.prod_oids as string[]) ?? []).join('、')}`); card.appendChild(pr)
+      const tm = el('div'); txt(tm, `生效：${d.start_time}${d.end_time ? ' ~ ' + d.end_time : ''}（UTC）`); card.appendChild(tm)
+      const lg = el('div'); txt(lg, `語系：${((d.langs as string[]) ?? []).join(', ')}`); card.appendChild(lg)
+      for (const c of ((d.contents as Array<{ lang: string; content: string }>) ?? [])) { const cl = el('div'); txt(cl, `${c.lang}: ${c.content}`); card.appendChild(cl) }
       return card
     }
-    // Fallback: raw dump
-    const card = document.createElement('div'); card.className = 'bw-diff-card'; renderText(card, d); return card
+    const card = el('div', 'bw-diff-card'); txt(card, d); return card
+  }
+  // 依商品分組 diff（用於檢視/結果的商品分組）
+  function diffGroupName(d: Record<string, unknown>): string {
+    if (d.prod_oid != null) return resultNameByKey.get(String(d.prod_oid)) ?? String(d.prod_oid)
+    const aff = d.affected_pkgs as Array<{ prod_oid?: string }> | undefined
+    if (aff && aff[0]?.prod_oid != null) return resultNameByKey.get(String(aff[0].prod_oid)) ?? String(aff[0].prod_oid)
+    if (d.item_oid != null && d.supplier_oid != null) { const f = resultNameByKey.get(`${d.item_oid}:${d.supplier_oid}`); if (f) return f.split(' · ')[0] }
+    return '（其他）'
   }
 
-  // ---- Step 2: 檢視 ----
-  function renderStep2(rec: Record<string, unknown>): void {
-    setStep(2)
-    lastViewRec = rec
-    workspaceEl.textContent = ''
-    renderNav()
-    workspaceEl.appendChild(progressEl)
+  // =====================================================================
+  // STEP 2 — 檢視
+  // =====================================================================
+  function warningText(): string | undefined {
+    if (S.currentChunkActionType === 'announcement') return '商品公告會即時對前台顯示，請確認內容與生效時間後再批准。'
+    const wiz = WIZARDS[S.currentChunkActionType as ChunkActionType]
+    return wiz?.step2WarningText
+  }
+  function renderReview(): HTMLElement {
+    const page = el('div', 'page')
+    const total = S.pendingChunks.length
+    const rvhead = el('div', 'rvhead')
+    const left = el('div')
+    const eb = el('div', 'eyebrow'); txt(eb, `檢視 · ${funcDesc().label}`); left.appendChild(eb)
+    const h = el('h2'); h.style.fontSize = '20px'; txt(h, `本批 ${S.diffItems.length} 筆變更${total > 1 ? ` · 共 ${total} 批` : ''}`); left.appendChild(h)
+    const sub = el('div', 'muted'); sub.style.cssText = 'font-size:13px;margin-top:2px'
+    txt(sub, total > 1 ? `第 ${S.chunkIndex + 1}/${total} 批（總筆數超過 ${BATCH_CAP}，已拆成多個 change-set 逐批批准）` : `${S.shelfSched ? '排程執行' : '立即執行'}`)
+    left.appendChild(sub); rvhead.appendChild(left)
+    page.appendChild(rvhead)
 
-    // Warning for announcement
-    if (currentChunkActionType === 'announcement') {
-      const warn = document.createElement('div'); warn.className = 'bw-banner bw-banner-danger'
-      renderText(warn, '商品公告會即時對前台顯示，請確認內容與生效時間後再批准。'); workspaceEl.appendChild(warn)
-      // en-default warning
-      if (currentDiffItems.some(d => !((d.langs as string[] | undefined) ?? []).includes('en-default'))) {
-        const note = document.createElement('div'); note.className = 'bw-banner bw-banner-warn'
-        renderText(note, '提醒：未含 en-default 語系（en-xx fallback 文案來源）；此為提醒、不阻擋批准。')
-        workspaceEl.appendChild(note)
+    const w = warningText()
+    if (w) { const rb = el('div', 'riskbar'); rb.appendChild(warnSvg()); const d = el('div'); txt(d, w); rb.appendChild(d); page.appendChild(rb) }
+
+    // 批次卡（本批），內部依商品分組可折疊
+    const card = el('div', 'batchcard')
+    const hd = el('div', 'batchhd')
+    const lbl = el('div', 'lbl')
+    const bn = el('span', 'bn'); txt(bn, total > 1 ? `批次 ${S.chunkIndex + 1}／${total}` : '本批'); lbl.appendChild(bn)
+    const cnt = el('b'); txt(cnt, `${S.diffItems.length} 筆`); lbl.appendChild(cnt)
+    const groups = new Map<string, Array<Record<string, unknown>>>()
+    for (const d of S.diffItems) { const g = diffGroupName(d); const a = groups.get(g) ?? []; a.push(d); groups.set(g, a) }
+    const gcnt = el('span', 'muted'); gcnt.style.fontSize = '12px'; txt(gcnt, `· ${groups.size} 個商品`); lbl.appendChild(gcnt)
+    hd.appendChild(lbl)
+    const car = el('span', 'muted'); car.style.fontSize = '12px'; txt(car, S.batchCollapsed ? '▸ 展開' : '▾ 收合'); hd.appendChild(car)
+    hd.onclick = () => { S.batchCollapsed = !S.batchCollapsed; render() }
+    card.appendChild(hd)
+    if (!S.batchCollapsed) {
+      const body = el('div', 'batchbody')
+      for (const [g, arr] of groups) {
+        const grp = el('div', 'rvgrp')
+        const h5 = el('h5'); txt(h5, `${g} · ${arr.length} 筆`); grp.appendChild(h5)
+        for (const d of arr) {
+          const item = el('div', 'rvitem')
+          const dot = el('span', `d ${S.currentChunkActionType === 'shelf_schedule' ? 'sched' : 'pend'}`); item.appendChild(dot)
+          item.appendChild(renderDiffCard(d))
+          grp.appendChild(item)
+        }
+        body.appendChild(grp)
       }
-    } else {
-      // Warning text from WizardDescriptor
-      const wiz = WIZARDS[currentChunkActionType as SubMode]
-      if (wiz?.step2WarningText) {
-        const warn = document.createElement('div'); warn.className = 'bw-banner bw-banner-danger'
-        renderText(warn, wiz.step2WarningText); workspaceEl.appendChild(warn)
-      }
+      card.appendChild(body)
     }
+    page.appendChild(card)
 
-    // 批次進度：>20 筆會拆成多個 change-set 逐批批准，此處標示第幾批 / 共幾批。
-    const batchSummary = document.createElement('div')
-    batchSummary.style.cssText = 'font-size:.875rem;color:var(--bw-muted);margin-bottom:.75rem'
-    renderText(batchSummary, pendingChunks.length > 1
-      ? `第 ${chunkIndex + 1}/${pendingChunks.length} 批 · 本批 ${currentDiffItems.length} 筆（總筆數超過 20，已拆成 ${pendingChunks.length} 個 change-set 逐批批准）`
-      : `本次 = ${currentDiffItems.length} 筆變更（1 個 change-set）`)
-    workspaceEl.appendChild(batchSummary)
-
-    // Diff cards
-    const listCard = document.createElement('div'); listCard.className = 'bw-card'
-    for (const d of currentDiffItems) listCard.appendChild(renderDiffCard(d))
-    workspaceEl.appendChild(listCard)
-
-    if (rec.note) {
-      const noteCard = document.createElement('div'); noteCard.className = 'bw-card'
-      const noteP = document.createElement('p'); renderText(noteP, `備註：${String(rec.note)}`); noteCard.appendChild(noteP)
-      workspaceEl.appendChild(noteCard)
-    }
-
-    const footer = document.createElement('div'); footer.className = 'bw-row-footer'
-    footer.appendChild(secondaryBtn('← 返回選擇', 'backToStep1Btn', () => {
-      // Reject on back navigation (same as batch-wizard)
-      if (changesetId && currentNonce && currentDiffVersion) {
-        app.callServerTool({
-          name: 'app_confirm_changeset',
-          arguments: { changeset_id: changesetId, decision: 'reject', nonce: currentNonce, diff_version: currentDiffVersion, confirmed_keys: [] },
-        }).catch(() => {})
-      }
-      renderWorkspace()
-    }))
-    footer.appendChild(primaryBtn('前往批准', 'toApproveBtn', () => renderStep3()))
-    workspaceEl.appendChild(footer)
+    const foot = el('div', 'barfoot')
+    foot.appendChild(btn('← 返回選擇', 'btn', () => { rejectOpen(); S.step = 1; render() }))
+    foot.appendChild(btn('前往批准 →', 'btn primary', () => { S.step = 3; render() }))
+    page.appendChild(foot)
+    return page
   }
 
-  // ---- Step 3: 批准 ----
-  function renderStep3(): void {
-    setStep(3)
-    workspaceEl.textContent = ''
-    renderNav()
-    workspaceEl.appendChild(progressEl)
+  // =====================================================================
+  // STEP 3 — 批准
+  // =====================================================================
+  function renderApprove(): HTMLElement {
+    const page = el('div', 'page')
+    const eb = el('div', 'eyebrow'); txt(eb, '批准送出'); page.appendChild(eb)
+    const total = S.pendingChunks.length
+    const h = el('h2'); h.style.fontSize = '20px'; txt(h, `${funcDesc().label} · 本批 ${S.diffItems.length} 筆${total > 1 ? ` · 第 ${S.chunkIndex + 1}/${total} 批` : ''}`); page.appendChild(h)
+    const w = warningText()
+    if (w) { const rb = el('div', 'riskbar'); rb.appendChild(warnSvg()); const d = el('div'); txt(d, w); rb.appendChild(d); page.appendChild(rb) }
 
-    const card = document.createElement('div'); card.className = 'bw-card'
-    const desc = document.createElement('p')
-    renderText(desc, '按下後將送出批准並立即執行本次變更。')
-    card.appendChild(desc)
-    const footer = document.createElement('div'); footer.className = 'bw-row-footer'
-    footer.appendChild(secondaryBtn('← 回檢視', 'backToStep2Btn', () => {
-      if (lastViewRec) renderStep2(lastViewRec)
-    }))
-    footer.appendChild(primaryBtn('確認執行', 'approveBtn', () => { void doApprove() }))
-    card.appendChild(footer)
-    workspaceEl.appendChild(card)
+    const card = el('div', 'batchcard'); const body = el('div', 'batchbody'); body.style.padding = '14px'
+    const r1 = el('div', 'spread'); const s1 = el('span'); txt(s1, '執行方式'); const b1 = el('b'); txt(b1, S.currentChunkActionType === 'shelf_schedule' ? '排程' : '立即執行'); r1.appendChild(s1); r1.appendChild(b1); body.appendChild(r1)
+    const r2 = el('div', 'spread mt8'); const s2 = el('span'); txt(s2, '本批變更筆數'); const b2 = el('b', 'tnum'); txt(b2, `${S.diffItems.length} 筆`); r2.appendChild(s2); r2.appendChild(b2); body.appendChild(r2)
+    const r3 = el('div', 'spread mt8'); const s3 = el('span'); txt(s3, '拆批'); const b3 = el('b'); txt(b3, `${total} 個 change-set（逐批送出、各自稽核）`); r3.appendChild(s3); r3.appendChild(b3); body.appendChild(r3)
+    card.appendChild(body); page.appendChild(card)
+
+    const note = el('p', 'muted mt16'); note.style.fontSize = '13px'; txt(note, '批准＝人工放行；agent 結構上拿不到此按鈕（面板 nonce 通道把關）。')
+    page.appendChild(note)
+
+    const foot = el('div', 'barfoot')
+    foot.appendChild(btn('← 返回檢視', 'btn', () => { S.step = 2; render() }))
+    foot.appendChild(btn(total > 1 ? `確認執行本批（${S.chunkIndex + 1}/${total}）` : '確認執行', 'btn primary', () => { void doApprove() }))
+    page.appendChild(foot)
+    return page
   }
 
   async function doApprove(): Promise<void> {
-    if (!changesetId || !currentNonce || !currentDiffVersion) { showFallback(fallbackEl, '缺少批准所需資訊，請回上一步重載'); return }
-    statusEl.textContent = '執行中…'
+    if (!S.changesetId || !S.nonce || !S.diffVersion) { showFallback('缺少批准所需資訊，請回上一步重載'); return }
+    setStatus('執行中…')
     let confirmedKeys: string[]
-    if (currentChunkActionType === 'announcement') {
-      // For announcement, use the same itemKey as announcement-wizard.ts
-      confirmedKeys = currentDiffItems.map(d => {
-        const fakeItem: AnnouncementCreateItem = {
-          prod_oids: (d.prod_oids as string[]) ?? [],
-          name: String(d.name ?? ''),
-          is_enabled: Boolean(d.is_enabled),
-          start_time: String(d.start_time ?? ''),
-          end_time: (d.end_time as string | null) ?? null,
-          langs: (d.langs as string[]) ?? [],
-          contents: (d.contents as Array<{ lang: string; content: string }>) ?? [],
-        }
-        return announcementItemKey(fakeItem)
-      })
+    if (S.currentChunkActionType === 'announcement') {
+      confirmedKeys = S.diffItems.map(d => announcementItemKey({
+        prod_oids: (d.prod_oids as string[]) ?? [], name: String(d.name ?? ''), is_enabled: Boolean(d.is_enabled),
+        start_time: String(d.start_time ?? ''), end_time: (d.end_time as string | null) ?? null,
+        langs: (d.langs as string[]) ?? [], contents: (d.contents as Array<{ lang: string; content: string }>) ?? [],
+      }))
     } else {
-      const wiz = WIZARDS[currentChunkActionType as SubMode]!
-      confirmedKeys = currentDiffItems.map(wiz.itemKey)
+      const wiz = WIZARDS[S.currentChunkActionType as ChunkActionType]!
+      confirmedKeys = S.diffItems.map(wiz.itemKey)
     }
     try {
-      const r = await app.callServerTool({
-        name: 'app_confirm_changeset',
-        arguments: { changeset_id: changesetId, decision: 'approve', nonce: currentNonce, diff_version: currentDiffVersion, confirmed_keys: confirmedKeys },
-      })
+      const r = await app.callServerTool({ name: 'app_confirm_changeset', arguments: { changeset_id: S.changesetId, decision: 'approve', nonce: S.nonce, diff_version: S.diffVersion, confirmed_keys: confirmedKeys } })
       const env = r.structuredContent
       const err = env?.errors?.[0]
-      if (err?.code === 'DIFF_STALE') { renderStaleNotice(); return }
-      if (err) { showFallback(fallbackEl, `批准失敗：${err.code ?? ''} ${err.message ?? ''}`); return }
+      if (err?.code === 'DIFF_STALE') { showFallback('現況已變，請回檢視重新載入後再批准'); S.step = 2; await loadView(); render(); return }
+      if (err) { showFallback(`批准失敗：${err.code ?? ''} ${err.message ?? ''}`); return }
       const rec = (env?.items?.[0] as { results?: unknown[] } | undefined) ?? {}
-      accumChunkResults.push(...((rec.results as Array<Record<string, unknown>> | undefined) ?? []))
-      if (chunkIndex < pendingChunks.length - 1) {
-        // 還有下一批：建立並檢視下一個 change-set（逐批 create→view→confirm）。
-        chunkIndex++
-        await stageChunk()
-      } else {
-        renderStep4(accumChunkResults)
-      }
-    } catch (e) { showFallback(fallbackEl, '送出失敗：' + String(e)) }
+      S.accumResults.push(...((rec.results as Array<Record<string, unknown>> | undefined) ?? []))
+      if (S.chunkIndex < S.pendingChunks.length - 1) { S.chunkIndex++; await stageChunk() }
+      else { S.step = 4; render() }
+    } catch (e) { showFallback('送出失敗：' + String(e)) }
   }
 
-  function renderStaleNotice(): void {
-    showFallback(fallbackEl, '現況已變，請按下方按鈕重新載入檢視後再次批准')
-    const backBtn = workspaceEl.querySelector('[data-role=backToStep2Btn]') as HTMLButtonElement | null
-    if (backBtn) {
-      backBtn.textContent = '回檢視重載'; backBtn.dataset.role = 'reloadBtn'
-      backBtn.onclick = () => { void doReload() }
+  // =====================================================================
+  // STEP 4 — 結果（依商品分組 + 狀態藥丸）
+  // =====================================================================
+  function renderResult(): HTMLElement {
+    const page = el('div', 'page')
+    setStatus('完成')
+    const eb = el('div', 'eyebrow'); txt(eb, '結果'); page.appendChild(eb)
+    const h = el('h2'); h.style.fontSize = '20px'; txt(h, `已執行 · ${S.accumResults.length} 筆 · ${S.pendingChunks.length} 批`); page.appendChild(h)
+
+    const groups = new Map<string, Array<Record<string, unknown>>>()
+    for (const res of S.accumResults) {
+      const raw = String(res.item_key ?? '')
+      const friendly = resultNameByKey.get(raw)
+      const g = friendly ? friendly.split(' · ')[0] : raw
+      const a = groups.get(g) ?? []; a.push(res); groups.set(g, a)
     }
-  }
-
-  async function doReload(): Promise<void> {
-    fallbackEl.hidden = true; statusEl.textContent = '重新載入中…'
-    const rec = await loadView()
-    if (!rec) return
-    renderStep2(rec)
-  }
-
-  // ---- Step 4: 結果 ----
-  function renderStep4(results: Array<Record<string, unknown>>): void {
-    setStep(4)
-    workspaceEl.textContent = ''; statusEl.textContent = '完成'
-    renderNav()
-    workspaceEl.appendChild(progressEl)
-
-    const card = document.createElement('div'); card.className = 'bw-card'
-    if (results.length === 0) {
-      const p = document.createElement('div'); renderText(p, '（無結果）'); card.appendChild(p)
-    }
-    for (const res of results) {
-      const row = document.createElement('div'); row.className = 'bw-ledger-row'
-      const status = String(res.status)
-      let kind = 'error'
-      if (status === 'done' || status === 'scheduled') kind = 'ok'
-      else if (status === 'skipped_noop' || status === 'cancelled') kind = 'skip'
-
-      const dot = document.createElement('span')
-      dot.className = `bw-dot ${kind === 'ok' ? 'bw-dot-green' : kind === 'skip' ? 'bw-dot-gray' : 'bw-dot-red'}`
-      row.appendChild(dot)
-
-      const keyWrap = document.createElement('div'); keyWrap.className = 'bw-plan-name'
-      const rawKey = String(res.item_key ?? '')
-      const friendly = resultNameByKey.get(rawKey)
-      const nameSpan = document.createElement('span')
-      renderText(nameSpan, friendly ?? rawKey); keyWrap.appendChild(nameSpan)
-      if (friendly) { // 名稱之外仍附原始 key（item:supplier 等），方便對照
-        const keySpan = document.createElement('span'); keySpan.className = 'bw-plan-name-oid'
-        renderText(keySpan, rawKey); keyWrap.appendChild(keySpan)
+    const card = el('div', 'batchcard'); const body = el('div', 'batchbody')
+    if (S.accumResults.length === 0) { const p = el('div', 'empty'); txt(p, '（無結果）'); body.appendChild(p) }
+    for (const [g, arr] of groups) {
+      const grp = el('div', 'rvgrp')
+      const h5 = el('h5'); txt(h5, g); grp.appendChild(h5)
+      for (const res of arr) {
+        const item = el('div', 'rvitem')
+        const status = String(res.status)
+        let kind = 'err'; let ls = 'ls-err'; let label = `失敗（${status}）`
+        if (status === 'done') { kind = 'ok'; ls = 'ls-ok'; label = '已完成' }
+        else if (status === 'scheduled') { kind = 'sched'; ls = 'ls-sched'; label = '已排程' }
+        else if (status === 'skipped_noop') { kind = 'skip'; ls = 'ls-skip'; label = '無變更，略過' }
+        else if (status === 'cancelled') { kind = 'skip'; ls = 'ls-skip'; label = '取消排程' }
+        const dot = el('span', `d ${kind}`); item.appendChild(dot)
+        const nameWrap = el('span'); nameWrap.style.flex = '1'
+        const raw = String(res.item_key ?? '')
+        const friendly = resultNameByKey.get(raw)
+        nameWrap.appendChild(document.createTextNode(friendly ?? raw))
+        if (friendly) { const k = el('span', 'oid'); txt(k, ` ${raw}`); nameWrap.appendChild(k) }
+        item.appendChild(nameWrap)
+        const pill = el('span', `ledger-status ${ls}`); txt(pill, label); item.appendChild(pill)
+        if (kind === 'err' && res.error_code) { const code = el('span', 'oid'); txt(code, String(res.error_code)); item.appendChild(code) }
+        grp.appendChild(item)
       }
-      row.appendChild(keyWrap)
-
-      const statusSpan = document.createElement('span')
-      let statusLabel = ''
-      if (status === 'done') statusLabel = '已完成'
-      else if (status === 'skipped_noop') statusLabel = '無變更，略過'
-      else if (status === 'scheduled') statusLabel = '已排程'
-      else if (status === 'cancelled') statusLabel = '取消排程'
-      else statusLabel = `失敗（${status}）`
-      statusSpan.className = `bw-ledger-status bw-ledger-status-${kind}`
-      renderText(statusSpan, statusLabel); row.appendChild(statusSpan)
-
-      if (kind === 'error' && res.error_code) {
-        const codeSpan = document.createElement('span'); codeSpan.className = 'bw-ledger-code'
-        renderText(codeSpan, String(res.error_code)); row.appendChild(codeSpan)
-      }
-      card.appendChild(row)
+      body.appendChild(grp)
     }
-    workspaceEl.appendChild(card)
+    card.appendChild(body); page.appendChild(card)
 
-    const btnRow = document.createElement('div'); btnRow.className = 'bw-row-footer'
-    btnRow.appendChild(secondaryBtn('開始新操作', 'newBatchBtn', () => {
-      changesetId = undefined; currentNonce = undefined; currentDiffVersion = undefined
-      currentDiffItems = []; lastViewRec = undefined
-      clearFallback(fallbackEl)
-      annState = resetAnnState()
-      renderWorkspace()
-    }))
-    workspaceEl.appendChild(btnRow)
+    const note = el('div', 'muted mt16'); note.style.fontSize = '12px'; txt(note, '執行後自動讀回驗證。全鏈路稽核已記錄 actor + tool + before/after。')
+    page.appendChild(note)
+    const foot = el('div', 'barfoot')
+    foot.appendChild(el('span'))
+    foot.appendChild(btn('完成 / 開始新一批', 'btn primary', () => startNew()))
+    page.appendChild(foot)
+    return page
   }
 
-  // ---- Error parsing helper (same as batch-wizard) ----
+  function startNew(): void {
+    resetServerFlow(); resetEdits(); resetAnn()
+    S.step = 1; clearFallback(); setStatus('')
+    render()
+  }
+
+  // =====================================================================
+  // Error parsing helper
+  // =====================================================================
   function tryParseErrorText(r: { content?: Array<{ type: string; text: string }>; structuredContent?: { errors?: Array<{ code?: string; message?: string }> } }): string | undefined {
     const sErr = r.structuredContent?.errors?.[0]
     if (sErr?.code && sErr?.message) return `${sErr.code} — ${sErr.message}`
     try {
       const raw = r.content?.[0]?.text
-      if (raw) {
-        const parsed = JSON.parse(raw)
-        const errs = parsed.errors
-        if (Array.isArray(errs) && errs.length > 0 && errs[0]?.code && errs[0]?.message) return `${errs[0].code} — ${errs[0].message}`
-      }
-    } catch {}
+      if (raw) { const parsed = JSON.parse(raw); const errs = parsed.errors; if (Array.isArray(errs) && errs.length > 0 && errs[0]?.code && errs[0]?.message) return `${errs[0].code} — ${errs[0].message}` }
+    } catch { /* ignore */ }
     return undefined
   }
 
-  // ---- Input helpers ----
-  function mkInput(type: string, role: string): HTMLInputElement {
-    const i = document.createElement('input') as HTMLInputElement
-    i.type = type; i.className = 'bw-input'; i.dataset.role = role; return i
-  }
-  function mkTz(role: string): HTMLSelectElement {
-    const s = document.createElement('select') as HTMLSelectElement
-    s.className = 'bw-select'; s.dataset.role = role
-    for (const z of Object.keys(TZ_OFFSET_HOURS)) { const o = document.createElement('option'); o.value = z; renderText(o, z); s.appendChild(o) }
-    s.value = 'Asia/Taipei'; return s
-  }
-
-  // ---- Initial render ----
-  renderWorkspace()
+  // ---- initial render ----
+  render()
 }
 
 // ---------------------------------------------------------------------------
-// Bootstrap (same pattern as batch-wizard.ts / announcement-wizard.ts)
+// Bootstrap
 // ---------------------------------------------------------------------------
 if (typeof window !== 'undefined') {
   connectApp('be2-workbench').then(a => initWorkbench(a as unknown as WizardApp)).catch(e => {
