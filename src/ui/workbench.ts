@@ -38,13 +38,11 @@ interface FuncDesc {
 
 const FUNCS: FuncDesc[] = [
   {
-    key: 'shelf', label: '商品上下架', subLabel: '商品 / 方案 / 套裝',
+    key: 'shelf', label: '商品上下架', subLabel: '商品 / 方案（含組合方案）',
     risk: '方案或商品上下架會即時改變前台可售並清快取。',
+    // 次模式由「對象 × 時機」兩軸取代（見 renderSubModes 的 shelf 分支）；此陣列僅保留 nav 預設用。
     subModes: [
       { key: 'shelf_toggle_product', label: '立即上 / 下架' },
-      { key: 'shelf_toggle_bundle', label: '套裝上下架' },
-      { key: 'shelf_schedule', label: '排程上下架' },
-      { key: 'shelf_toggle_plan', label: '方案上下架' },
     ],
   },
   {
@@ -367,6 +365,20 @@ export function initWorkbench(app: WizardApp): void {
   let step = 1
   let shelfDir: 'on' | 'off' = 'on'
   let lastTz = 'Asia/Taipei'
+  // 上下架改成「對象 × 時機」兩軸（使用者心智模型）：對象 = 商品 / 方案（方案清單含一般方案 + 組合方案）；
+  // 時機 = 立即 / 時間(排程)。currentSubMode 由這兩軸推導；方案+立即會同時產出 plan/bundle 兩種 change-set。
+  // be2 無商品層排程 → 對象=商品時「時間」灰掉；組合方案 be2 不支援排程 → 方案+時間時組合方案列灰掉。
+  let shelfObject: 'product' | 'plan' = 'product'
+  let shelfTiming: 'immediate' | 'schedule' = 'immediate'
+  // 逐批 create→view→confirm 時，當前批的 action_type（可能與 currentSubMode 不同：方案+立即會拆成
+  // shelf_toggle_plan 與 shelf_toggle_bundle 兩批）——renderDiffCard/批准取 itemKey 都以「本批」為準。
+  let currentChunkActionType = ''
+
+  function resolveShelfSubMode(): void {
+    if (currentFunc !== 'shelf') return
+    if (shelfObject === 'product') { shelfTiming = 'immediate'; currentSubMode = 'shelf_toggle_product'; return }
+    currentSubMode = shelfTiming === 'schedule' ? 'shelf_schedule' : 'shelf_toggle_plan'
+  }
 
   // batch-wizard style changeset state
   let changesetId: string | undefined
@@ -385,6 +397,9 @@ export function initWorkbench(app: WizardApp): void {
   let rows: RowState[] = []
   let radioButtons: HTMLInputElement[] = []
   let loadedProdOids: string[] = []
+  // item_key(各 module 的 itemKey 格式) → 「商品名 · 方案名」，供結果頁把 item_oid:supplier_oid 之類的
+  // 純數字 key 顯示成人看得懂的名稱（載入時建，涵蓋 prod_oid / prod:pkg / item:supplier 三種 key 形狀）。
+  let resultNameByKey = new Map<string, string>()
 
   // announcement state
   let annState = resetAnnState()
@@ -437,7 +452,9 @@ export function initWorkbench(app: WizardApp): void {
       btn.onclick = () => {
         if (step > 1) return
         currentFunc = f.key
+        shelfObject = 'product'; shelfTiming = 'immediate'
         currentSubMode = f.subModes[0].key
+        resolveShelfSubMode()
         shelfDir = 'on'
         rows = []; radioButtons = []; loadedProdOids = []
         annState = resetAnnState()
@@ -451,6 +468,8 @@ export function initWorkbench(app: WizardApp): void {
 
   // ---- Sub-mode pills ----
   function renderSubModes(container: HTMLElement): void {
+    // 上下架：對象(商品/方案) × 時機(立即/時間) 兩軸，取代舊的 4 個平行次模式。
+    if (currentFunc === 'shelf') { renderShelfAxes(container); return }
     const func = FUNCS.find(f => f.key === currentFunc)!
     if (func.subModes.length <= 1) return // no sub-mode bar for single-mode functions (公告)
     const bar = document.createElement('div')
@@ -469,6 +488,36 @@ export function initWorkbench(app: WizardApp): void {
       bar.appendChild(btn)
     }
     container.appendChild(bar)
+  }
+
+  function renderShelfAxes(container: HTMLElement): void {
+    const reset = () => { resolveShelfSubMode(); rows = []; radioButtons = []; loadedProdOids = []; clearFallback(fallbackEl); renderWorkspace() }
+    const pill = (label: string, pressed: boolean, disabled: boolean, onClick: () => void): HTMLButtonElement => {
+      const b = document.createElement('button'); b.className = 'wb-submode'
+      b.setAttribute('aria-pressed', String(pressed)); if (disabled) b.disabled = true
+      renderText(b, label); if (!disabled) b.onclick = onClick
+      return b
+    }
+    // 對象軸
+    const objRow = document.createElement('div'); objRow.className = 'wb-submodes'
+    const objLbl = document.createElement('span'); objLbl.style.cssText = 'font-size:.8125rem;color:var(--bw-muted);align-self:center;margin-right:.25rem'
+    renderText(objLbl, '對象'); objRow.appendChild(objLbl)
+    objRow.appendChild(pill('商品', shelfObject === 'product', false, () => { shelfObject = 'product'; reset() }))
+    objRow.appendChild(pill('方案', shelfObject === 'plan', false, () => { shelfObject = 'plan'; reset() }))
+    container.appendChild(objRow)
+    // 時機軸
+    const timeRow = document.createElement('div'); timeRow.className = 'wb-submodes'
+    const timeLbl = document.createElement('span'); timeLbl.style.cssText = 'font-size:.8125rem;color:var(--bw-muted);align-self:center;margin-right:.25rem'
+    renderText(timeLbl, '時機'); timeRow.appendChild(timeLbl)
+    timeRow.appendChild(pill('立即', shelfTiming === 'immediate', false, () => { shelfTiming = 'immediate'; reset() }))
+    const scheduleDisabled = shelfObject === 'product'
+    timeRow.appendChild(pill('時間', shelfTiming === 'schedule' && !scheduleDisabled, scheduleDisabled, () => { shelfTiming = 'schedule'; reset() }))
+    if (scheduleDisabled) {
+      const hint = document.createElement('span'); hint.style.cssText = 'font-size:.75rem;color:var(--bw-muted);align-self:center'
+      renderText(hint, 'be2 目前無商品層排程，未來可於 MCP 支援')
+      timeRow.appendChild(hint)
+    }
+    container.appendChild(timeRow)
   }
 
   // ---- Main workspace rendering (step 1) ----
@@ -586,6 +635,20 @@ export function initWorkbench(app: WizardApp): void {
       rows = []; radioButtons = []; notFoundDivs = []
       activeProdOid = products.length > 1 ? products[0]?.prod_oid : undefined
 
+      // 建結果頁名稱查表：涵蓋各 module 的 itemKey 形狀（prod_oid / prod:pkg / item:supplier）。
+      resultNameByKey = new Map<string, string>()
+      for (const prod of products) {
+        const pn = prod.name ?? prod.prod_oid
+        resultNameByKey.set(prod.prod_oid, pn)   // 商品層（shelf_toggle_product itemKey = prod_oid）
+        for (const plan of prod.plans) {
+          const label = `${pn} · ${(plan.name as string | undefined) ?? String(plan.pkg_oid)}`
+          resultNameByKey.set(`${prod.prod_oid}:${plan.pkg_oid}`, label)  // plan/bundle/schedule
+          if (plan.item_oid != null && plan.supplier_oid != null) {
+            resultNameByKey.set(`${plan.item_oid}:${plan.supplier_oid}`, label)  // inventory
+          }
+        }
+      }
+
       const cardTitle = document.createElement('div'); cardTitle.className = 'bw-card-title'
       renderText(cardTitle, '方案清單'); container.appendChild(cardTitle)
 
@@ -699,11 +762,9 @@ export function initWorkbench(app: WizardApp): void {
             const itemOid = plan.item_oid as string | undefined
             const supplierOid = plan.supplier_oid as string | undefined
             const isBundle = plan.is_bundle === true
+            // 方案+立即（shelf_toggle_plan）：一般方案 + 組合方案皆可勾（送出時依 is_bundle 自動分流）。
+            // 方案+時間（shelf_schedule）：組合方案 be2 不支援排程 → 灰掉。
             if (currentSubMode === 'shelf_schedule' && isBundle) cb.disabled = true
-            // shelf_toggle_plan: exclude bundles (plan only = non-bundle with pkg_oid)
-            if (currentSubMode === 'shelf_toggle_plan' && isBundle) cb.disabled = true
-            // shelf_toggle_bundle: only bundles
-            if (currentSubMode === 'shelf_toggle_bundle' && !isBundle) cb.disabled = true
             const badge = document.createElement('span'); badge.className = 'bw-co-badge'; badge.hidden = true
             renderText(badge, '將一併變更')
             const rs: RowState = {
@@ -731,7 +792,7 @@ export function initWorkbench(app: WizardApp): void {
             const nameSpan = document.createElement('span'); renderText(nameSpan, rs.pkg_name); nameTop.appendChild(nameSpan)
             if (isBundle) {
               const bundleTag = document.createElement('span'); bundleTag.className = 'bw-bundle-tag'
-              renderText(bundleTag, 'bundle'); nameTop.appendChild(bundleTag)
+              renderText(bundleTag, currentSubMode === 'shelf_schedule' ? '組合方案·不支援排程' : '組合方案'); nameTop.appendChild(bundleTag)
             }
             nameCell.appendChild(nameTop)
             const oidSpan = document.createElement('span'); oidSpan.className = 'bw-plan-name-oid'
@@ -873,13 +934,23 @@ export function initWorkbench(app: WizardApp): void {
         quantity: r.quantityInput ? (Number.isNaN(r.quantityInput.valueAsNumber) ? undefined : r.quantityInput.valueAsNumber) : undefined,
       }))
 
-      const items = wiz.buildItems(rowInputs, { target }) as Array<Record<string, unknown>>
-      if (items.length === 0) { showFallback(fallbackEl, '請至少勾選一筆並填妥必要欄位'); return }
-
-      // server createChangesetCore 每個 change-set 硬上限 20 筆 → 用 splitBatches 拆成多個 change-set，
-      // 逐批 create→view→confirm。此 submode 只有單一 action_type，splitBatches 的分組在此為單組；
-      // 用它以對齊 plan/測試。tag action_type 供 splitBatches 分組，送出前再剝除（server itemSchema 不收多餘鍵）。
-      pendingChunks = buildActionChunks(items, serverActionType(currentSubMode), 20)
+      // 方案+立即：方案清單含一般方案 + 組合方案 → 依 is_bundle 分流成 shelf_toggle_plan / shelf_toggle_bundle
+      // 兩種 change-set（各自 ≤20 筆再拆）。splitBatches 按 action_type 分組，逐批 create→view→confirm。
+      const isPlanImmediate = currentFunc === 'shelf' && shelfObject === 'plan' && shelfTiming === 'immediate'
+      if (isPlanImmediate) {
+        const planItems = shelfTogglePlanWizard.buildItems(rowInputs, { target }) as Array<Record<string, unknown>>
+        const bundleItems = shelfToggleBundleWizard.buildItems(rowInputs, { target }) as Array<Record<string, unknown>>
+        if (planItems.length + bundleItems.length === 0) { showFallback(fallbackEl, '請至少勾選一筆並填妥必要欄位'); return }
+        pendingChunks = [
+          ...buildActionChunks(planItems, 'shelf_toggle_plan', 20),
+          ...buildActionChunks(bundleItems, 'shelf_toggle_bundle', 20),
+        ]
+      } else {
+        const items = wiz.buildItems(rowInputs, { target }) as Array<Record<string, unknown>>
+        if (items.length === 0) { showFallback(fallbackEl, '請至少勾選一筆並填妥必要欄位'); return }
+        // server createChangesetCore 每個 change-set 硬上限 20 筆 → splitBatches 拆多批（此模式單一 action_type）。
+        pendingChunks = buildActionChunks(items, serverActionType(currentSubMode), 20)
+      }
       chunkIndex = 0
       accumChunkResults = []
       await stageChunk()
@@ -890,6 +961,7 @@ export function initWorkbench(app: WizardApp): void {
   async function stageChunk(): Promise<void> {
     const chunk = pendingChunks[chunkIndex]
     if (!chunk) { showFallback(fallbackEl, '無可送出的變更'); return }
+    currentChunkActionType = chunk.action_type   // 本批 action_type（方案+立即會逐批不同）
     clearFallback(fallbackEl)
     statusEl.textContent = pendingChunks.length > 1
       ? `建立第 ${chunkIndex + 1}/${pendingChunks.length} 批變更中…` : '建立變更中…'
@@ -1134,10 +1206,10 @@ export function initWorkbench(app: WizardApp): void {
       text: renderText,
       renderQueueLines: (el: HTMLElement, q: unknown[], emptyLabel?: string) => renderQueueLines(el, q as ScheduleEntry[], emptyLabel),
     }
-    const wiz = WIZARDS[currentSubMode]
+    const wiz = WIZARDS[currentChunkActionType as SubMode]
     if (wiz) return wiz.renderDiffCard(d, domHelpers)
     // Announcement diff: inline rendering (no WizardDescriptor)
-    if (currentSubMode === 'announcement') {
+    if (currentChunkActionType === 'announcement') {
       const card = domHelpers.el('div', 'bw-diff-card')
       const nm = domHelpers.el('div', 'bw-diff-title'); renderText(nm, `公告：${d.name}`); card.appendChild(nm)
       const pr = domHelpers.el('div')
@@ -1164,7 +1236,7 @@ export function initWorkbench(app: WizardApp): void {
     workspaceEl.appendChild(progressEl)
 
     // Warning for announcement
-    if (currentSubMode === 'announcement') {
+    if (currentChunkActionType === 'announcement') {
       const warn = document.createElement('div'); warn.className = 'bw-banner bw-banner-danger'
       renderText(warn, '商品公告會即時對前台顯示，請確認內容與生效時間後再批准。'); workspaceEl.appendChild(warn)
       // en-default warning
@@ -1175,7 +1247,7 @@ export function initWorkbench(app: WizardApp): void {
       }
     } else {
       // Warning text from WizardDescriptor
-      const wiz = WIZARDS[currentSubMode]
+      const wiz = WIZARDS[currentChunkActionType as SubMode]
       if (wiz?.step2WarningText) {
         const warn = document.createElement('div'); warn.className = 'bw-banner bw-banner-danger'
         renderText(warn, wiz.step2WarningText); workspaceEl.appendChild(warn)
@@ -1240,7 +1312,7 @@ export function initWorkbench(app: WizardApp): void {
     if (!changesetId || !currentNonce || !currentDiffVersion) { showFallback(fallbackEl, '缺少批准所需資訊，請回上一步重載'); return }
     statusEl.textContent = '執行中…'
     let confirmedKeys: string[]
-    if (currentSubMode === 'announcement') {
+    if (currentChunkActionType === 'announcement') {
       // For announcement, use the same itemKey as announcement-wizard.ts
       confirmedKeys = currentDiffItems.map(d => {
         const fakeItem: AnnouncementCreateItem = {
@@ -1255,7 +1327,7 @@ export function initWorkbench(app: WizardApp): void {
         return announcementItemKey(fakeItem)
       })
     } else {
-      const wiz = WIZARDS[currentSubMode]!
+      const wiz = WIZARDS[currentChunkActionType as SubMode]!
       confirmedKeys = currentDiffItems.map(wiz.itemKey)
     }
     try {
@@ -1318,8 +1390,14 @@ export function initWorkbench(app: WizardApp): void {
       row.appendChild(dot)
 
       const keyWrap = document.createElement('div'); keyWrap.className = 'bw-plan-name'
-      const keySpan = document.createElement('span'); keySpan.className = 'bw-ledger-key'
-      renderText(keySpan, String(res.item_key ?? '')); keyWrap.appendChild(keySpan)
+      const rawKey = String(res.item_key ?? '')
+      const friendly = resultNameByKey.get(rawKey)
+      const nameSpan = document.createElement('span')
+      renderText(nameSpan, friendly ?? rawKey); keyWrap.appendChild(nameSpan)
+      if (friendly) { // 名稱之外仍附原始 key（item:supplier 等），方便對照
+        const keySpan = document.createElement('span'); keySpan.className = 'bw-plan-name-oid'
+        renderText(keySpan, rawKey); keyWrap.appendChild(keySpan)
+      }
       row.appendChild(keyWrap)
 
       const statusSpan = document.createElement('span')
