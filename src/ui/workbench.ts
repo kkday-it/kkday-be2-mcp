@@ -1151,7 +1151,9 @@ export function initWorkbench(app: WizardApp): void {
       const createR = await app.callServerTool({ name: 'app_create_changeset', arguments: { action_type: chunk.action_type, items: chunk.items } })
       if (createR.isError) { showFallback(tryParseErrorText(createR) ? `建立變更失敗：${tryParseErrorText(createR)}` : '建立變更失敗'); return }
       const created = createR.structuredContent?.items?.[0] as { changeset_id?: string } | undefined
-      if (!created?.changeset_id) { showFallback('建立變更失敗：未取得 changeset_id'); return }
+      // 建立失敗時 items 為空、真正原因在 errors[]（SCOPE_NOT_READ / INVALID_ITEMS / ACTION_NOT_ALLOWED…）；
+      // 把它顯示出來，別再吞成通用「未取得 changeset_id」。
+      if (!created?.changeset_id) { showFallback(tryParseErrorText(createR) ? `建立變更失敗：${tryParseErrorText(createR)}` : '建立變更失敗：未取得 changeset_id'); return }
       S.changesetId = created.changeset_id
       const ok = await loadView()
       if (!ok) return

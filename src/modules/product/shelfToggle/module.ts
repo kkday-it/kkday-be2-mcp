@@ -8,7 +8,11 @@ import { executeShelfToggle } from './executor.js'
 import { renderConfirm } from './renderer.js'
 import { shelfToggleProductWizard, shelfTogglePlanWizard } from './ui.js'
 
-const itemSchemaProduct = z.object({ prod_oid: z.string().min(1), target_is_active: z.boolean() })
+// .strict()：product 是 {prod_oid,target_is_active}——plan/bundle item 的純子集。itemShape 是
+// z.union(所有 module schema,依註冊序),product 排在 plan/bundle 前;若非 strict,zod 會讓 plan/bundle
+// item「命中」product schema 並「剝除」pkg_oid/bundle_pkg_oid,剝完的 item 再過 plan/bundle 的 isItem
+// 就 INVALID_ITEMS。strict 讓帶額外鍵的 plan/bundle item 不命中 product、正確落到自己的 schema。
+const itemSchemaProduct = z.object({ prod_oid: z.string().min(1), target_is_active: z.boolean() }).strict()
 const itemSchemaPlan = z.object({ prod_oid: z.string().min(1), pkg_oid: z.string().min(1), target_is_active: z.boolean() })
 
 function isShelfToggleProductItem(i: unknown): i is ChangeSetItem {
