@@ -129,18 +129,18 @@ button{font-family:inherit;cursor:pointer}
 #fallback{white-space:pre-wrap}
 .wb-banner{background:var(--crit-wash);color:#912018;border:1px solid #FDA29B;border-radius:var(--r-sm);padding:10px 12px;font-size:13px;margin:0 0 12px}
 
-.wrap{max-width:1120px;margin:16px auto;padding:0 16px}
-.shell{display:grid;grid-template-columns:216px 1fr;border:1px solid var(--border);border-radius:var(--r);overflow:hidden;background:var(--surface);min-height:620px}
-.nav{background:var(--nav);color:var(--nav-ink);padding:16px 12px;display:flex;flex-direction:column;gap:4px}
-.nav .brand{color:#fff;font-weight:800;font-size:15px;padding:2px 8px 14px}
-.nav .brand small{display:block;font-weight:500;color:var(--nav-ink);font-size:11px;letter-spacing:.05em;margin-top:2px}
-.navbtn{display:flex;flex-direction:column;gap:1px;text-align:left;background:transparent;border:0;color:var(--nav-ink);padding:10px;border-radius:var(--r-sm);width:100%}
-.navbtn .t{font-weight:600;font-size:13px}.navbtn .s{font-size:11px;opacity:.72}
-.navbtn:hover{background:rgba(255,255,255,.07);color:#fff}
-.navbtn[aria-pressed=true]{background:var(--accent);color:#fff}
-.navbtn[aria-pressed=true] .s{opacity:.92}
-.navbtn:disabled{opacity:.4;cursor:not-allowed}
-.navfoot{margin-top:auto;font-size:11px;color:var(--faint);padding:8px;line-height:1.6}
+/* 單欄、窄框友善（MCP Apps 面板約 600–720px）：品牌條 → 功能頁籤 → 步驟條 → 內容 */
+.wrap{max-width:760px;margin:16px auto;padding:0 14px}
+.panel{border:1px solid var(--border);border-radius:var(--r);overflow:hidden;background:var(--surface)}
+.brandbar{background:var(--nav);color:#fff;padding:7px 14px;font-size:12px;font-weight:800;letter-spacing:.02em;display:flex;align-items:center;gap:8px}
+.brandbar small{font-weight:500;color:var(--nav-ink);font-size:11px}
+.brandbar .foot{margin-left:auto;font-weight:500;color:var(--nav-ink);font-size:11px}
+.functabs{display:flex;background:var(--surface);border-bottom:1px solid var(--border);overflow-x:auto}
+.functab{flex:1 1 0;min-width:max-content;display:flex;flex-direction:column;gap:1px;align-items:center;justify-content:center;text-align:center;background:transparent;border:0;border-bottom:2px solid transparent;padding:9px 12px;color:var(--muted);font-weight:600}
+.functab .t{font-size:13px}.functab .s{font-size:11px;opacity:.72;font-weight:500}
+.functab:hover{background:var(--surface-2);color:var(--ink)}
+.functab[aria-pressed=true]{color:var(--accent-ink);border-bottom-color:var(--accent);background:var(--accent-wash)}
+.functab:disabled{opacity:.4;cursor:not-allowed}
 
 .main{display:flex;flex-direction:column;min-width:0}
 .steprail{display:flex;border-bottom:1px solid var(--border);background:var(--surface-2)}
@@ -151,10 +151,17 @@ button{font-family:inherit;cursor:pointer}
 .steprail .st.done{color:var(--good)}.steprail .st.done .n{background:var(--good);color:#fff}
 .steprail .st.clk{cursor:pointer}.steprail .st.clk:hover{background:#EFF1F4}
 
-.cols{display:grid;grid-template-columns:1fr 272px}
-.work{padding:18px 20px;border-right:1px solid var(--border);min-width:0}
-.side{padding:18px 16px;display:flex;flex-direction:column}
-.page{padding:20px 22px}
+.work{padding:16px 18px;min-width:0}
+.page{padding:18px 18px}
+
+/* 頂部 compact 小計（取代側欄大摘要） */
+.summarybar{margin:14px 18px 0;border:1px solid var(--border-strong);border-radius:var(--r-sm);background:var(--surface-2);overflow:hidden}
+.summaryhd{display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;background:transparent;border:0;text-align:left;cursor:pointer;font-size:13px;color:var(--ink)}
+.summaryhd .car{color:var(--faint);font-size:12px;width:12px}
+.summaryhd .cntbig{font-weight:800;color:var(--accent-ink)}
+.summaryhd .go{margin-left:auto;color:var(--accent-ink);font-weight:700;font-size:12px;border:0;background:transparent;padding:2px 4px}
+.summaryhd .go:disabled{color:var(--faint);cursor:not-allowed}
+.summarybody{padding:2px 12px 8px;border-top:1px solid var(--border)}
 
 .loader{background:var(--surface-2);border:1px solid var(--border);border-radius:var(--r);padding:14px}
 .loader .addrow{display:flex;gap:8px;align-items:center;margin-top:8px}
@@ -206,8 +213,7 @@ input:focus-visible,textarea:focus-visible,select:focus-visible,button:focus-vis
 @media (max-width:760px){.grid3{grid-template-columns:1fr}}
 .anntbl td{vertical-align:top}.anntbl tr.annoff{opacity:.42}
 .empty{color:var(--faint);text-align:center;padding:26px 8px;font-size:13px}
-.side .big{font-size:30px;font-weight:800}
-.sumgrp{margin-top:8px}
+.sumgrp{margin-top:6px}
 .grphd{display:flex;justify-content:space-between;align-items:center;gap:8px;width:100%;background:transparent;border:0;border-bottom:1px solid var(--border);padding:7px 0;font-weight:700;font-size:12px;color:var(--muted);cursor:pointer;text-align:left}
 .grphd:hover{color:var(--ink)}
 .sumitem{display:flex;gap:8px;align-items:center;padding:5px 0 5px 6px;border-bottom:1px dashed var(--border);font-size:12px}
@@ -237,8 +243,8 @@ input:focus-visible,textarea:focus-visible,select:focus-visible,button:focus-vis
 .ls-ok{background:var(--good-wash);color:var(--good)}.ls-skip{background:#F2F4F7;color:var(--muted)}.ls-err{background:var(--crit-wash);color:var(--crit)}.ls-sched{background:var(--accent-wash);color:var(--accent-ink)}
 .ext-warning{margin-top:8px;font-size:12px;color:#b8281f;background:rgba(255,59,48,.1);padding:6px 10px;border-radius:6px}
 
-@media (prefers-reduced-motion:no-preference){.navbtn,.btn,.chip,.tab{transition:.12s ease}}
-@media (max-width:900px){.shell{grid-template-columns:1fr}.cols{grid-template-columns:1fr}.side{border-top:1px solid var(--border)}.work{border-right:0}}
+@media (prefers-reduced-motion:no-preference){.functab,.btn,.chip,.tab{transition:.12s ease}}
+@media (max-width:520px){.functab .s{display:none}.brandbar .foot{display:none}}
 `
 
 let stylesInjected = false
@@ -303,13 +309,17 @@ export function initWorkbench(app: WizardApp): void {
   hostNav.hidden = true
   statusEl.hidden = true
 
-  // ---- shell skeleton (built once) ----
+  // ---- shell skeleton — 單欄、窄框友善（品牌條 → 功能頁籤 → 步驟條 → 內容）----
   const wrap = el('div', 'wrap')
-  const shell = el('div', 'shell')
-  const navEl = el('nav', 'nav')
+  const panel = el('div', 'panel')
+  const brandbar = el('div', 'brandbar')
+  brandbar.appendChild(document.createTextNode('be2 工作台'))
+  const brandSub = el('small'); txt(brandSub, '· 批次 · 排程 · 送審'); brandbar.appendChild(brandSub)
+  const brandFoot = el('span', 'foot'); txt(brandFoot, '寫入一律人工批准'); brandbar.appendChild(brandFoot)
+  const funcTabsEl = el('div', 'functabs')
   const mainEl = el('div', 'main')
-  shell.appendChild(navEl); shell.appendChild(mainEl)
-  wrap.appendChild(shell)
+  panel.appendChild(brandbar); panel.appendChild(funcTabsEl); panel.appendChild(mainEl)
+  wrap.appendChild(panel)
   workspaceEl.textContent = ''
   workspaceEl.appendChild(wrap)
 
@@ -350,6 +360,7 @@ export function initWorkbench(app: WizardApp): void {
       selectedLangs: new Set<string>(),
     },
     // ui collapse
+    summaryOpen: false,
     sideOpen: new Set<string>(),
     grpCollapsed: new Set<string>(),
     batchCollapsed: false,
@@ -465,27 +476,25 @@ export function initWorkbench(app: WizardApp): void {
   // =====================================================================
   function render(): void {
     clampIdx()
-    renderNav()
+    renderFuncTabs()
     mainEl.textContent = ''
     mainEl.appendChild(renderSteprail())
-    fallbackEl.remove()             // 移進主區頂端（步驟條之下）
+    // 錯誤 banner 常駐在步驟條之下、內容之上
+    fallbackEl.remove()
+    fallbackEl.style.margin = '12px 18px 0'
+    mainEl.appendChild(fallbackEl)
     if (S.step === 1) mainEl.appendChild(renderSelect())
     else if (S.step === 2) mainEl.appendChild(renderReview())
     else if (S.step === 3) mainEl.appendChild(renderApprove())
     else mainEl.appendChild(renderResult())
-    // 錯誤 banner 常駐在內容之上
-    const first = mainEl.querySelector('.cols, .page')
-    if (first) first.prepend(fallbackEl); else mainEl.appendChild(fallbackEl)
   }
   function clampIdx(): void { if (S.activeIdx >= S.products.length) S.activeIdx = Math.max(0, S.products.length - 1) }
 
-  function renderNav(): void {
-    navEl.textContent = ''
-    const brand = el('div', 'brand'); brand.appendChild(document.createTextNode('be2 工作台'))
-    const small = el('small'); txt(small, '批次 · 排程 · 送審'); brand.appendChild(small)
-    navEl.appendChild(brand)
+  // 功能列 → 頂部橫向頁籤（warm 橘 active）
+  function renderFuncTabs(): void {
+    funcTabsEl.textContent = ''
     for (const f of FUNCS) {
-      const b = el('button', 'navbtn') as HTMLButtonElement
+      const b = el('button', 'functab') as HTMLButtonElement
       b.setAttribute('aria-pressed', String(S.func === f.key))
       if (S.step > 1) b.disabled = true
       const t = el('span', 't'); txt(t, f.label)
@@ -499,11 +508,8 @@ export function initWorkbench(app: WizardApp): void {
         resetEdits(); resetAnn(); clearFallback()
         render()
       }
-      navEl.appendChild(b)
+      funcTabsEl.appendChild(b)
     }
-    const foot = el('div', 'navfoot')
-    txt(foot, '身分由 token 推導 · businessList 授權 · 寫入一律人工批准')
-    navEl.appendChild(foot)
   }
 
   function renderSteprail(): HTMLElement {
@@ -541,10 +547,10 @@ export function initWorkbench(app: WizardApp): void {
   // STEP 1 — 選擇（兩欄）
   // =====================================================================
   function renderSelect(): HTMLElement {
-    const cols = el('div', 'cols')
-    cols.appendChild(renderWork())
-    cols.appendChild(renderSide())
-    return cols
+    const container = el('div')
+    container.appendChild(renderSummaryBar())   // 頂部 compact 小計
+    container.appendChild(renderWork())         // 單欄內容
+    return container
   }
 
   function renderWork(): HTMLElement {
@@ -590,6 +596,14 @@ export function initWorkbench(app: WizardApp): void {
       const d = el('div'); const b = el('b'); txt(b, '高風險：立即影響前台。'); d.appendChild(b); d.appendChild(document.createTextNode(f.risk))
       rb.appendChild(d); work.appendChild(rb)
     }
+    // 底部主 CTA（窄框免捲回頂部）
+    const foot = el('div', 'barfoot')
+    foot.appendChild(el('span'))
+    const n = changesCount()
+    const next = btn(n > BATCH_CAP ? `檢視全部（${n} 筆 · ${Math.ceil(n / BATCH_CAP)} 批）→` : '檢視全部 →', 'btn primary', () => { void doNext() }) as HTMLButtonElement
+    next.disabled = n === 0
+    foot.appendChild(next)
+    work.appendChild(foot)
     return work
   }
 
@@ -922,40 +936,42 @@ export function initWorkbench(app: WizardApp): void {
     return pane
   }
 
-  // 右欄：本次變更 live summary
-  function renderSide(): HTMLElement {
-    const f = funcDesc()
-    const side = el('aside', 'side')
-    const eb = el('div', 'eyebrow'); txt(eb, '檢視：本次變更'); side.appendChild(eb)
+  // 頂部 compact 小計：一行「本次變更 N 筆 · 檢視全部 →」，可展開看依商品分組清單
+  function renderSummaryBar(): HTMLElement {
     const ch = changesList()
-    const big = el('div', 'big tnum'); txt(big, String(ch.length)); side.appendChild(big)
-    const sub = el('div', 'muted'); sub.style.fontSize = '12px'; txt(sub, `筆 · ${f.label} · ${S.products.length} 商品`); side.appendChild(sub)
-
-    const listWrap = el('div'); listWrap.style.cssText = 'flex:1;overflow-y:auto;margin-top:8px'
-    if (ch.length === 0) { const e = el('div', 'empty'); txt(e, '尚未有變更'); listWrap.appendChild(e) }
-    else {
+    const bar = el('div', 'summarybar')
+    const open = S.summaryOpen && ch.length > 0
+    const hd = el('button', 'summaryhd')
+    const car = el('span', 'car'); txt(car, ch.length > 0 ? (open ? '▾' : '▸') : ''); hd.appendChild(car)
+    const label = el('span')
+    label.appendChild(document.createTextNode('本次變更 '))
+    const cnt = el('span', 'cntbig tnum'); txt(cnt, String(ch.length)); label.appendChild(cnt)
+    label.appendChild(document.createTextNode(' 筆'))
+    if (ch.length > BATCH_CAP) { const s = el('span', 'muted'); s.style.fontSize = '12px'; txt(s, ` · 將拆 ${Math.ceil(ch.length / BATCH_CAP)} 批`); label.appendChild(s) }
+    hd.appendChild(label)
+    const go = el('button', 'go') as HTMLButtonElement
+    txt(go, '檢視全部 →'); go.disabled = ch.length === 0
+    go.onclick = (e) => { e.stopPropagation(); void doNext() }
+    hd.appendChild(go)
+    hd.onclick = () => { if (ch.length === 0) return; S.summaryOpen = !S.summaryOpen; render() }
+    bar.appendChild(hd)
+    if (open) {
+      const body = el('div', 'summarybody')
       for (const [g, arr] of groupBy(ch)) {
         const grp = el('div', 'sumgrp')
-        const open = S.sideOpen.has(g)
-        const hd = el('button', 'grphd')
-        const left = el('span'); left.appendChild(document.createTextNode(g + ' ')); const cnt = el('span', 'oid'); txt(cnt, `· ${arr.length} 筆`); left.appendChild(cnt)
-        const car = el('span'); txt(car, open ? '▾' : '▸')
-        hd.appendChild(left); hd.appendChild(car)
-        hd.onclick = () => { if (open) S.sideOpen.delete(g); else S.sideOpen.add(g); render() }
-        grp.appendChild(hd)
-        if (open) for (const l of arr) { const it = el('div', 'sumitem'); const d = el('span', 'd'); it.appendChild(d); it.appendChild(document.createTextNode(l)); grp.appendChild(it) }
-        listWrap.appendChild(grp)
+        const gopen = S.sideOpen.has(g)
+        const ghd = el('button', 'grphd')
+        const left = el('span'); left.appendChild(document.createTextNode(g + ' ')); const gc = el('span', 'oid'); txt(gc, `· ${arr.length} 筆`); left.appendChild(gc)
+        const gcar = el('span'); txt(gcar, gopen ? '▾' : '▸')
+        ghd.appendChild(left); ghd.appendChild(gcar)
+        ghd.onclick = () => { if (gopen) S.sideOpen.delete(g); else S.sideOpen.add(g); render() }
+        grp.appendChild(ghd)
+        if (gopen) for (const l of arr) { const it = el('div', 'sumitem'); const d = el('span', 'd'); it.appendChild(d); it.appendChild(document.createTextNode(l)); grp.appendChild(it) }
+        body.appendChild(grp)
       }
+      bar.appendChild(body)
     }
-    side.appendChild(listWrap)
-
-    const next = btn('檢視全部 →', 'btn primary mt12', () => { void doNext() }) as HTMLButtonElement
-    next.style.width = '100%'; next.disabled = ch.length === 0
-    side.appendChild(next)
-    const foot = el('div', 'muted mt8'); foot.style.fontSize = '11px'
-    txt(foot, ch.length > BATCH_CAP ? `共 ${ch.length} 筆，將拆成 ${Math.ceil(ch.length / BATCH_CAP)} 批（每批 ≤${BATCH_CAP}）逐批批准` : '下一步：檢視 + 批准')
-    side.appendChild(foot)
-    return side
+    return bar
   }
 
   // =====================================================================
