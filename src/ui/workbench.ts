@@ -1130,7 +1130,9 @@ export function initWorkbench(app: WizardApp): void {
     for (const p of products) {
       const pn = p.name ?? p.prod_oid
       resultNameByKey.set(String(p.prod_oid), pn)
-      for (const pl of p.plans) {
+      // 公告的 app_get_announcement_view 回的 product 沒有 plans 欄位（只有 prod_oid/name/existing_count），
+      // 故 p.plans 可能是 undefined —— 加 ?? [] 防 "plans is not iterable"（e2e 揪出）。
+      for (const pl of (p.plans ?? [])) {
         const label = `${pn} · ${pl.name ?? pl.pkg_oid}`
         resultNameByKey.set(`${p.prod_oid}:${pl.pkg_oid}`, label)
         if (pl.item_oid != null && pl.supplier_oid != null) resultNameByKey.set(`${pl.item_oid}:${pl.supplier_oid}`, label)
