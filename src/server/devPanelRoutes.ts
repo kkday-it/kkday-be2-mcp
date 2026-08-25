@@ -13,7 +13,7 @@ export interface DevPanelDeps {
   appDeps: AppPipelineDeps
 }
 
-const ALLOWED_PANELS = ['batch-wizard', 'changeset-panel', 'products-panel', 'announcement-wizard']
+const ALLOWED_PANELS = ['batch-wizard', 'changeset-panel', 'products-panel', 'announcement-wizard', 'workbench']
 const DEV_SECRET = 'be2mcp_dev_panel_secret'
 const DEV_SESSION_ID = 'dev-panel-session'
 
