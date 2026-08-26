@@ -6,6 +6,7 @@
 > 追溯補記（2026-08-19 起才有本規則，先前的 spec 異動追溯登記於下）。
 
 ## 2026-08-26
+- `2026-08-26-...-cloud-ready-migration-design.md` §3.1/3.2/3.3/3.4/4/5/6（agy review 三修，APPROVED）/ 收 agy 5 majors:去 advisory-lock-over-I/O 改 CAS+樂觀並發+per-pod single-flight、scheduler tick 加批次上限+lease 制 stranded、SQLite migration runner、容器 build 補 build:ui、補 BE2_MCP_ALLOWED_HOSTS 硬阻斷 / 為什麼:避免連線池耗盡、endpoint timeout、空 DB 開機掛、面板退化、Host 403。
 
 - `2026-08-26-be2-mcp-cloud-ready-migration-design.md`（新增）/ be2-mcp 對齊 kkday cloud-ready 12 約束的遷移設計 spec：store SQLite→PostgreSQL 抽象+雙後端、去 in-process 鎖改 PG advisory lock、scheduler→HTTP endpoint(CronJob 觸發)、forward-only migration 去 runtime DDL、0.0.0.0、結構化 stdout、APP_* 命名 compat、PROJECT.yaml；分 6 階段、只定方向、實作走 writing-plans / 為什麼：最終部署內部 AWS EKS，現況 SQLite/in-process 鎖/poller/127.0.0.1 違反硬約束；ctx.* SDK 無 db adapter 故自建 PG 抽象。
 

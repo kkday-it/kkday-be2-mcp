@@ -35,8 +35,10 @@ nonce 批准、稽核 append-only）**行為不得改變**。遷移只換「狀�
 - 定義 `Store` 介面（每個 sub-store 一組同步/非同步方法），現有 SQLite 實作收斂到介面後面。
 - 新增 **PostgreSQL 實作**（`pg` driver，連線參數 `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME`，允許 `DATABASE_URL` 短路；TLS `sslmode=no-verify`；**小連線池**，`pod 數 × pool` 遠低於 RDS max_connections）。
 - **後端由 env 選**：`DB_DRIVER=sqlite|postgres`（或有 `DB_HOST` 即 postgres）。**本機/CI 續用 SQLite**（快、零依賴）；stage/prod 用 PostgreSQL。
-- App DB 帳號**只 CRUD**；**runtime 不做 DDL**——schema 改成 **repo 內 forward-only SQL migration**（`migrations/NNNN_*.sql`），部署時由 DevOps 的 migration job / init 流程套用，`openDb` 不再 `CREATE TABLE`。
+- App DB 帳號**只 CRUD**；**runtime 不做 DDL**——schema 改成 **repo 內 forward-only SQL migration**（`migrations/NNNN_*.sql`），`openDb` 不再 `CREATE TABLE`。
+- **migration runner 對兩後端都要有**（否則移除 runtime DDL 後本機/CI 對空 DB 開機即掛）：提供 `migrate` script 依序套用 `migrations/*.sql`；**本機/CI**：測試/啟動前跑一次 `migrate`（對 SQLite 檔）；**stage/prod**：由 DevOps 部署流程對 PostgreSQL 套用（先 migration 後 rollout）。SQL 需兩後端相容（方言差由 store 介面吸收，見 §6）。
 - 只用標準 PostgreSQL 功能；如需 extension 事先列出確認。
+- **CAS + 稽核同交易**：需同時做原子 CAS（如 change-set 狀態轉移）與 append-only audit insert 的操作，包在同一 DB 交易內，避免網路抖動下「CAS 成功但 audit 失敗」的 split-brain（SQLite 亦以交易保證）。
 - **決策理由（vs Redis）**：durable 狀態（identity/token/changeSet/audit）語義是關聯資料 + 需持久 + 需交易一致 → PostgreSQL（符 spec #6）。Redis 僅適合 cache/ephemeral；本專案 durable 資料為主，統一走 PG、少一個依賴。
 
 考量：SQLite 目前多用同步 API（better-sqlite3），PG 是非同步。介面設計需一開始就 async（SQLite 實作包成 async），避免二次改。
@@ -45,9 +47,12 @@ nonce 批准、稽核 append-only）**行為不得改變**。遷移只換「狀�
 
 現況：`tokenManager` single-flight、`scheduler` poller 認領、`inventorySetting/executor` mutex 全 **in-process**（多副本會各跑一份 → 重複 refresh、雙重寫入、排程重跑）。
 
-**決策：跨副本協調改 PostgreSQL advisory lock。**
-- L2 token refresh single-flight、inventory executor 的 per-(item,supplier) 鎖、scheduler 到期認領 → 改 `pg_advisory_xact_lock`（key 用 hashtext(identityId/itemKey/…)）。
-- 理由：DB 已在（3.1），advisory lock 零額外基礎設施、自動隨交易釋放、pod 死不留殭屍鎖。（Redis 分散式鎖是備選，但多一個依賴。）
+**關鍵約束：這三處的臨界區都包住外部網路 I/O（auth-service refresh、gateway get/put）。故絕不可用「跨越網路 I/O 的 DB 交易鎖」（`pg_advisory_xact_lock` 綁在 pooled 交易上）——那會讓每個等鎖的請求占住一條 pooled 連線直到 HTTP 往返結束，小連線池瞬間耗盡、全服務阻塞。** 對每一處分別選最輕的正確機制，而非統一上鎖：
+
+- **scheduler 到期認領**：**不上鎖**——`scheduler.ts` 已有原子 CAS `claimScheduled(id, now)`（`UPDATE … WHERE status='scheduled'`，註解「別的實例贏了」），天生多副本安全。搬到 PostgreSQL 後 CAS 語義照舊即可。
+- **inventory executor 的 per-(item,supplier) lost-update 防護**：改**樂觀並發（不跨 I/O 上鎖）**——讀現況 → 算 diff → 寫入時帶版本/條件式（CAS 或 `WHERE`），寫入前不持有任何 DB 鎖；併發只會讓其一寫入落空（可偵測、可重試），不會鎖住連線。跨 change-set 同 key 的一致性最終由 be2 後端 + 這層 CAS 保證，不由 app 端長鎖保證。
+- **L2 token refresh single-flight**：維持**每 pod in-process single-flight + rotation 容忍**（現有設計本就容忍併發 refresh：rotate 天然正確、舊 refresh 撞 rotation 會失敗重取）。跨 pod 偶發重複 refresh 是可接受的（rotation-safe），**不需**分散式鎖。
+- 若未來確有「必須跨副本互斥且不含長 I/O」的臨界區，才考慮 Redis 分散式鎖或**專用非 pooled 連線上的 session-level advisory lock（在長 I/O 前釋放）**；本波三處都不需要。
 - 行程內 cache 只能是「有更快、沒有也正確」的最佳努力（符 spec #3）。
 
 ### 3.3 排程：in-process poller → HTTP 觸發（約束 #8）
@@ -55,15 +60,18 @@ nonce 批准、稽核 append-only）**行為不得改變**。遷移只換「狀�
 現況：`src/core/schedule/scheduler.ts` 是 `setInterval` 類 in-process poller（多副本重複跑、縮容即消失）。
 
 **決策：排程執行改「對外可觸發的 HTTP endpoint」。**
-- 新增 `POST /internal/scheduler/tick`（帶 `CRON_SECRET` bearer、**idempotent**、認領用 3.2 的 advisory lock），做一次「掃到期 change-set → 執行」。
+- 新增 `POST /internal/scheduler/tick`（帶 `CRON_SECRET` bearer、**idempotent**、認領用 3.2 的 CAS `claimScheduled`），做一次「掃到期 change-set → 執行」。
+- **必須有批次上限 + 提早返回**（cloud-ready spec §2.7）：單次 tick 最多處理 N 件（如 `SCHEDULER_TICK_BATCH`，預設個位數），回報處理/剩餘數即返回；未處理的到期件下次 CronJob tick 再撈（CAS 認領保證不重複）。**不可同步清空無上限 backlog**——否則超過 ingress/ALB(~60s)/Node timeout。
 - 由 **Kubernetes CronJob** 定時打這個 endpoint（宣告在 k8s manifest，非程式內 timer）。
-- 本機開發可保留一個「dev-only in-process ticker 打自己的 endpoint」的便利旗標（`SCHEDULER_DEV_TICK=1`），但**生產一律靠 CronJob**。
+- **stranded 偵測改租約制（多副本安全）**：現況 `auditStranded()` 在 `start()` 啟動時把所有 `executing` 記為 error——多副本下 pod B 啟動會誤判 pod A 正在跑的件。改為：認領時寫 claim 時戳（lease），`executing` 且 lease 過 TTL 未完成才視為 stranded，由 **tick 內**回收/告警（`scheduler.ts` 已有「stranded-approved 回收先於認領」的雛形，擴為 lease TTL）。**移除 `start()`-time 的無條件 `auditStranded()`**（去掉 in-process poller 後它也不該存在）。
+- 本機開發可保留一個「dev-only in-process ticker 打自己的 tick」的便利旗標（`SCHEDULER_DEV_TICK=1`），但**生產一律靠 CronJob**。
 
 ### 3.4 綁定與啟動（約束 #1）
 
 - 監聽改綁 `0.0.0.0`、讀 `process.env.PORT`（保留 `BE2_MCP_PORT` 為 compat，見 3.6）。本機仍可連 loopback。
+- **Host header 白名單（硬阻斷，勿漏）**：`hostGuard.ts` 現只放行 `127.0.0.1/localhost/::1`（DNS-rebinding 防護），ingress 帶的部署域名 Host 會被 403。**必須設 `BE2_MCP_ALLOWED_HOSTS`=部署域名**（從 `APP_BASE_URL` 推導以免 drift）。這是 stage-eks doc §7 三個硬阻斷之一。
 - 容器：multi-stage Dockerfile（build 裝全依賴、runtime 只留 prod 產物 + prod 依賴）、非 root、假設 FS 唯讀只 `/tmp` 可寫、鎖 lockfile、base image 釘 major（`node:22-alpine`）、`.dockerignore`、**處理 SIGTERM**（停收新請求、排空、退出）。
-- **補 prod build**（stage-eks doc 已列缺口）：加 `build`（`tsc` 產 server code 到 `dist/`）+ `start`（`node dist/index.js`）script；現在只有 `dev = tsx`。
+- **補 prod build**（stage-eks doc 已列缺口）：加 `build` script，**須同時產出**：(a) `tsc` 編 server code 到 `dist/`、(b) **`npm run build:ui`** 產面板 HTML（`dist/ui/*.html`）——漏了它 prod image 沒面板資產、MCP Apps 面板永久退化成純文字。加 `start`（`node dist/index.js`）；現在只有 `dev = tsx`。
 
 ### 3.5 Log：結構化 stdout（約束 #10）
 
@@ -90,13 +98,13 @@ nonce 批准、稽核 append-only）**行為不得改變**。遷移只換「狀�
 1. **Store 介面抽象**（純重構，SQLite 收斂到介面後面、改 async；不換後端）→ CI 綠。
 2. **Forward-only migration + 去 runtime DDL**（`openDb` 不再建表；migration 檔化）。
 3. **PostgreSQL 後端實作**（env 選後端；SQLite 續為本機/CI 預設）→ 對 stage PG 實測。
-4. **去 in-process 鎖 → PG advisory lock**（token/executor/scheduler 認領）。
+4. **去 in-process 鎖 → 無鎖併發**（見 §3.2，勿引入跨 I/O 的 DB 鎖）：scheduler 用既有 CAS `claimScheduled`、executor 改樂觀並發（寫入 CAS）、token refresh 維持每 pod single-flight + rotation 容忍。
 5. **scheduler → HTTP endpoint + CronJob**（移除 in-process poller，dev ticker 旗標）。
 6. **容器化**（Dockerfile/prod build/start/SIGTERM/0.0.0.0）+ 結構化 log + `.env.example` 三分類 + `APP_*` compat + `PROJECT.yaml`。
 
 ## 5. 開放決策（需使用者/DevOps 拍板）
 
-1. **鎖後端**：PG advisory lock（本 spec 推薦）vs Redis——若平台已標配 valkey 且未來需高頻分散式鎖，可選 Redis；但本專案 durable 為主，PG 足夠。
+1. **併發機制（已定，非鎖）**：三處臨界區都不用分散式鎖（見 §3.2）——scheduler CAS、executor 樂觀並發、token per-pod single-flight。僅記錄：若未來出現「必須跨副本互斥且不含長 I/O」的新臨界區，才評估 Redis / 專用連線 session-lock。
 2. **`PROJECT.yaml` 的 `risk_tier` 與 team slug**、以及**要不要現在登記進 framework registry**（[外部-低風險]）。
 3. **RDS 供給**：DB 帳號（只 CRUD）、migration 由誰在部署流程套用（DevOps 對接）。
 4. **auth-service key scope 對映**（`API_AUTH_SERVICE_READ` vs `REFR/WRITE`）——確認我方實際需要的 scope。
@@ -107,10 +115,12 @@ nonce 批准、稽核 append-only）**行為不得改變**。遷移只換「狀�
 - **同步→非同步 store 介面**改動面廣（所有 store 呼叫點）——階段 1 一次抽象、既有測試護欄。
 - **PG 連線池 × pod 數 vs RDS max_connections**——連線池設個位數、部署前算總量。
 - **migration 與 code 版本不同步**——forward-only、部署順序（先 migration 後 rollout）由 DevOps 流程保證。
-- **advisory lock key 碰撞**——用具命名空間的 hash（如 `hashtext('be2mcp:token:'||identityId)`）。
+- **樂觀並發寫入落空**（executor CAS）——併發被搶先時須偵測（受影響列數=0）並重試/回報，不可靜默丟失；配合 §3.1 的 CAS+audit 同交易。
 - **本機 SQLite 與 PG 行為差異**（型別/排序/upsert 語法）——store 介面吸收方言差；conformance 測試兩後端都跑。
 
 ## 7. 驗收
 
 - 本波 spec 交付：本文件（agy-peer-review APPROVED）+ writing-plans 產遷移 plan。
 - 各階段：CI 綠、SQLite 本機/CI 等價、PG 後端對 stage 實測、容器本地起得來（0.0.0.0 + healthz + SIGTERM）、CronJob 打 scheduler endpoint 跑通。
+
+<!-- agy-peer-reviewed: 2026-08-26T03:11:56Z rounds=3 verdict=approved -->
