@@ -986,8 +986,9 @@ export function initWorkbench(app: WizardApp): void {
       if (!built) return
       chunks = [built]
     } else if (S.func === 'shelf') {
-      chunks = buildShelfChunks()
-      if (chunks === null as unknown as typeof chunks) return
+      const shelfChunks = buildShelfChunks()
+      if (shelfChunks === null) return   // 驗證失敗(已顯示具體錯誤，如「請先設定排程時間」)——勿往下被通用訊息覆蓋
+      chunks = shelfChunks
     } else if (S.invMode === 'inventory_setting') {
       const items = inventorySettingWizard.buildItems(inventoryRowInputs(), {}) as Array<Record<string, unknown>>
       chunks = buildActionChunks(items, 'inventory_setting', BATCH_CAP) as typeof chunks
@@ -1004,13 +1005,15 @@ export function initWorkbench(app: WizardApp): void {
     await stageChunk()
   }
 
-  function buildShelfChunks(): Array<{ action_type: ChunkActionType; items: Array<Record<string, unknown>> }> {
+  // 回傳 null = 驗證失敗且已 showFallback 具體錯誤（呼叫端須直接 return，勿被外層通用訊息覆蓋）；
+  // 回傳陣列 = 正常（可能為空 items，代表未勾選 → 外層通用「請至少勾選一筆」才適用）。
+  function buildShelfChunks(): Array<{ action_type: ChunkActionType; items: Array<Record<string, unknown>> }> | null {
     const target = dirActive() ? 'on' : 'off'
     if (S.shelfSched) {
-      if (!S.shelfSchedAt) { showFallback('請先設定排程時間'); return [] }
+      if (!S.shelfSchedAt) { showFallback('請先設定排程時間'); return null }
       const [date, time] = S.shelfSchedAt.split('T')
       let utc: string
-      try { utc = toUtcDateTime(date, time || '00:00', S.shelfSchedTz).slice(0, 19) } catch { showFallback('排程時間格式錯誤'); return [] }
+      try { utc = toUtcDateTime(date, time || '00:00', S.shelfSchedTz).slice(0, 19) } catch { showFallback('排程時間格式錯誤'); return null }
       S.lastTz = S.shelfSchedTz
       const entry: ScheduleEntry = { reserve_date_utc: utc, reserve_status: dirActive() }
       const rows: WizardRowInput[] = []
