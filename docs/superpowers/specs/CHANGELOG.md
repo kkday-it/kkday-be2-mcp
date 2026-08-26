@@ -5,6 +5,15 @@
 >
 > 追溯補記（2026-08-19 起才有本規則，先前的 spec 異動追溯登記於下）。
 
+## 2026-08-26
+- `2026-08-26-...-cloud-ready-migration-design.md` §3.1/3.2/3.3/3.4/4/5/6（agy review 三修，APPROVED）/ 收 agy 5 majors:去 advisory-lock-over-I/O 改 CAS+樂觀並發+per-pod single-flight、scheduler tick 加批次上限+lease 制 stranded、SQLite migration runner、容器 build 補 build:ui、補 BE2_MCP_ALLOWED_HOSTS 硬阻斷 / 為什麼:避免連線池耗盡、endpoint timeout、空 DB 開機掛、面板退化、Host 403。
+
+- `2026-08-26-be2-mcp-cloud-ready-migration-design.md`（新增）/ be2-mcp 對齊 kkday cloud-ready 12 約束的遷移設計 spec：store SQLite→PostgreSQL 抽象+雙後端、去 in-process 鎖改 PG advisory lock、scheduler→HTTP endpoint(CronJob 觸發)、forward-only migration 去 runtime DDL、0.0.0.0、結構化 stdout、APP_* 命名 compat、PROJECT.yaml；分 6 階段、只定方向、實作走 writing-plans / 為什麼：最終部署內部 AWS EKS，現況 SQLite/in-process 鎖/poller/127.0.0.1 違反硬約束；ctx.* SDK 無 db adapter 故自建 PG 抽象。
+
+## 2026-08-22
+
+- `2026-08-22-be2-mcp-workbench-design.md`（全檔，新建）/ 功能彙整工作台設計：把 4 個散落面板彙整成單一「be2 工作台」（版型 B 左功能列 + 次模式），新增 `be2_open_workbench` + `ui://be2/workbench.html` 取代 `be2_open_batch_wizard`/`be2_open_announcement_wizard`，v1 收全部 7 個 action_type（上下架含 bundle+schedule、庫存含 platform、公告），重用 change-set 引擎/scope-gate/scheduler 不動 core；新增 `shelfToggle/ui.ts` + 上下架強制單一方向 validate、拆批 ≤20/批（公告 prodOids 陣列例外）、公告 ingest-only（skill 15 語系 JSON、可勾選語系）/ 使用者要「功能列點選切換、不用來回對話」；經 UI prototype 深度迭代釘定 8 項決策 + 三功能真實 API 契約（含公告 create endpoint），brainstorming 後半段收斂成 spec。
+
 ## 2026-08-21
 
 - `2026-08-21-be2-mcp-logout-revoke-design.md` §6.2/§7/§9(agy review round 1 四修)/ (1) CSRF 改顯式 Origin 檢查(SameSite 對 127.0.0.1 不分 port,同機異 port 可跨站 POST 固定路徑的 revoke-all);(2) SsoDeps 接線補 oauthStore+baseOrigin;(3) requireSession 抽共用 sessionGate;(4) revoke-all 改 POST-Redirect-GET / agy 抓到 localhost CSRF 與缺依賴注入是真問題(rounds=2 APPROVED;「family 已亡 edge 不可能」的質疑經 oauth-purge 場景推翻獲 CONCEDE)。

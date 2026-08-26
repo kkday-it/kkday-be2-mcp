@@ -10,7 +10,7 @@ import type { Config } from '../src/config.js'
 import { findProductsTool } from '../src/tools/findProducts.js'
 import { productPlansTool } from '../src/tools/productPlans.js'
 import { inventorySettingsTool } from '../src/tools/inventorySettings.js'
-import { openBatchWizardTool } from '../src/tools/openBatchWizard.js'
+import { openWorkbenchTool } from '../src/tools/openWorkbench.js'
 import { createChangesetTool, getChangesetStatusTool } from '../src/core/changeset/tools.js'
 import {
   appGetChangesetViewTool,
@@ -29,7 +29,7 @@ describe('Tool Annotations - Unit Verification', () => {
     findProductsTool as ToolDef,
     productPlansTool as ToolDef,
     inventorySettingsTool as ToolDef,
-    openBatchWizardTool as ToolDef,
+    openWorkbenchTool as ToolDef,
     createChangesetTool,
     getChangesetStatusTool,
   ]
@@ -76,7 +76,7 @@ describe('Tool Annotations - Unit Verification', () => {
   it('draft staging tools have readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true', () => {
     const draftTools = [
       createChangesetTool,
-      openBatchWizardTool,
+      openWorkbenchTool,
       appCreateChangesetTool,
     ]
     for (const tool of draftTools) {

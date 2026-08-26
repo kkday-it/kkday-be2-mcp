@@ -8,6 +8,7 @@ const PANELS: Array<{ uri: string; file: string }> = [
   { uri: 'ui://be2/changeset-panel.html', file: 'changeset-panel.html' },
   { uri: 'ui://be2/batch-wizard.html', file: 'batch-wizard.html' },
   { uri: 'ui://be2/announcement-wizard.html', file: 'announcement-wizard.html' },
+  { uri: 'ui://be2/workbench.html', file: 'workbench.html' },
 ]
 
 // 面板永遠是增強層：dist/ui 缺檔（沒跑 build:ui）就略過註冊、warn，工具照常文字運作。

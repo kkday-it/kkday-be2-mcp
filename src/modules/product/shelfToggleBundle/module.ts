@@ -6,6 +6,7 @@ import { itemKey } from './keys.js'
 import { executeBundleToggle } from './executor.js'
 import { renderConfirm } from './renderer.js'
 import type { BundleItem, BundleDiffItem } from './types.js'
+import { shelfToggleBundleWizard } from './ui.js'
 
 const itemSchema = z.object({
   prod_oid: z.string().min(1),
@@ -17,6 +18,12 @@ function isBundleItem(i: unknown): i is BundleItem {
   return typeof (i as BundleItem).prod_oid === 'string'
     && typeof (i as BundleItem).bundle_pkg_oid === 'string'
     && typeof (i as BundleItem).target_is_active === 'boolean'
+}
+
+function singleDirection(items: Array<{ target_is_active: boolean }>) {
+  const dirs = new Set(items.map(i => i.target_is_active))
+  if (dirs.size > 1) return { key: 'mixed_direction', message: '一批上下架不可同時含上架與下架，請分兩批送出。' }
+  return null
 }
 
 export const shelfToggleBundleModule: ActionModule<BundleItem, BundleDiffItem> = {
@@ -37,7 +44,7 @@ export const shelfToggleBundleModule: ActionModule<BundleItem, BundleDiffItem> =
   isItem: isBundleItem,
   scopeOids: (item: BundleItem) => [item.prod_oid, item.bundle_pkg_oid],
   scopeErrorKey: (item: BundleItem) => item.bundle_pkg_oid,
-  validate: () => null,
+  validate: (items) => singleDirection(items as Array<{ target_is_active: boolean }>),
   computeDiff: (ctx: DiffCtx, items: BundleItem[]) => computeBundleDiff(items, ctx),
   diffVersion: (diff: BundleDiffItem[]) => {
     const canon = diff.map(d => `${d.prod_oid}:${d.bundle_pkg_oid}=${d.current_is_active ?? 'null'}`).sort().join('|')
@@ -46,4 +53,5 @@ export const shelfToggleBundleModule: ActionModule<BundleItem, BundleDiffItem> =
   itemKey,
   execute: executeBundleToggle,
   renderConfirm: (rec, diff, version, banner) => renderConfirm(rec, diff as BundleDiffItem[], version, banner),
+  wizard: shelfToggleBundleWizard,
 }

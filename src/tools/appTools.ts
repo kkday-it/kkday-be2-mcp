@@ -135,7 +135,7 @@ export const appGetBatchViewTool: AppToolDef = {
   name: 'app_get_batch_view',
   description: 'Panel-only: load products -> plans + current state for the batch wizard (registers server-side read-scope).',
   inputShape: {
-    action_type: z.enum(['inventory_platform', 'shelf_schedule', 'inventory_setting']),
+    action_type: z.enum(['inventory_platform', 'shelf_schedule', 'inventory_setting', 'shelf_toggle_product', 'shelf_toggle_plan', 'shelf_toggle_bundle']),
     prod_oids: z.array(z.string().min(1)).min(1).max(10),
   } as never,
   annotations: {
@@ -206,12 +206,33 @@ export const appGetAnnouncementViewTool: AppToolDef = {
     // 不 push error——scope-gate 只需 read_oids + 商品名；既有公告數讀不到不該讓整個 view 報錯。
     let client: ReturnType<typeof makeAnnouncementClient> | undefined
     try { client = makeAnnouncementClient() } catch { /* announcement client unavailable → existing_count 留 null */ }
+    
+    // 既有公告數：一次查全部 prod_oids，事後依 prod_oid 分組計數（免 N+1）。
+    // best-effort：client 建不起來 / 查詢失敗 / 回傳項無法對應 prod_oid → 全部降級為 null（未知）。
+    // 已知取捨（best-effort、僅供「是否重建公告」的參考數字）：listByProdOids 固定 perPage=100，
+    // 這 100 筆上限由本批 ≤10 個 prod_oids 共用——跨商品公告總數 >100 時，靠後的商品可能低報；
+    // 且分組依賴回傳項帶 prod_oid/prodOid（live svc-b2c 形狀尚未實證）。真正跑 live 前需按實際形狀校準。
+    let counts: Map<string, number> | null = null
+    if (client) {
+      try {
+        const items = await client.listByProdOids(ctx.accessToken, prodOids)
+        const m = new Map<string, number>()
+        let anyGroupable = false
+        for (const it of items as Array<Record<string, unknown>>) {
+          const pid = (it?.prod_oid ?? it?.prodOid)
+          if (pid == null) continue
+          anyGroupable = true
+          const k = String(pid)
+          m.set(k, (m.get(k) ?? 0) + 1)
+        }
+        counts = (!anyGroupable && items.length > 0) ? null : m
+      } catch { counts = null }
+    }
     for (const oid of prodOids) {
       let name: string | undefined
       try { name = extractProductInfo(await ctx.gateway.get(`/product/api/v1/drafts/products/${encodeURIComponent(oid)}/info`, ctx.accessToken)).name }
       catch (e) { errors.push(toEnvelopeError(oid, e)) }
-      let existing: number | null = null
-      if (client) { try { existing = (await client.listByProdOids(ctx.accessToken, [oid])).length } catch { /* 既有公告數讀不到 → null 未知，不報錯 */ } }
+      const existing: number | null = counts ? (counts.get(oid) ?? 0) : null
       products.push({ prod_oid: oid, name, existing_count: existing })
     }
     return makeEnvelope([{ products }], errors, prodOids)

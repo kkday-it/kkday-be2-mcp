@@ -1,0 +1,20 @@
+# PROJECT.yaml — be2-mcp 治理宣告（kkday-vibe-framework registry 用）
+# 欄位規範見 kkday-vibe-framework/project-template-v0.md §4；guard 驗證見 scripts/guard/validate_project.py。
+id: be2-team.mcp-server         # <team>.<project>
+owner: lance.chien
+team: be2-team
+status: active
+risk_tier: red                  # draft-only 但批准後為真實生產寫入(改線上上下架/庫存)；且現況 SQLite 存明文 token
+
+touches:
+  internal_apis:
+    - kkday-auth-service         # S2S service key：login / verify / refresh
+    - be2-product-service        # 經 api-gateway，讀 + draft-only 寫（shelf / inventory / schedule）
+  external_sites: []
+  integrations: []               # 無 Slack/Gmail 等 vendor 串接；MCP client 端不算 framework 定義的 integration
+  databases:
+    - "sqlite:local (非合規，遷移中 → 目標 rds/be2-mcp；見 docs/be2-mcp/stage-eks-migration-devops.md §8 + docs/superpowers/specs/2026-08-26-be2-mcp-cloud-ready-migration-design.md)"
+  pii: false                     # be2 商品資料非顧客個資；audit_log 記內部員工身份（若資安認定亦屬 PII 需改 true）
+
+initiators: []                   # 空 = 僅 owner team；實際使用者為透過 be2-auth 登入的 be2 pilot 員工
+schedules: {}                    # 現況 in-process scheduler（scheduler.ts），未符「HTTP job endpoint」形狀；遷移後補（見 migration spec §3.3）

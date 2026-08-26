@@ -104,3 +104,23 @@
 - 上車:`module-onboarding.md`、`module-catalog.md`
 - runbook:`demo-runbook-2026-08-21.md`、`oauth-runbook.md`、各 phase runbook
 - GitHub issues:#1(原 mcp_poc#20)(switch 重構)、#2(原 mcp_poc#21)(live-write gate)、#3(原 mcp_poc#22)(公告 wire body)、#4(原 mcp_poc#23)(mid→oid)
+
+## G. 工作台(workbench)彙整 session — 2026-08-24/25
+
+**做完(feat/workbench,`5888c6d`→`ddbddf2`,尚未 merge)**:
+- 9-task workbench plan(TDD,subagent-driven)+ 跨模型 whole-branch review 3 項 Important 已修(復原被覆寫的 app-view IDOR/nonce 安全測試、>20 拆批未接線、公告 de-N+1 註記)。
+- >20 筆**自動拆多 change-set**(splitBatches/buildActionChunks 逐批 create→view→confirm、結果彙總)。
+- 上下架改**對象×時機**兩軸 → 再依使用者定案重做為 **版型 B**(深色 nav/暖橘/步驟條/兩欄即時摘要),再因 MCP 面板窄框重排為**單欄+功能頁籤**(max-width 760)。
+- 上下架單一清單(整個商品+一般方案+組合方案同框)+全域排程 toggle(排程僅一般方案、`shelf_schedule` 單 datetime→reserve_queue 一筆;商品層/組合方案灰掉+提示)。
+- 結果頁 item_key → 「商品名·方案名」(resultNameByKey)。
+- **live 連線修復**:mcp-remote 殭屍 lockfile/多副本競爭 → 照 oauth-runbook SOP 清 `~/.mcp-auth` + lockfile;server 從 `.be2-mcp-server-main` worktree 起。
+- **上下架 create INVALID_ITEMS 根因修復(live 揪出)**:`itemShape=z.union(所有 module schema 依註冊序)`,product schema `{prod_oid,target_is_active}` 是方案/組合方案 item 的純子集且排前面,zod 剝掉 pkg_oid/bundle_pkg_oid → 過 plan/bundle isItem 就 INVALID_ITEMS。修:`itemSchemaProduct.strict()`(module 層、不動 core);面板改顯示真實 errors[];加回歸測試。CI 660 綠,SDK live 驗 create 拿到 changeset_id。
+
+**還沒做(this session TODO)**:
+- **G-A1** 三功能全鏈路 e2e 冒煙:用 `/dev/panel/workbench`(dev harness,本 session 補進 ALLOWED_PANELS)+ playwright 跑 load→select→檢視(draft-only,不 approve 免真寫)。
+- **G-A2** push `feat/workbench`(領先 main 20 commits) + merge 決策。
+- **G-B3** `be2_open_workbench` prefill(feature/prod_oids)面板未消費 = 死功能 → 接線或移除;順便對齊上限(tool max20 vs app_get_batch_view max10)。
+- **G-B4** 公告 de-N+1 共用 perPage=100 + 依賴回傳帶 prod_oid → live svc-b2c 通了按真實形狀校準(已加註,best-effort 不阻擋)。
+- **G-B5** `.be2-mcp-server-main` worktree 測完切回 main + 重啟(現停在 feature commit `ddbddf2`)。
+- **A5(既有)** OAuth DCR + CIMD 雙模相容 — 見上 A5,設計 doc `~/Downloads/mcp_hybrid_design_doc.md` 待搬進 repo。
+- **C(既有)** live 寫入真 200 仍待可寫商品/環境(#21);上下架真 endpoint prod_oid=35992、庫存/平台/公告=38352。
