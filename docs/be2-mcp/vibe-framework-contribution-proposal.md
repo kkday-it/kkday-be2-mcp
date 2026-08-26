@@ -76,6 +76,9 @@ runtime:
 
 ## 2. be2-mcp 現況 vs 框架 `ctx.*` SDK 的落差
 
+> 範圍界定：本節只談「be2-mcp vs 框架 `ctx.*` **SDK adapter**」的落差。**cloud-ready 12-約束的落差以
+> `docs/be2-mcp/stage-eks-migration-devops.md §8` 為單一權威來源**，本節不重抄、有需要用連結引用。
+
 ### 2.1 兩份 shim 內容核對（讀原始碼，非猜測）
 
 `platform_sdk/ts/src/context.ts`（be2-mcp 是 TS 專案，這份才是相關的那份）目前 `Context` class 只有：
@@ -167,9 +170,15 @@ kkday-development-tools 與 be2-mcp **各自獨立造了一套**這個外殼（�
 2. **[本地] 把已存在的 `docs/be2-mcp/vibe-cloud-ready-spec.md` 差距分析（`stage-eks-migration-devops.md §8`）與本提案 §2 對齊**,避免兩份文件各自維護出現不一致——建議之後只在一處維護「12 條約束差距表」,另一處用連結引用。
 3. **[外部-低風險] 在 `registry/registry.yaml` 加一行登記 be2-mcp**（`kkday-it/mcp_poc` 或實際 repo 路徑）。前提是 #1 的 `PROJECT.yaml` 已經進 repo 且欄位誠實（尤其 `risk_tier: red`、SQLite 現況不要隱藏）。這是一行 diff,對框架其他專案零影響,風險最低、可見度價值最高,**建議優先做**。
 4. **[外部-低風險] 補結構化 stdout log**（§2.2「`ctx.logger`/`ctx.log`」那格）：借鏡 Python shim 的 `{ts,run_id,workflow,step,level,msg,data}` JSON schema,在 be2-mcp 自己的 logger 加這層,**不需要**改框架程式碼,純粹是 be2-mcp 單方面借鏡設計——嚴格說不算「外部」PR,但列在這裡因為价值明确、依赖框架文件已读懂。
-5. **[外部-需先問] 紅區 approval pattern 文件回饋給框架（對應 R8）**：先問框架 owner 是否歡迎這種「非程式碼、設計原則」的貢獻文件,以及放在框架 repo 的哪個位置合適（`docs/patterns/`？還是他們比較想要 issue 討論串?）,再動手寫,避免自說自話塞一份文件進去。
+5. ~~**[外部-需先問] 紅區 approval pattern 文件回饋給框架（對應 R8）**~~ — **不採用（2026-08-26 使用者決定）**：框架治理模型是 RBAC + 「自己的操作自己負責」,不做通用強制審批閘。be2-mcp 的 change-set/確認頁是本產品自身需求（改線上商品要人把關）,留在 be2-mcp 架構文件即可,不回饋為框架通用功能。
 6. **[外部-需先問] `PROJECT.yaml` 加 `shape` 欄位表達「長駐服務 vs workflow 集合」**：這改動 schema、guard 邏輯,影響所有未來要登記的專案,**必須先跟框架 owner 對齊路線圖**（他們可能根本不打算收 MCP 型態的專案）,不要單方面開 PR。
 7. **[外部-需先問，優先度最低] OAuth 2.1 AS 外殼抽成公司共用 reference**：涉及是否要放進這個框架、還是該是獨立 repo,且工作量不小（要把 be2-mcp 和 kkday-development-tools 兩套實作比較異同才能抽公約數）,建議等 #5/#6 有結論、且確定有第三個 MCP 專案的實際需求後再啟動,现在做投資報酬率不明。
+
+8. **[外部-低風險/需先問]（使用者指定的框架貢獻主因）把平台 `APP CONFIG` / `APP SECRET` 兩頁籤慣例補進框架 `vibe-cloud-ready-spec.md §2.2`**：
+   - **緣由**：平台 config-manager 的實際 UI 把 `.env` 拆成 **APP CONFIG（非機密）** 與 **APP SECRET（機密）** 兩個 dotenv 頁籤（見多個既有服務截圖：Laravel `api-b2c`、AI `cerebrum`——皆用 `APP_ENV`/`APP_PORT`/`APP_KEY`/`APP_URL`/`APP_DEBUG`/`APP_LOG_PATH`/`LOG_CHANNEL=stdout`/`LOG_LEVEL` 等房規命名，secret 用 `API_*`/`*_KEY`/`base64:` 等）。
+   - **缺口**：框架 §2.2 目前只有**抽象三分類表**（build-time公開 / runtime secret / runtime非機密），**沒有對映到平台實際的兩頁籤與 `APP_*` 命名**。AI agent 照現行 §2.2 產出的 `.env.example` 不會自動對齊平台那兩個 tab 的填法。
+   - **建議貢獻**：在 §2.2 加一段「平台落地形狀」——(a) 明講三分類如何歸進 **APP CONFIG（build-time公開 + runtime非機密）** 與 **APP SECRET（runtime secret）** 兩頁籤；(b) 列 `APP_*` 標準命名對照；(c) `.env.example` 範本用這套命名 + 三分類註記，讓平台團隊一鍵貼進 config-manager。可順帶更新 `vibe-project-template/.env.example`。
+   - **為何 [需先問]**：動的是框架**權威 spec** + template，屬跨專案影響；且平台命名細節（哪些算 APP CONFIG vs SECRET 的邊界、`APP_KEY` 是否強制）最好跟框架/平台 owner 對一次口徑再開 PR。屬**低爭議、高共識**的貢獻,預期 owner 會歡迎（是把 spec 對齊平台現實）。
 
 **本次不建議做**：現在就把 be2-mcp 的 store 層接 `ctx.db`——這個能力框架連 TS 版都沒有,接了也只是 be2-mcp 自己重新發明一遍,不如把自建的 PostgreSQL store 層做好之後,反過來當作 §3.1/#5 那類「回饋」的素材。
 

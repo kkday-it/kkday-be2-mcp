@@ -194,6 +194,8 @@ client 接入（本機）：`claude mcp add be2-mcp --transport http http://127.
 
 ## 8. cloud-ready 對齊：vs `vibe-cloud-ready-spec.md` 12 條硬約束（2026-08-26）
 
+> **本節是「cloud-ready 12-約束落差」的單一權威來源（single source of truth）。** 其他文件（遷移 spec、
+> framework 貢獻提案、Obsidian 筆記）一律**連結引用本表、不得各自重抄一份**，避免走鐘。
 > 權威規範已收進 repo：`docs/be2-mcp/vibe-cloud-ready-spec.md`（來源 kkday-it/kkday-vibe-framework）。
 > 平台設定分 **APP CONFIG（非機密）** + **APP SECRET（機密，config-manager 注入 k8s Secret）** 兩塊 dotenv。
 > **決策**：分階段——先產本差距分析 + 遷移 spec/plan（走主管線），實際重構下輪分批。
