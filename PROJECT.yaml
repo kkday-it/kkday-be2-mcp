@@ -1,9 +1,8 @@
 # PROJECT.yaml — be2-mcp 治理宣告（kkday-vibe-framework registry 用）
 # 欄位規範見 kkday-vibe-framework/project-template-v0.md §4；guard 驗證見 scripts/guard/validate_project.py。
-# ⚠️ TODO：team slug 待確認（下方 id/team 目前為佔位 be2mcp），確認後才登記進框架 registry.yaml。
-id: be2mcp.mcp-server           # <team>.<project>；team 為佔位，待確認公司實際 team 代號
+id: be2-team.mcp-server         # <team>.<project>
 owner: lance.chien
-team: be2mcp                    # TODO 同上（待確認 team slug）
+team: be2-team
 status: active
 risk_tier: red                  # draft-only 但批准後為真實生產寫入(改線上上下架/庫存)；且現況 SQLite 存明文 token
 
