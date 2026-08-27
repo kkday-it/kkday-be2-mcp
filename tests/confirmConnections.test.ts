@@ -12,6 +12,7 @@ import type Database from 'better-sqlite3'
 const CONFIG: Config = {
   authsvcUrl: 'https://auth.invalid', gatewayUrl: 'https://gw.invalid',
   serviceKey: 'sk', port: 0, dbPath: ':memory:', otelMode: 'off', scheduleTz: 'Asia/Taipei',
+  bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
 }
 const fakeJwt = (authKey: string) => {
   const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url')

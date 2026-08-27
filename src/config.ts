@@ -34,6 +34,8 @@ const EnvSchema = z.object({
   BE2_MCP_DB_PATH: z.string().default('./data/be2-mcp.sqlite'),
   OTEL_MODE: z.enum(['console', 'otlp', 'off']).default('off'),
   BE2_TZ: z.string().default('Asia/Taipei'),
+  BE2_MCP_BIND_HOST: z.string().default('127.0.0.1'),
+  BE2_MCP_PUBLIC_BASE_URL: z.string().url().optional(),
 })
 
 export interface Config {
@@ -44,6 +46,8 @@ export interface Config {
   dbPath: string
   otelMode: 'console' | 'otlp' | 'off'
   scheduleTz: string
+  bindHost: string
+  publicBaseUrl: string
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -75,6 +79,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dbPath = `./data/be2-mcp-${be2Env}.sqlite`
   }
 
+  const publicBaseUrl = (e.BE2_MCP_PUBLIC_BASE_URL ?? `http://127.0.0.1:${e.BE2_MCP_PORT}`).replace(/\/$/, '')
+
   return {
     authsvcUrl: e.AUTHSVC_URL.replace(/\/$/, ''),
     gatewayUrl: e.GATEWAY_URL.replace(/\/$/, ''),
@@ -83,5 +89,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dbPath,
     otelMode: e.OTEL_MODE,
     scheduleTz: e.BE2_TZ,
+    bindHost: e.BE2_MCP_BIND_HOST,
+    publicBaseUrl,
   }
 }

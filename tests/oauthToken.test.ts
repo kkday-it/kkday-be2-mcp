@@ -26,6 +26,7 @@ const CLIENT_ID = 'C'
 const CONFIG: Config = {
   authsvcUrl: 'https://auth.invalid', gatewayUrl: 'https://gw.invalid',
   serviceKey: 'sk', port: 0, dbPath: ':memory:', otelMode: 'off', scheduleTz: 'Asia/Taipei',
+  bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
 }
 
 // 每個測試前：db + 一個已登入 identity + 一個 client C + 一個 authz code 綁 (C, redirect, challenge, identity)。
