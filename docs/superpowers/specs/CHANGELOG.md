@@ -5,6 +5,11 @@
 >
 > 追溯補記（2026-08-19 起才有本規則，先前的 spec 異動追溯登記於下）。
 
+## 2026-08-27
+
+- `2026-08-27-be2-mcp-cloud-ready-phaseA-design.md` §9/§10.1/§10.2/§3/§14/§15(agy review rounds 1-3 四修)/ (1) **rootDir**:`tsconfig` include 多 sibling → tsc 推 rootDir=`.` → 進入點其實在 `dist/src/index.js`(非 `dist/index.js`),原 start/CMD 會開機 MODULE_NOT_FOUND;加 `tsconfig.build.json`(只 include src+scripts、排除 eval/tests)、start/CMD 改 `dist/src/index.js`;查證 `appResources.ts` UI 路徑是 cwd-based 故不受巢狀影響;(2) **scheduler graceful race**:`start()` stopper 只 clearTimeout 下輪、不等 in-flight tick → db.close 打斷 await 中的 tick 會「database is closed」+ 卡 executing;改 `start()` 回 `()=>Promise<void>` 等 in-flight tick,shutdown 先 await 它再關 db;(3) **OTel flush**:otel.ts 自帶 SIGTERM listener 的 async shutdown 會被同步 exit 砍斷;改匯出 async `shutdownOtel()`、移除自帶 listener、index.ts 單一協調者 await 它;(4) **setTimeout 硬逾時放頂層 = 開機即 arm** 且 Express 讓 loop 活著 `.unref()` 無效 → 開機 GRACE_MS 後保證 hard-crash;移進 `shutdown()` 內只在收訊號後計時 / agy 抓到 rootDir emit 路徑、scheduler 關機 race、otel flush 被砍、頂層 timer 開機自殺四個都是真會 ship-bug 的問題(rounds=3 APPROVED)。
+- `2026-08-27-be2-mcp-cloud-ready-phaseA-design.md`(全檔,新建)/ cloud-ready 遷移 Phase A:把 be2-mcp 從本機 PoC 搬上 stage EKS 單副本。修 3 硬阻斷(bind→`BE2_MCP_BIND_HOST` env default 127.0.0.1、public URL→新增 `BE2_MCP_PUBLIC_BASE_URL` config 注入 app.ts:142/255、Host 白名單→`BE2_MCP_ALLOWED_HOSTS` 已是 env 純設值)+ 上線工程(tsc build→node dist、multi-stage Dockerfile node:22-bookworm-slim、/readyz 查 DB、SIGTERM graceful、Node 釘 22)。明文 token at-rest 交 DevOps 加密 PVC(不做 app 層加密)。k8s manifests 歸 DevOps、live stage e2e 標 PENDING(依 DevOps 部署 + STAGE service key + 寫入權限)。**明確排除** Postgres/Redis/HA(留 Phase C)、store schema/migration 重構 / 範圍 grilling 七問定案(2026-08-27):better-sqlite3 同步 API→換 Postgres 是全鏈路 sync→async 重構,故本波只 Phase A;產出邊界 app code+Dockerfile;驗收我方可控。
+
 ## 2026-08-21
 
 - `2026-08-21-be2-mcp-logout-revoke-design.md` §6.2/§7/§9(agy review round 1 四修)/ (1) CSRF 改顯式 Origin 檢查(SameSite 對 127.0.0.1 不分 port,同機異 port 可跨站 POST 固定路徑的 revoke-all);(2) SsoDeps 接線補 oauthStore+baseOrigin;(3) requireSession 抽共用 sessionGate;(4) revoke-all 改 POST-Redirect-GET / agy 抓到 localhost CSRF 與缺依賴注入是真問題(rounds=2 APPROVED;「family 已亡 edge 不可能」的質疑經 oauth-purge 場景推翻獲 CONCEDE)。
