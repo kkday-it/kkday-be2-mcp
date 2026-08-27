@@ -13,6 +13,8 @@
     "probe-sit-inventory": "tsx scripts/probe-sit-inventory.ts",
     "oauth-purge": "tsx scripts/oauth-purge.ts",
     "build:ui": "node scripts/build-ui.mjs",
+    "build": "tsc -p tsconfig.build.json && npm run build:ui",
+    "start": "node dist/src/index.js",
     "ci": "npm run build:ui && npm run typecheck && npm run test"
   },
   "keywords": [],
