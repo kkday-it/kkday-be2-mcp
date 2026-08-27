@@ -21,12 +21,24 @@ export function makeShutdown(deps: ShutdownDeps): () => Promise<void> {
     // 硬逾時保險：只在收到訊號後 arm（絕不放模組頂層——頂層會開機即計時，且 HTTP server 讓
     // event loop 活著、.unref() 無效 → 開機 graceMs 後保證 hard-exit）。
     const timer = setTimeout(() => exit(0), deps.graceMs); timer.unref()
-    await deps.stopScheduler?.()
-    // server.close 的 callback 必須同步（Node 會丟棄回傳的 promise）——用 Promise 包起來自己 await drain。
-    await new Promise<void>(resolve => deps.server.close(() => resolve()))
-    await deps.shutdownOtel()
-    deps.db.close()
-    clearTimeout(timer)
-    exit(0)
+    // 全序包 try/finally：任一步 reject（如 OTLP exporter 關機 flush 逾時）都不能讓
+    // shutdown() 本身 reject——它由 process.on('SIGTERM', shutdown) 直接呼叫、無 .catch()，
+    // 若外洩會變 unhandled rejection 讓 Node crash，可能搶在硬逾時 fallback之前發生，
+    // 導致 db.close 沒跑、非受控退出。錯誤在此吞下記 log，db.close + exit 一定在 finally 跑。
+    try {
+      await deps.stopScheduler?.()
+      // server.close 的 callback 必須同步（Node 會丟棄回傳的 promise）——用 Promise 包起來自己 await drain。
+      await new Promise<void>(resolve => deps.server.close(err => {
+        if (err) console.error('[be2-mcp] server.close error during shutdown:', err.message)
+        resolve()
+      }))
+      await deps.shutdownOtel()
+    } catch (e) {
+      console.error('[be2-mcp] shutdown sequence error:', (e as Error).message)
+    } finally {
+      deps.db.close()
+      clearTimeout(timer)
+      exit(0)
+    }
   }
 }

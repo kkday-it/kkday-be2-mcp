@@ -34,4 +34,15 @@ describe('makeShutdown', () => {
     await shutdown()
     expect(order).toEqual(['stopScheduler', 'db.close'])
   })
+
+  it('contains errors from the shutdown sequence: shutdown() never rejects, db.close + exit still run', async () => {
+    const server = { close: (cb: () => void) => cb() }
+    const db = { close: vi.fn() }
+    const exit = vi.fn()
+    const shutdownOtel = vi.fn(async () => { throw new Error('OTLP flush timeout') })
+    const shutdown = makeShutdown({ server: server as any, db: db as any, shutdownOtel, graceMs: 25_000, exit })
+    await expect(shutdown()).resolves.toBeUndefined()
+    expect(db.close).toHaveBeenCalledTimes(1)
+    expect(exit).toHaveBeenCalledWith(0)
+  })
 })
