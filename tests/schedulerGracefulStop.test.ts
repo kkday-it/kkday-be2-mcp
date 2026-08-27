@@ -10,7 +10,6 @@ function deferred<T>() {
 describe('scheduler graceful stop', () => {
   it('stop() awaits the in-flight tick before resolving', async () => {
     const gate = deferred<{ accessToken: string }>()
-    let tickTouchedDbAfterGate = false
     const rec = { schedule: { executeAtUtc: 0 }, executorRef: { identityId: 'i', userLabel: 'u', modifyUser: 'm', sessionId: 's' } }
     const changeSets = {
       listStrandedApproved: () => [],
@@ -18,7 +17,7 @@ describe('scheduler graceful stop', () => {
       listScheduledIdentityIds: () => [],
       get: () => rec,
       claimScheduled: () => true,
-      casStatus: () => { tickTouchedDbAfterGate = true; return true },
+      casStatus: () => true,
       releaseClaim: () => true,
       listExecutingScheduled: () => [],
     }
@@ -26,7 +25,6 @@ describe('scheduler graceful stop', () => {
       changeSets, gateway: {}, audit: { record() {} }, now: () => 0,
       tokenManager: { getFreshByIdentityId: () => gate.promise, keepAlive: async () => ({ refreshed: [], failed: [] }) },
     }
-    // executeChangeSet 在 c1 上會呼叫 casStatus(見 executor)——用它當「tick 動到 db」的探針
     const scheduler = makeScheduler(deps, { tickMs: 60_000, graceMs: 1_000_000 })
     const stop = scheduler.start()
     await new Promise(r => setTimeout(r, 10))         // 讓 tick 跑到卡在 gate

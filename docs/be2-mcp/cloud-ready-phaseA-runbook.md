@@ -459,7 +459,7 @@ kubectl -n be2 delete pod be2-mcp-<pod-suffix>
 ### 版本與依賴
 
 - **Node.js**：必須 22（LTS）；`package.json` 硬編 `"engines": {"node": ">=22 <23"}`
-- **better-sqlite3**：native module，image build 時需能編譯（bookworm base 含必要工具）
+- **better-sqlite3**：native module，但 image build 不需要原始碼編譯——`npm ci` 期間 `prebuild-install` 會直接下載對應 Node/平台的**預編譯二進位**（x64 適用），故不依賴 bookworm-slim 內建 build-essential/python3 等工具鏈；若未來某個版本/架構缺 prebuild 才需要改用含編譯工具鏈的 base image
 - **MCP SDK**：`@modelcontextprotocol/sdk ^1.30`；Streamable HTTP 傳輸
 
 ---
