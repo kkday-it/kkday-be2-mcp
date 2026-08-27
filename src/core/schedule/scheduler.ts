@@ -113,19 +113,20 @@ export function makeScheduler(deps: SchedulerDeps, opts: Partial<typeof SCHEDULE
     }
   }
 
-  function start(): () => void {
+  function start(): () => Promise<void> {
     // 啟動即補跑一次(吸收停機期間到點者,spec §7)。遞迴 setTimeout 而非 setInterval——
     // tick 是 async(逐件 await 執行),積壓時單輪可能超過 tickMs;setInterval 會疊加併發 tick
     // (同 process 內重入:連線耗盡、keep-alive 交錯)。下一輪一律在上一輪 settle 後才排。
     auditStranded()   // 只在 start() 首次執行時跑一次,不進 tick 迴圈
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | undefined
+    let current: Promise<void> | undefined
     const loop = () => {
-      void tick().catch(err => console.error('scheduler tick error:', (err as Error).message))
+      current = tick().catch(err => console.error('scheduler tick error:', (err as Error).message))
         .finally(() => { if (!stopped) timer = setTimeout(loop, p.tickMs) })
     }
     loop()
-    return () => { stopped = true; if (timer) clearTimeout(timer) }
+    return async () => { stopped = true; if (timer) clearTimeout(timer); await current }
   }
 
   return { tick, start, auditStranded }
