@@ -7,7 +7,7 @@ import { toEnvelopeError, type EnvelopeError } from './envelope.js'
 import { extractPackagesWithSupplier } from '../modules/product/common.js'
 import { readCurrentFullday, readItemMode, isItemByAmount, modeLabel } from './inventoryShape.js'
 
-export type BatchViewActionType = 'inventory_platform' | 'shelf_schedule' | 'inventory_setting'
+export type BatchViewActionType = 'inventory_platform' | 'shelf_schedule' | 'inventory_setting' | 'shelf_toggle_product' | 'shelf_toggle_plan' | 'shelf_toggle_bundle'
 
 export interface BatchPlan {
   pkg_oid: string
@@ -26,6 +26,7 @@ export interface BatchPlan {
 export interface BatchProduct {
   prod_oid: string
   name?: string
+  is_active?: boolean
   not_found?: boolean
   plans: BatchPlan[]
 }
@@ -119,6 +120,17 @@ export async function buildBatchView(
     }
     readOidSet.add(prodOid)
     const name = infoR.status === 'fulfilled' ? extractProductInfo(infoR.value).name : undefined
+    let productIsActive: boolean | undefined
+    // 只有「立即上/下架」（shelf_toggle_product）用得到商品整體現況；plan/bundle 模式用方案層
+    // is_active（來自 package-configs），不必為每個商品多發一次 switch 讀取。
+    if (actionType === 'shelf_toggle_product') {
+      try {
+        const sw = await gateway.get(`/product/api/v1/product-configs/${oid}/switch`, accessToken) as Record<string, unknown>
+        if (typeof sw?.is_active === 'boolean') productIsActive = sw.is_active
+      } catch (e) {
+        errors.push(toEnvelopeError(prodOid, e))   // 讀不到不擋整批，商品仍顯示
+      }
+    }
     const configMap = cfgR.status === 'fulfilled' ? extractPackageConfigMap(cfgR.value) : new Map<string, PackageConfigRow>()
     if (cfgR.status === 'rejected') errors.push(toEnvelopeError(prodOid, cfgR.reason)) // best-effort: is_bundle/reserve_queue/is_active fall back, product still shown
 
@@ -176,7 +188,7 @@ export async function buildBatchView(
       readOidSet.add(plan.pkg_oid)
       plans.push(plan)
     }
-    products.push({ prod_oid: prodOid, name, plans })
+    products.push({ prod_oid: prodOid, name, is_active: productIsActive, plans })
   }
 
   return { products, errors, read_oids: [...readOidSet] }

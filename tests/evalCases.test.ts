@@ -6,7 +6,7 @@ const CaseSchema = z.object({
   id: z.string().min(1),
   prompt: z.string().min(1),
   expect: z.union([
-    z.object({ kind: z.literal('tool'), tool: z.enum(['be2_find_products', 'be2_get_product_plans', 'be2_get_inventory_settings', 'be2_create_changeset', 'be2_get_changeset_status']), params_contains: z.record(z.string(), z.unknown()).optional() }),
+    z.object({ kind: z.literal('tool'), tool: z.enum(['be2_find_products', 'be2_get_product_plans', 'be2_get_inventory_settings', 'be2_create_changeset', 'be2_get_changeset_status', 'be2_open_workbench']), params_contains: z.record(z.string(), z.unknown()).optional() }),
     z.object({ kind: z.literal('no_tool'), must_mention: z.string().optional() }),
   ]),
 })

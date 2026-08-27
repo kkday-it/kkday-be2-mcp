@@ -13,7 +13,7 @@
 ### A2. 登出 / 撤銷(logout / revoke)——**✅ DONE:PR #24 已 merge 進 main(`8603a57`,2026-08-22)**
 - 交付:RFC 7009 `POST /oauth/revoke`(grant 級撤銷 `revokeGrant`,保留 web_session/static_bearer)+ discovery `revocation_endpoint` + `/confirm/connections`「斷開所有 Claude 連線」頁(Origin 檢查擋 localhost CSRF + PRG)。spec/plan 皆 agy APPROVED(各 rounds=2);ci 635 綠;雙軸 code-review 收畢;dev server 冒煙通過。
 - **live 驗收 PASS(2026-08-22)**:真人 Desktop 實斷 2 條 → 401 → 自動 re-auth 復原,二輪重測過(證據見 PR #24 comment + oauth-runbook)。
-- **環境備忘**::8787 server 改從**釘在 main 的獨立 worktree** `/Users/lance.chien/Documents/Projects/.be2-mcp-server-main` 起(共用主 repo 的 sit-220 sqlite,`BE2_MCP_DB_PATH` 絕對路徑)——與開發工作區脫鉤,並行 session 切 branch 不再波及 server。升級 server 版本:`git -C .be2-mcp-server-main fetch origin main && git -C .be2-mcp-server-main checkout origin/main`,再重啟。
+- (Lance 本機備忘)**環境備忘**::8787 server 改從**釘在 main 的獨立 worktree** `/Users/lance.chien/Documents/Projects/.be2-mcp-server-main` 起(共用主 repo 的 sit-220 sqlite,`BE2_MCP_DB_PATH` 絕對路徑)——與開發工作區脫鉤,並行 session 切 branch 不再波及 server。升級 server 版本:`git -C .be2-mcp-server-main fetch origin main && git -C .be2-mcp-server-main checkout origin/main`,再重啟。
 - 邊界(已寫進 oauth-runbook「使用者主動撤銷」節):be2-mcp 撤銷 ≠ be2-web SSO 登出(auth-service JWT 在 ~50min TTL 內仍有效);Claude Code 端快取 DCR client/token 不會自己消失,下次 401 自動重走 OAuth。
 
 ### A3. 價格域 3b(next domain)——照 `module-onboarding.md` 上車
@@ -22,18 +22,18 @@
 ### A4. 方案維護 3c(改名/排序/刪除)—— phase0 判低價值,擺最後。
 
 ## B. 技術債 / 重構(GitHub issues 已開)
-- **#20** `batch-wizard.ts` 逐型 `actionType` switch(17 處)收進 `WizardDescriptor`(純重構,加新 action_type 時最痛的點)。
-- **#23** **mid→prod_oid 解析防呆**(策略A:tool 分 `prod_mid`/`prod_oid` 欄位、共用 resolver、canonical oid 進 scope-gate)。be2-web 網址是 mid、API 吃 oid,使用者複製網址數字會 not_found。**demo 也踩過**。
+- **#1(原 mcp_poc#20)** `batch-wizard.ts` 逐型 `actionType` switch(17 處)收進 `WizardDescriptor`(純重構,加新 action_type 時最痛的點)。
+- **#4(原 mcp_poc#23)** **mid→prod_oid 解析防呆**(策略A:tool 分 `prod_mid`/`prod_oid` 欄位、共用 resolver、canonical oid 進 scope-gate)。be2-web 網址是 mid、API 吃 oid,使用者複製網址數字會 not_found。**demo 也踩過**。
 - **rate budget 重估**:`RATE_CHANGESET_DAY` = 10/天、**所有功能共用一個 per-user 桶**(key 無 action_type)。對真 power user(如 vivian 一天數百次)太低 → 上線前改 per-type / 分級 / 提高。
 
 ## C. Live-write 驗收(待外部授權,非程式問題)—— issues 已開
-- **#21** live-write 驗收 gate:所有域的**真 200 寫入**都待授權——
+- **#2(原 mcp_poc#21)** live-write 驗收 gate:所有域的**真 200 寫入**都待授權——
   - 庫存數量 quantity PUT:be2-220 **AU9403**(stage 曾 200);
   - 公告 create:svc-b2c **403/502**;
   - 上下架 shelf_toggle switch:**403**(此帳號對測試商品無寫權;端點已證正確、屬 per-URI 授權);
   - 塊B 排程到點執行:到點會撞 AU9403。
   - **解法**:一個此帳號有寫權的商品/環境,或補 stage service key。跑法見各 runbook。
-- **#22** 公告 **POST wire body UNVERIFIED**(best-guess,待一次真 create 攔 + PATCH merge 語義)。
+- **#3(原 mcp_poc#22)** 公告 **POST wire body UNVERIFIED**(best-guess,待一次真 create 攔 + PATCH merge 語義)。
 
 ### C-補. 面板 UI 驗收殘項(非阻擋)
 - shelf_toggle_product/_bundle 完整 e2e(本 session 只驗 plan;bundle 那次測資選錯 pkg)。
@@ -90,7 +90,7 @@
 ### F4. eval 至今從未真跑過
 - 歷來 `npm run eval` 都因無 `ANTHROPIC_API_KEY` 而 documented SKIP。ci 605 綠但 agent 行為層(選對工具、draft-only、注入抵抗、庫存 4 案例)零次實測。找一次帶 key 跑通並記結果。
 
-### F5.(補充到 C/#21)SIT AU9403 的精準開權文案已寫好
+### F5.(補充到 C/#2)SIT AU9403 的精準開權文案已寫好
 - `sit-write-contracts.md` §inventory「2026-08-10 再追加」節有可直接貼給 auth-service/be2 授權管理者的請求(含 uri_pattern `api/v1/items/{*}/inventories/{*}/quantity`、AU9403、CheckTargetRuleCache 證據)。stage 已真 200 後此項降為「SIT 錨定環境要不要也開」的選項,非阻擋。
 
 ## 環境備忘(demo / 驗收用)
@@ -103,4 +103,24 @@
 - 契約:`sit-write-contracts.md`、`sit-announcement-contract.md`、`sit-price-contract.md`
 - 上車:`module-onboarding.md`、`module-catalog.md`
 - runbook:`demo-runbook-2026-08-21.md`、`oauth-runbook.md`、各 phase runbook
-- GitHub issues:#20(switch 重構)、#21(live-write gate)、#22(公告 wire body)、#23(mid→oid)
+- GitHub issues:#1(原 mcp_poc#20)(switch 重構)、#2(原 mcp_poc#21)(live-write gate)、#3(原 mcp_poc#22)(公告 wire body)、#4(原 mcp_poc#23)(mid→oid)
+
+## G. 工作台(workbench)彙整 session — 2026-08-24/25
+
+**做完(feat/workbench,`5888c6d`→`ddbddf2`,尚未 merge)**:
+- 9-task workbench plan(TDD,subagent-driven)+ 跨模型 whole-branch review 3 項 Important 已修(復原被覆寫的 app-view IDOR/nonce 安全測試、>20 拆批未接線、公告 de-N+1 註記)。
+- >20 筆**自動拆多 change-set**(splitBatches/buildActionChunks 逐批 create→view→confirm、結果彙總)。
+- 上下架改**對象×時機**兩軸 → 再依使用者定案重做為 **版型 B**(深色 nav/暖橘/步驟條/兩欄即時摘要),再因 MCP 面板窄框重排為**單欄+功能頁籤**(max-width 760)。
+- 上下架單一清單(整個商品+一般方案+組合方案同框)+全域排程 toggle(排程僅一般方案、`shelf_schedule` 單 datetime→reserve_queue 一筆;商品層/組合方案灰掉+提示)。
+- 結果頁 item_key → 「商品名·方案名」(resultNameByKey)。
+- **live 連線修復**:mcp-remote 殭屍 lockfile/多副本競爭 → 照 oauth-runbook SOP 清 `~/.mcp-auth` + lockfile;server 從 `.be2-mcp-server-main` worktree 起。
+- **上下架 create INVALID_ITEMS 根因修復(live 揪出)**:`itemShape=z.union(所有 module schema 依註冊序)`,product schema `{prod_oid,target_is_active}` 是方案/組合方案 item 的純子集且排前面,zod 剝掉 pkg_oid/bundle_pkg_oid → 過 plan/bundle isItem 就 INVALID_ITEMS。修:`itemSchemaProduct.strict()`(module 層、不動 core);面板改顯示真實 errors[];加回歸測試。CI 660 綠,SDK live 驗 create 拿到 changeset_id。
+
+**還沒做(this session TODO)**:
+- **G-A1** 三功能全鏈路 e2e 冒煙:用 `/dev/panel/workbench`(dev harness,本 session 補進 ALLOWED_PANELS)+ playwright 跑 load→select→檢視(draft-only,不 approve 免真寫)。
+- **G-A2** push `feat/workbench`(領先 main 20 commits) + merge 決策。
+- **G-B3** `be2_open_workbench` prefill(feature/prod_oids)面板未消費 = 死功能 → 接線或移除;順便對齊上限(tool max20 vs app_get_batch_view max10)。
+- **G-B4** 公告 de-N+1 共用 perPage=100 + 依賴回傳帶 prod_oid → live svc-b2c 通了按真實形狀校準(已加註,best-effort 不阻擋)。
+- **G-B5** `.be2-mcp-server-main` worktree 測完切回 main + 重啟(現停在 feature commit `ddbddf2`)。
+- **A5(既有)** OAuth DCR + CIMD 雙模相容 — 見上 A5,設計 doc `~/Downloads/mcp_hybrid_design_doc.md` 待搬進 repo。
+- **C(既有)** live 寫入真 200 仍待可寫商品/環境(#21);上下架真 endpoint prod_oid=35992、庫存/平台/公告=38352。

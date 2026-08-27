@@ -105,12 +105,11 @@ describe('MCP server integration', () => {
     const { client, transport } = mcpClient(BEARER)
     await client.connect(transport)
     const { tools } = await client.listTools()
-    // Task 6: be2_open_batch_wizard is model-visible (plain TOOLS entry, see src/server/app.ts)
+    // Task 6: be2_open_workbench is model-visible (plain TOOLS entry, see src/server/app.ts)
     // and thus always listed, regardless of host Apps support — same as the pre-existing L0 tools.
     expect(tools.map(t => t.name).sort()).toEqual([
       'be2_create_changeset', 'be2_find_products', 'be2_get_changeset_status',
-      'be2_get_inventory_settings', 'be2_get_product_plans', 'be2_open_announcement_wizard',
-      'be2_open_batch_wizard',
+      'be2_get_inventory_settings', 'be2_get_product_plans', 'be2_open_workbench',
     ])
     await client.close()
   })

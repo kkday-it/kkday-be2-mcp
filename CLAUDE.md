@@ -9,6 +9,7 @@
 @docs/be2-mcp/phase0-inventory.md
 
 - **主設計 spec**（canonical，較長、未 @import，需要時開來讀）：`docs/superpowers/specs/2026-08-07-be2-mcp-design.md`（已過 agy-peer-review）。
+- **上雲硬約束**（未 @import、開發前必讀）：`docs/be2-mcp/vibe-cloud-ready-spec.md`（來源 kkday-vibe-framework）。本專案最終容器化部署於公司內部 **AWS EKS**——任何設計須符合其 12 條約束（禁 SQLite/檔案型 DB、DB=外部 PostgreSQL、完全無狀態可多副本、排程走 HTTP endpoint 非 in-process timer、runtime 不做 DDL、綁 0.0.0.0、log 只走 stdout、平台能力包 adapter）。現況差距與遷移方向見 `docs/be2-mcp/stage-eks-migration-devops.md` §8。
 
 ## 開發環境錨定：SIT `be2-220`
 

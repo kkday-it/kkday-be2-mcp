@@ -192,8 +192,11 @@ describe('app_get_batch_view — inputShape 邊界', () => {
   it('0 個 prod_oids 拒絕', () => {
     expect(schema.safeParse({ action_type: 'inventory_platform', prod_oids: [] }).success).toBe(false)
   })
-  it('action_type 只接受 inventory_platform|shelf_schedule', () => {
-    expect(schema.safeParse({ action_type: 'shelf_toggle_product', prod_oids: ['1'] }).success).toBe(false)
+  it('action_type 接受 6 種批次型別、拒絕未知型別', () => {
+    for (const at of ['inventory_platform', 'shelf_schedule', 'inventory_setting', 'shelf_toggle_product', 'shelf_toggle_plan', 'shelf_toggle_bundle']) {
+      expect(schema.safeParse({ action_type: at, prod_oids: ['1'] }).success).toBe(true)
+    }
+    expect(schema.safeParse({ action_type: 'bogus_type', prod_oids: ['1'] }).success).toBe(false)
   })
 })
 
@@ -294,5 +297,32 @@ describe('buildBatchView inventory_setting', () => {
     const { products, errors } = await buildBatchView(g, 'tok', 'inventory_setting', ['2287'])
     expect(products[0].plans[0].current_quantity).toBeUndefined()
     expect(errors.some(e => e.code === 'INVENTORY_READ_UNAVAILABLE')).toBe(true)
+  })
+})
+
+describe('buildBatchView shelf_toggle_product', () => {
+  function gwShelf(overrides: Record<string, any> = {}) {
+    return {
+      get: async (p: string) => {
+        if (p.includes('/product-configs/') && p.includes('/switch')) return overrides.switch ?? { is_active: false, is_locked_for_active: false }
+        if (p.includes('/packages')) return [{ pkg_oid: '888', pkg_name: '成人', item_oid: '1', is_active: true, supplier_mapping: [{ supplier_oid: '0', is_default: true }] }]
+        if (p.includes('/package-configs')) return [{ pkg_oid: '888', is_active: true }]
+        if (p.includes('/drafts/products')) return { description_module: { 'zh-tw': { name: '東京' } }, master_lang: 'zh-tw' }
+        return {}
+      },
+    } as never
+  }
+  it('回傳商品層 is_active（來自 product-configs/{oid}/switch）', async () => {
+    const res = await buildBatchView(gwShelf(), 'tok', 'shelf_toggle_product', ['546965'])
+    expect(res.products[0].is_active).toBe(false)
+    expect(res.read_oids).toContain('546965')
+  })
+  it('switch 讀取失敗時商品仍顯示、is_active undefined、記一筆 error', async () => {
+    const gw2 = gwShelf() as any; const base = gw2.get
+    gw2.get = async (p: string) => { if (p.includes('/product-configs/') && p.includes('/switch')) throw new Error('boom'); return base(p) }
+    const res = await buildBatchView(gw2, 'tok', 'shelf_toggle_product', ['546965'])
+    expect(res.products).toHaveLength(1)
+    expect(res.products[0].is_active).toBeUndefined()
+    expect(res.errors.some(e => e.key === '546965')).toBe(true)
   })
 })

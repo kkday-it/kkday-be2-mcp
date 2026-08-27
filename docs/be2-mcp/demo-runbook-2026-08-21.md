@@ -16,7 +16,7 @@
 | 上下架 | 2247 | **35992** | 65 方案 |
 | (庫存數量勿用) 2358 | 2358 | 2358 | 無限量方案,非 item_by_amount,不支援 |
 
-（mid→oid 自動解析已列 follow-up #23;demo 期間先手動用真 oid。）
+（mid→oid 自動解析已列 follow-up #4(原 mcp_poc#23);demo 期間先手動用真 oid。）
 
 ## Demo 流程
 
@@ -36,11 +36,11 @@
 ### C. 庫存數量（inventory_setting）— draft 安全
 1. **重載** → 商品 `38352`（action_type 需 inventory_setting;model 入口或面板選）
 2. 勾 item_by_amount 方案（1594815,現量會顯示）→ 填新數量 → 下一步 → diff
-3. ⚠️ 真執行 PUT 目前 be2-220 卡 **AU9403**（授權待 grant,見 #21）→ 執行會 fail-closed。demo 展示到 diff 即可。
+3. ⚠️ 真執行 PUT 目前 be2-220 卡 **AU9403**（授權待 grant,見 #2(原 mcp_poc#21)）→ 執行會 fail-closed。demo 展示到 diff 即可。
 
 ### D. 商品公告（announcement）— draft 安全
 1. **重載** `/dev/panel/announcement-wizard` → 商品 `38352` → 填 name/語系/內文/生效時間 → 下一步 → diff → 批准
-2. ⚠️ 真執行卡 svc-b2c 403（#21）→ fail-closed。demo 展示到 diff/確認頁。
+2. ⚠️ 真執行卡 svc-b2c 403（#2）→ fail-closed。demo 展示到 diff/確認頁。
 
 ## 每次操作「後」清理（避免下次出問題）
 1. **重載面板**（最重要,清 session 狀態）。

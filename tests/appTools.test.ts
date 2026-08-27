@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { appGetChangesetViewTool, appGetConfirmLinkTool } from '../src/tools/appTools.js'
+import { appGetChangesetViewTool, appGetConfirmLinkTool, appGetBatchViewTool } from '../src/tools/appTools.js'
 import { ApprovalNonceStore } from '../src/core/changeset/approvalNonce.js'
+import { z } from 'zod'
 
 function ctx(over: Partial<any> = {}) {
   return {
@@ -46,4 +47,15 @@ it('confirm-link: creator 本人拿得到 url', async () => {
 it('confirm-link: 他人 → NOT_FOUND', async () => {
   const env = await appGetConfirmLinkTool.handler({ changeset_id: 'cs1' }, ctx({ userLabel: 'bob' }))
   expect(env.errors[0].code).toBe('NOT_FOUND')
+})
+
+describe('appGetBatchViewTool zod', () => {
+  it('接受 shelf_toggle_product', () => {
+    const schema = z.object(appGetBatchViewTool.inputShape as never)
+    expect(schema.safeParse({ action_type: 'shelf_toggle_product', prod_oids: ['1'] }).success).toBe(true)
+  })
+  it('接受 shelf_toggle_bundle', () => {
+    const schema = z.object(appGetBatchViewTool.inputShape as never)
+    expect(schema.safeParse({ action_type: 'shelf_toggle_bundle', prod_oids: ['1'] }).success).toBe(true)
+  })
 })

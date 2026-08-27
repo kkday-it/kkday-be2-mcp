@@ -34,8 +34,7 @@ import { buildDevPanelRouter } from './devPanelRoutes.js'
 import { findProductsTool } from '../tools/findProducts.js'
 import { productPlansTool } from '../tools/productPlans.js'
 import { inventorySettingsTool } from '../tools/inventorySettings.js'
-import { openBatchWizardTool } from '../tools/openBatchWizard.js'
-import { openAnnouncementWizardTool } from '../tools/openAnnouncementWizard.js'
+import { openWorkbenchTool } from '../tools/openWorkbench.js'
 import { createChangesetTool, getChangesetStatusTool } from '../core/changeset/tools.js'
 import { APP_TOOLS } from '../tools/appTools.js'
 import type { ToolDef } from '../tools/types.js'
@@ -53,15 +52,9 @@ export function hostSupportsApps(caps: unknown): boolean {
   return !!ui?.mimeTypes?.includes(RESOURCE_MIME_TYPE)
 }
 
-const TOOLS: ToolDef[] = [
+export const TOOLS: ToolDef[] = [
   findProductsTool as ToolDef, productPlansTool as ToolDef, inventorySettingsTool as ToolDef,
-  // Task 6: model-visible entry point for the batch wizard panel (ui://be2/batch-wizard.html,
-  // built in Task 7). A plain L0-style ToolDef — it does no gateway reads of its own, so it needs
-  // nothing beyond the base ToolContext wrapTool already provides.
-  openBatchWizardTool as ToolDef,
-  // Session 1（announcement）：公告專用面板入口（ui://be2/announcement-wizard.html）。sibling tool，
-  // 非 be2_open_batch_wizard 的 action_type——uiResourceUri 一 tool 綁一面板無法動態切（見 spec §4.2）。
-  openAnnouncementWizardTool as ToolDef,
+  openWorkbenchTool as ToolDef,
 ]
 const L2_TOOLS: L2ToolDef[] = [createChangesetTool, getChangesetStatusTool]
 
