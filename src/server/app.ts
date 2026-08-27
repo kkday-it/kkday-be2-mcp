@@ -250,6 +250,14 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   const app = express()
   app.use(express.json())
   app.get('/healthz', (_req, res) => { res.status(200).send('ok') })
+  app.get('/readyz', (_req, res) => {
+    try {
+      db.prepare('SELECT 1').get()
+      res.status(200).json({ status: 'ready' })
+    } catch {
+      res.status(503).json({ status: 'not-ready' })
+    }
+  })
   app.use(buildHostGuard())
   // Task 6：OAuth discovery（RFC 9728 + RFC 8414）——公開端點，Claude 的 OAuth client
   // 用它找到 authorize/token/register 端點與 PKCE/public-client 能力，無需 bearer。
