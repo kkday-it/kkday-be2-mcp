@@ -66,4 +66,55 @@ describe('makeShutdown', () => {
     await expect(shutdown()).resolves.toBeUndefined()
     expect(order).toEqual(['server.close', 'shutdownOtel', 'db.close', 'exit'])
   })
+
+  it('proactively closes idle connections before waiting on server.close', async () => {
+    const order: string[] = []
+    const server = {
+      closeIdleConnections: vi.fn(() => { order.push('closeIdleConnections') }),
+      closeAllConnections: vi.fn(),
+      close: (cb: () => void) => { order.push('server.close'); cb() },
+    }
+    const db = { close: vi.fn() }
+    const exit = vi.fn()
+    const shutdown = makeShutdown({ server: server as any, db: db as any, shutdownOtel: async () => {}, graceMs: 25_000, exit })
+    await shutdown()
+    expect(server.closeIdleConnections).toHaveBeenCalledTimes(1)
+    expect(order).toEqual(['closeIdleConnections', 'server.close'])
+  })
+
+  it('force-closes lingering connections after forceCloseMs so shutdown does not stall to the hard timeout', async () => {
+    // 模擬一個逗留的 long-lived 連線：server.close 的 callback 卡住，直到
+    // closeAllConnections() 被呼叫才觸發（如真實 http.Server 對持有 keep-alive socket 的行為）。
+    let closeCb: (() => void) | undefined
+    const server = {
+      closeIdleConnections: vi.fn(),
+      closeAllConnections: vi.fn(() => { closeCb?.() }),
+      close: (cb: () => void) => { closeCb = cb },
+    }
+    const db = { close: vi.fn() }
+    const exit = vi.fn()
+    const shutdown = makeShutdown({
+      server: server as any, db: db as any, shutdownOtel: async () => {},
+      graceMs: 25_000, forceCloseMs: 5, exit,
+    })
+    await shutdown()   // 若沒有 force-close 機制，這裡會一路卡到 25s 的硬逾時 timer
+    expect(server.closeAllConnections).toHaveBeenCalledTimes(1)
+    expect(db.close).toHaveBeenCalledTimes(1)
+    expect(exit).toHaveBeenCalledWith(0)
+  })
+
+  it('exits with code 1 when the hard timeout fires (stalled/forced shutdown, distinct from clean exit(0))', async () => {
+    vi.useFakeTimers()
+    try {
+      const server = { close: () => { /* never calls back — simulate a fully stuck shutdown */ } }
+      const db = { close: vi.fn() }
+      const exit = vi.fn()
+      const shutdown = makeShutdown({ server: server as any, db: db as any, shutdownOtel: async () => {}, graceMs: 1_000, exit })
+      void shutdown()
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(exit).toHaveBeenCalledWith(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
