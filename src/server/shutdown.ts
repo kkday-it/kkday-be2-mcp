@@ -36,7 +36,7 @@ export function makeShutdown(deps: ShutdownDeps): () => Promise<void> {
     } catch (e) {
       console.error('[be2-mcp] shutdown sequence error:', (e as Error).message)
     } finally {
-      deps.db.close()
+      try { deps.db.close() } catch (e) { console.error('[be2-mcp] db.close error during shutdown:', (e as Error).message) }
       clearTimeout(timer)
       exit(0)
     }

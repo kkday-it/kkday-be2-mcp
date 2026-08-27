@@ -45,4 +45,25 @@ describe('makeShutdown', () => {
     expect(db.close).toHaveBeenCalledTimes(1)
     expect(exit).toHaveBeenCalledWith(0)
   })
+
+  it('guards db.close itself: if db.close throws, shutdown() still resolves and exit still runs', async () => {
+    const server = { close: (cb: () => void) => cb() }
+    const db = { close: vi.fn(() => { throw new Error('db already closed') }) }
+    const exit = vi.fn()
+    const shutdown = makeShutdown({ server: server as any, db: db as any, shutdownOtel: async () => {}, graceMs: 25_000, exit })
+    await expect(shutdown()).resolves.toBeUndefined()
+    expect(db.close).toHaveBeenCalledTimes(1)
+    expect(exit).toHaveBeenCalledWith(0)
+  })
+
+  it('continues the sequence when server.close callback is invoked with an error', async () => {
+    const order: string[] = []
+    const server = { close: (cb: (err?: Error) => void) => { order.push('server.close'); cb(new Error('close failed')) } }
+    const db = { close: () => { order.push('db.close') } }
+    const shutdownOtel = vi.fn(async () => { order.push('shutdownOtel') })
+    const exit = vi.fn((_: number) => { order.push('exit') })
+    const shutdown = makeShutdown({ server: server as any, db: db as any, shutdownOtel, graceMs: 25_000, exit })
+    await expect(shutdown()).resolves.toBeUndefined()
+    expect(order).toEqual(['server.close', 'shutdownOtel', 'db.close', 'exit'])
+  })
 })
