@@ -179,6 +179,8 @@ app 的權威設定在 `src/config.ts`（zod 驗證，缺就啟動失敗且**只
 
 ## 9. 給 DevOps / auth-service team 的申請清單（可直接照提）
 
+> **Phase A 落地進度**：✅ Dockerfile / npm run build / bind host / public URL / /readyz probe / graceful shutdown 已完成。見 `cloud-ready-phaseA-runbook.md`。
+
 **A. DevOps（部署與基礎設施）**
 1. 內網部署位置（k8s namespace 或 VM）＋ 內網 DNS 名稱 ＋ 內網 TLS ingress（終結 HTTPS → app HTTP `:8787`）。
 2. Egress 放行 be2-mcp → auth-service host、be2 gateway host 的 443（見第 4 節）。
@@ -214,3 +216,4 @@ app 的權威設定在 `src/config.ts`（zod 驗證，缺就啟動失敗且**只
 - OAuth 外殼與登入腿：`oauth-runbook.md`、`spike-oauth-login-leg.md`
 - 確認頁 SSO：`phase2b-runbook.md`；面板 nonce 通道：`mcp-apps-runbook.md`
 - 寫入契約與 per-env 授權卡點：`sit-write-contracts.md`
+- **Cloud-Ready Phase A（本檔案 §9 實施指南）**：`cloud-ready-phaseA-runbook.md`
