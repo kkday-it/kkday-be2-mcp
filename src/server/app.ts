@@ -139,7 +139,8 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // Task 10: shared by l2Deps/appDeps (confirm-page URLs) and the /mcp 401 gate's
   // WWW-Authenticate header (points the client at discovery, per RFC 9728) — one literal instead
   // of three copies of the same string.
-  const baseUrl = `http://127.0.0.1:${config.port}`
+  // Task 2: baseUrl now driven by config.publicBaseUrl (set during config loading / initialization).
+  const baseUrl = config.publicBaseUrl
 
   // Fix 1: the confirm_url never reaches the tool response / the model's context — it is
   // printed to the be2-mcp SERVER's own stdout, which only the human running `npm run dev`
@@ -252,7 +253,8 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   app.use(buildHostGuard())
   // Task 6：OAuth discovery（RFC 9728 + RFC 8414）——公開端點，Claude 的 OAuth client
   // 用它找到 authorize/token/register 端點與 PKCE/public-client 能力，無需 bearer。
-  app.use(buildDiscoveryRouter({ baseUrl: `http://127.0.0.1:${config.port}` }))
+  // Task 2: baseUrl now driven by config.publicBaseUrl (set during config loading / initialization).
+  app.use(buildDiscoveryRouter({ baseUrl: config.publicBaseUrl }))
   // Task 7：DCR 動態註冊——公開端點（無 bearer），Claude 的 OAuth client 用 discovery 拿到的
   // registration_endpoint 打這裡自助建立 public client。redirect_uri allowlist 是唯一防線，
   // 見 src/oauth/redirectUri.ts。
