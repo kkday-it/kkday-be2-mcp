@@ -1,12 +1,25 @@
 import { loadConfig } from './config.js'
-import { initOtel } from './otel.js'
+import { initOtel, shutdownOtel } from './otel.js'
 import { openDb } from './store/db.js'
 import { buildApp } from './server/app.js'
+import { makeShutdown } from './server/shutdown.js'
 
 const config = loadConfig()
 initOtel(config.otelMode)
-const app = buildApp({ config, db: openDb(config.dbPath) })
-app.listen(config.port, '127.0.0.1', () => {
-  console.log(`be2-mcp listening on http://127.0.0.1:${config.port}/mcp (env: ${config.gatewayUrl})`)
-  ;(app.locals.startScheduler as () => () => void)?.()
+const db = openDb(config.dbPath)
+const app = buildApp({ config, db })
+
+let stopScheduler: (() => Promise<void>) | undefined
+const server = app.listen(config.port, config.bindHost, () => {
+  console.log(`be2-mcp listening on ${config.publicBaseUrl}/mcp (bind ${config.bindHost}:${config.port}, env: ${config.gatewayUrl})`)
+  stopScheduler = (app.locals.startScheduler as (() => () => Promise<void>) | undefined)?.()
 })
+
+const shutdown = makeShutdown({
+  server, db,
+  stopScheduler: () => stopScheduler?.() ?? Promise.resolve(),
+  shutdownOtel,
+  graceMs: 25_000,   // < k8s terminationGracePeriodSeconds（DevOps 設 ≥30s）
+})
+process.on('SIGTERM', shutdown)
+process.on('SIGINT', shutdown)
