@@ -35,7 +35,7 @@ describe('makeShutdown', () => {
     expect(order).toEqual(['stopScheduler', 'db.close'])
   })
 
-  it('contains errors from the shutdown sequence: shutdown() never rejects, db.close + exit still run', async () => {
+  it('contains errors from the shutdown sequence: shutdown() never rejects, db.close still runs, exits non-zero', async () => {
     const server = { close: (cb: () => void) => cb() }
     const db = { close: vi.fn() }
     const exit = vi.fn()
@@ -43,17 +43,17 @@ describe('makeShutdown', () => {
     const shutdown = makeShutdown({ server: server as any, db: db as any, shutdownOtel, graceMs: 25_000, exit })
     await expect(shutdown()).resolves.toBeUndefined()
     expect(db.close).toHaveBeenCalledTimes(1)
-    expect(exit).toHaveBeenCalledWith(0)
+    expect(exit).toHaveBeenCalledWith(1)   // 序列出錯（即使沒逾時）→ 非乾淨關機 → exit(1)
   })
 
-  it('guards db.close itself: if db.close throws, shutdown() still resolves and exit still runs', async () => {
+  it('guards db.close itself: if db.close throws, shutdown() still resolves, exit still runs (non-zero)', async () => {
     const server = { close: (cb: () => void) => cb() }
     const db = { close: vi.fn(() => { throw new Error('db already closed') }) }
     const exit = vi.fn()
     const shutdown = makeShutdown({ server: server as any, db: db as any, shutdownOtel: async () => {}, graceMs: 25_000, exit })
     await expect(shutdown()).resolves.toBeUndefined()
     expect(db.close).toHaveBeenCalledTimes(1)
-    expect(exit).toHaveBeenCalledWith(0)
+    expect(exit).toHaveBeenCalledWith(1)   // db.close 拋出 → 非乾淨關機 → exit(1)
   })
 
   it('continues the sequence when server.close callback is invoked with an error', async () => {

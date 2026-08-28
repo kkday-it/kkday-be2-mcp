@@ -16,7 +16,7 @@
     "build:ui": "node scripts/build-ui.mjs",
     "build": "tsc -p tsconfig.build.json && npm run build:ui",
     "start": "node dist/src/index.js",
-    "ci": "npm run build:ui && npm run typecheck && npm run test"
+    "ci": "npm run build && npm run typecheck && npm run test"
   },
   "keywords": [],
   "author": "",

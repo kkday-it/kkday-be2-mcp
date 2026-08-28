@@ -32,6 +32,9 @@ export function makeShutdown(deps: ShutdownDeps): () => Promise<void> {
     // shutdown() 本身 reject——它由 process.on('SIGTERM', shutdown) 直接呼叫、無 .catch()，
     // 若外洩會變 unhandled rejection 讓 Node crash，可能搶在硬逾時 fallback之前發生，
     // 導致 db.close 沒跑、非受控退出。錯誤在此吞下記 log，db.close + exit 一定在 finally 跑。
+    // hadError：序列 reject 或 db.close 拋出 → 記下，finally 依此 exit(1)，讓「有錯但沒逾時」的
+    // 關機也回非 0，與硬逾時路徑（exit(1)）一致地反映「非乾淨關機」；完全正常才 exit(0)。
+    let hadError = false
     try {
       await deps.stopScheduler?.()
       // MCP `/mcp` 是 Streamable HTTP/SSE/keep-alive，client 持長連線 socket——只 await
@@ -48,11 +51,12 @@ export function makeShutdown(deps: ShutdownDeps): () => Promise<void> {
       clearTimeout(forceTimer)
       await deps.shutdownOtel()
     } catch (e) {
+      hadError = true
       console.error('[be2-mcp] shutdown sequence error:', (e as Error).message)
     } finally {
-      try { deps.db.close() } catch (e) { console.error('[be2-mcp] db.close error during shutdown:', (e as Error).message) }
+      try { deps.db.close() } catch (e) { hadError = true; console.error('[be2-mcp] db.close error during shutdown:', (e as Error).message) }
       clearTimeout(timer)
-      exit(0)
+      exit(hadError ? 1 : 0)
     }
   }
 }
