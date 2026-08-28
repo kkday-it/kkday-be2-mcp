@@ -127,6 +127,7 @@ describe('Tool Annotations - Integration through tools/list', () => {
       port: 0,
       dbPath: ':memory:',
       otelMode: 'off', scheduleTz: 'Asia/Taipei',
+      bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
     }
 
     const app = buildApp({ config, db })

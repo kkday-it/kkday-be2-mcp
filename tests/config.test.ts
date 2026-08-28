@@ -70,4 +70,21 @@ describe('loadConfig', () => {
     const cfg = loadConfig(env)
     expect(cfg.dbPath).toBe('./custom/path.sqlite')
   })
+
+  it('defaults bindHost to 127.0.0.1 and allows override', () => {
+    expect(loadConfig(base as NodeJS.ProcessEnv).bindHost).toBe('127.0.0.1')
+    expect(loadConfig({ ...base, BE2_MCP_BIND_HOST: '0.0.0.0' } as NodeJS.ProcessEnv).bindHost).toBe('0.0.0.0')
+  })
+
+  it('publicBaseUrl falls back to loopback when unset, honours override and strips trailing slash', () => {
+    expect(loadConfig(base as NodeJS.ProcessEnv).publicBaseUrl).toBe('http://127.0.0.1:8787')
+    expect(loadConfig({ ...base, BE2_MCP_PORT: '9000' } as NodeJS.ProcessEnv).publicBaseUrl).toBe('http://127.0.0.1:9000')
+    expect(loadConfig({ ...base, BE2_MCP_PUBLIC_BASE_URL: 'https://mcp.stage.kkday.com/' } as NodeJS.ProcessEnv).publicBaseUrl)
+      .toBe('https://mcp.stage.kkday.com')
+  })
+
+  it('rejects a non-URL publicBaseUrl without echoing its value', () => {
+    expect(() => loadConfig({ ...base, BE2_MCP_PUBLIC_BASE_URL: 'not-a-url' } as NodeJS.ProcessEnv))
+      .toThrowError(/BE2_MCP_PUBLIC_BASE_URL/)
+  })
 })
