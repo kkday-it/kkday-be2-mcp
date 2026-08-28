@@ -129,8 +129,8 @@ button{font-family:inherit;cursor:pointer}
 #fallback{white-space:pre-wrap}
 .wb-banner{background:var(--crit-wash);color:#912018;border:1px solid #FDA29B;border-radius:var(--r-sm);padding:10px 12px;font-size:13px;margin:0 0 12px}
 
-/* 單欄、窄框友善（MCP Apps 面板約 600–720px）：品牌條 → 功能頁籤 → 步驟條 → 內容 */
-.wrap{max-width:760px;margin:16px auto;padding:0 14px}
+/* 自適應寬度：窄框（MCP Apps 面板約 600–720px）填滿、寬框（13吋+外接螢幕）撐到上限 1360px 置中。單欄佈局：品牌條 → 功能頁籤 → 步驟條 → 內容 */
+.wrap{max-width:min(1360px,100%);margin:16px auto;padding:0 14px}
 .panel{border:1px solid var(--border);border-radius:var(--r);overflow:hidden;background:var(--surface)}
 .brandbar{background:var(--nav);color:#fff;padding:7px 14px;font-size:12px;font-weight:800;letter-spacing:.02em;display:flex;align-items:center;gap:8px}
 .brandbar small{font-weight:500;color:var(--nav-ink);font-size:11px}
