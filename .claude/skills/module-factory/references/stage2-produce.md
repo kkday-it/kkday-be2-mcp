@@ -2,6 +2,11 @@
 
 Claude 編排，六格由**可插拔實作者**寫。每格規格 = 禁令段（agy 後端限定）+ 契約報告 + 參考格 + 該格職責。
 
+## v2：載體與測試（權威）
+
+- **載體預設 Workflow**（`references/workflow-carrier.md`）：六格走 Workflow 的 `parallel`（keys 先、其餘並行），中途死用 `resumeFromRunId` 只補未完格。下方 agy 後端 / `run-agy-batch.sh` 保留為省 Claude 額度的選項。
+- **每格單元測試預設 cassette-backed（D2）**：餵 `makeCassetteFetch('replay', 'tests/cassettes/<domain>.json')`（`tests/support/cassette.ts`），零 live、可重複，取代 v1 的 fixture-gated `skipIf` 半套。**happy-path 走 cassette、error 分支（403/500/stale/併發）走 `cassette.stubError(method, urlPattern, status, envelopeBody)`**——兩者都離線，不因種子 cassette 只有 200 而測不了錯誤。executor 格的錯誤處理測試一律用 stubError，不打 live。
+
 ## 兩個後端（SKILL.md 的偵測決定用哪個）
 
 - **Claude subagent 後端（預設、通用）**：見下方「Claude subagent 後端」段。任何人可用，不需 agy。
