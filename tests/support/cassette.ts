@@ -52,10 +52,14 @@ export function makeCassetteFetch(mode: 'record' | 'replay', cassettePath: strin
     q.push(it)
   }
 
+  const stubs: Array<{ method: string; urlPattern: string; status: number; body: unknown }> = []
+
   const f = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = typeof input === 'string' ? input : input.toString()
     const method = (init?.method ?? 'GET').toUpperCase()
     if (mode === 'replay') {
+      const stub = stubs.find(s => s.method === method && url.includes(s.urlPattern))
+      if (stub) return new Response(JSON.stringify(stub.body), { status: stub.status, headers: { 'content-type': 'application/json' } })
       const q = index.get(matchKey(method, url, bodyToJson(init)))
       if (!q || q.length === 0) throw new Error(`no cassette match for ${method} ${url}`)
       // 多筆 → 依序 shift（不同回應的序列）；單筆 → sticky 可重複回放（idempotent 輪詢）
@@ -76,7 +80,9 @@ export function makeCassetteFetch(mode: 'record' | 'replay', cassettePath: strin
   const self = f as unknown as { _realFetch: typeof fetch }
   self._realFetch = fetch
 
-  f.stubError = () => { throw new Error('stubError not yet implemented') } // Task 4
+  f.stubError = (method, urlPattern, status, envelopeBody) => {
+    stubs.push({ method: method.toUpperCase(), urlPattern, status, body: envelopeBody })
+  }
   f.save = () => {
     const json = JSON.stringify(cassette)
     if (/eyJ[A-Za-z0-9_-]{20,}/.test(json)) throw new Error('cassette appears to contain a JWT — refusing to write')
