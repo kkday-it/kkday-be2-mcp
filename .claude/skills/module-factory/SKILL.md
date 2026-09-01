@@ -37,7 +37,7 @@ description: 把「新增一個 be2 MCP action_type / 接一個新 domain」從�
     - bundle-miner      : curl 抓前端 bundle → grep businessList 授權碼
     - reference-reader  : 讀 src/modules/product/*/ 判定「最像哪個現成 module」
   產物：契約報告 docs/be2-mcp/sit-<domain>-contract.md（照 references/contract-report-template.md 七節）
-  ┌─ GATE 1（AskUserQuestion）：見下方判定準則
+  ┌─ GATE 1（v2：discovery GREEN→自動放行不問；僅換 stage 仍卡的真授權/欄位 gate 才停下等人。見下方判定準則）
   └─ 進段②
 
 段② 產（六格並行 + 對抗驗證）
@@ -46,14 +46,14 @@ description: 把「新增一個 be2 MCP action_type / 接一個新 domain」從�
   讀 RESULT ... OK|EMPTY → 對 EMPTY 格 fallback（重派帶強化禁令；仍 EMPTY 則 Claude 親寫）
   改 src/core/changeset/types.ts 的 ActionType union + src/modules/index.ts registerModule
   conformance-verifier（Claude subagent，對抗式）：跑 npm run ci + 逐格挑互斥性 bug
-  ┌─ GATE 2（AskUserQuestion）：Claude 攤六格 diff + conformance 結果，人點頭
+  ┌─ GATE 2 ＝ v2 Gate①（計畫核准，AskUserQuestion）：Claude 攤六格 diff + conformance 結果，人點頭
   └─ 進段③
 
 段③ 驗收（Claude 編排）
   照 references/stage3-verify.md：npm run ci 全綠 → node scripts/build-ui.mjs → registry exhaustive
   → dev panel e2e（BE2_MCP_DEV_PANEL=1 + playwright，同彩排法）→ error-handling agent 補 403/500/stale/併發 測試
   → 開 draft PR（含契約報告、六格產物、e2e 紀錄）
-  ┌─ GATE 3（AskUserQuestion）：merge 決定 + live 寫入驗收（有授權 gate 則標 PENDING）
+  ┌─ GATE 3 ＝ v2 Gate②（live 寫入 + merge，AskUserQuestion）：live 寫入前攔人核准 + merge 決定（有授權 gate 則標 PENDING）
   └─ 完成 → 產物登記進 docs/be2-mcp/module-catalog.md
 ```
 

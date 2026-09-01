@@ -14,9 +14,9 @@
 | 階段 | 載體 | 為什麼 |
 |---|---|---|
 | 段① 探索（browser sniff、契約報告、cassette 錄製）| **不進 Workflow**，主 Claude/subagent 跑 | 需 live browser attach（`page.route` sniff、登入 session）；Workflow script 無瀏覽器 |
-| GATE-plan（段②後）| 主 Claude 的 `AskUserQuestion` | 問不了人的事只能在主對話做 |
+| Gate①（計畫核准）（段②後）| 主 Claude 的 `AskUserQuestion` | 問不了人的事只能在主對話做 |
 | 段② 產（六格並行 + conformance）| **Workflow A** | 六格獨立可並行、中途死要能續 |
-| GATE-live-write（段③後）| 主 Claude 的 `AskUserQuestion` | 真實寫入前的人工把關 |
+| Gate②（live 寫入核准）（段③後）| 主 Claude 的 `AskUserQuestion` | 真實寫入前的人工把關 |
 | 段③ 驗收（ci/e2e/error-handling）| **Workflow B** | 多步驟、要能續跑 |
 
 段① 的產物（`docs/be2-mcp/sit-<domain>-contract.md` + 種子 cassette `tests/cassettes/<domain>.json`）透過 `args` 餵進 Workflow。
@@ -66,7 +66,7 @@ return { keys: keysRes, produced, conformance }
 
 跑法（主 Claude）：`Workflow({ script, args })`。中途死 → `Workflow({ scriptPath, args, resumeFromRunId })`，已產的格快取、只補未完的。
 
-跑完 → 主 Claude 收 `{produced, conformance}`，攤六格 diff + conformance 給人 → **GATE-plan（AskUserQuestion）**。核准才進 Workflow B。
+跑完 → 主 Claude 收 `{produced, conformance}`，攤六格 diff + conformance 給人 → **Gate①（計畫核准）（AskUserQuestion）**。核准才進 Workflow B。
 
 ## Workflow B：段③ 驗收（cassette-backed，離線）
 
@@ -93,7 +93,7 @@ const verify = await agent(
 return verify
 ```
 
-跑完 → 主 Claude 攤驗收結果 + PENDING → **GATE-live-write（AskUserQuestion）**。核准後，**live 寫入 e2e 由主 Claude 對 stage 跑一次**（非 Workflow——要 live browser/token），再開 draft PR（見 `stage3-verify.md`）。
+跑完 → 主 Claude 攤驗收結果 + PENDING → **Gate②（live 寫入核准）（AskUserQuestion）**。核准後，**live 寫入 e2e 由主 Claude 對 stage 跑一次**（非 Workflow——要 live browser/token），再開 draft PR（見 `stage3-verify.md`）。
 
 ## 收尾
 

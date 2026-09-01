@@ -28,7 +28,7 @@ cp <外部輸入文件> docs/be2-mcp/factory-input-<domain>.md
 
 1. `.env` 取 SIT 帳密（`AUTH_email`/`AUTH_pwd`）；**密碼經瀏覽器 evaluate 直接注入 DOM，絕不進對話文字、絕不落檔**（落檔會被 credential classifier 擋）。
 2. playwright 登入 be2-220（`https://be2-220.sit.kkday.com/`）→ 導到目標功能頁。
-3. `browser_network_requests` filter 目標 API → `browser_network_request <index>` 抽 request/response header（即使回 502/403，request header 仍在）。
+3. **抽 request/response**：header 可用 `browser_network_requests` filter 目標 API → `browser_network_request <index>`（即使回 502/403，header 仍在）。**但 request BODY 一律走 server 端 `page.route` + `request.postData()`（D5，頂部 v2 段）——`browser_network_requests` 對 BE2 SPA 抓不到 body。** response body 用 `browser_network_request` 或 route 攔皆可。撞 4xx/5xx 先照頂部 D3 改打 stage 重試，不急著判授權 gate。攔到的真流量存成 cassette（`{method, url, reqBody, status, resBody}`）餵段②。
 4. 敏感值（x-api-key 等）**只寫進 `.env`**（gitignored），契約報告以 `<存於 .env XXX>` 佔位。
 5. **也可繞過登入**：若功能是純 API，用 `.env` 的 be2 token（或 store 內 token）+ curl 直打 gateway 驗證——本專案 announcement 就用這條交叉驗證 token 種類差異（S2S vs web-session）。
 
@@ -55,4 +55,4 @@ grep -oE 'product\.[a-z-]+\.[a-z]+' /tmp/b.js | sort -u   # businessKey/授權�
 - 「item 欄位形狀」節填實與否 → 決定**欄位 gate**（未填 → block 段②）。
 - 「未解 gate 項」節有無授權黑箱 → 決定**授權 gate**（有 → executor-only PENDING）。
 
-用 `AskUserQuestion` 把判定攤給人確認後才進段②（SKILL.md 的 GATE 1 判定準則）。
+**v2：GREEN（換 stage 後欄位齊、授權過）→ 自動進段②，不用 `AskUserQuestion` 攔人。** 只有「換 stage 仍卡的真授權 gate」或「欄位確實拿不到」才停下等人補來源（判定邏輯保留，見 SKILL.md「GATE 1 判定準則」+ 本檔頂部「v2 探索變更」）。
