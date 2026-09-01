@@ -19,15 +19,15 @@
           "modifyUser": "李佳樺(chiahua.lee)",
           "modifyDate": "2026-08-29 15:37:12",
           "langs": [
-            { "langCode": "en-default", "content": "<multi-line notice text, verbatim omitted here for brevity but structure = {langCode, content}>" },
-            { "langCode": "ja-jp", "content": "..." },
-            { "langCode": "ko-kr", "content": "..." },
-            { "langCode": "th-th", "content": "..." },
-            { "langCode": "vi-vn", "content": "..." },
-            { "langCode": "zh-cn", "content": "..." },
-            { "langCode": "zh-hk", "content": "..." },
-            { "langCode": "zh-my", "content": "..." },
-            { "langCode": "zh-tw", "content": "..." }
+            { "langCode": "en-default", "content": "[fixture] en-default template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "ja-jp", "content": "[fixture] ja-jp template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "ko-kr", "content": "[fixture] ko-kr template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "th-th", "content": "[fixture] th-th template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "vi-vn", "content": "[fixture] vi-vn template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "zh-cn", "content": "[fixture] zh-cn template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "zh-hk", "content": "[fixture] zh-hk template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "zh-my", "content": "[fixture] zh-my template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "zh-tw", "content": "[fixture] zh-tw template announcement content — real multi-line text was not captured during sniff" }
           ]
         }
       }
