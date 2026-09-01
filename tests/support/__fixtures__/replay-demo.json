@@ -1,0 +1,1 @@
+{"interactions":[{"method":"PATCH","url":"https://h/admin/product/announcement/3084","reqBody":{"name":"n"},"status":200,"resBody":{"metadata":{"status":"0000"}}}]}
