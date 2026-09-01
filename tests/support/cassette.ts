@@ -66,7 +66,8 @@ export function makeCassetteFetch(mode: 'record' | 'replay', cassettePath: strin
     const realRes = await self._realFetch(input, init)
     const clone = realRes.clone()
     let resBody: unknown
-    try { resBody = await clone.json() } catch { resBody = await clone.text() }
+    const text = await clone.text()
+    try { resBody = JSON.parse(text) } catch { resBody = text }
     cassette.interactions.push({ method, url, reqBody: bodyToJson(init), status: realRes.status, resBody })
     return realRes
   }) as CassetteFetch

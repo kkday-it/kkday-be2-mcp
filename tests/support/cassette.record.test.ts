@@ -18,6 +18,19 @@ describe('record mode', () => {
     expect(saved.interactions[0].status).toBe(200)
   })
 
+  it('records a non-JSON (plain text) response body without throwing', async () => {
+    const NON_JSON_OUT = 'tests/support/__fixtures__/recorded-non-json.json'
+    const realFetch = (async () => new Response('not json at all', { status: 500 })) as typeof fetch
+    const f = makeCassetteFetch('record', NON_JSON_OUT)
+    ;(f as unknown as { _realFetch: typeof fetch })._realFetch = realFetch
+    await expect(f('https://h/x', { method: 'GET' })).resolves.toBeInstanceOf(Response)
+    f.save()
+    const saved = JSON.parse(readFileSync(NON_JSON_OUT, 'utf8'))
+    expect(saved.interactions).toHaveLength(1)
+    expect(saved.interactions[0].resBody).toBe('not json at all')
+    expect(saved.interactions[0].status).toBe(500)
+  })
+
   it('refuses to write a body containing a JWT', async () => {
     const realFetch = (async () => new Response('{}', { status: 200 })) as typeof fetch
     const f = makeCassetteFetch('record', OUT)
