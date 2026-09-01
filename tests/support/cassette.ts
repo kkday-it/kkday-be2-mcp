@@ -62,10 +62,26 @@ export function makeCassetteFetch(mode: 'record' | 'replay', cassettePath: strin
       const hit = q.length > 1 ? q.shift()! : q[0]
       return new Response(JSON.stringify(hit.resBody), { status: hit.status, headers: { 'content-type': 'application/json' } })
     }
-    throw new Error('record mode not yet implemented') // Task 3
+    // record 模式：透過可注入的 real fetch 打真實請求，擷取 interaction 後原樣回傳
+    const realRes = await self._realFetch(input, init)
+    const clone = realRes.clone()
+    let resBody: unknown
+    try { resBody = await clone.json() } catch { resBody = await clone.text() }
+    cassette.interactions.push({ method, url, reqBody: bodyToJson(init), status: realRes.status, resBody })
+    return realRes
   }) as CassetteFetch
 
+  // 可注入的 real fetch（測試用；正式預設 globalThis.fetch）
+  const self = f as unknown as { _realFetch: typeof fetch }
+  self._realFetch = fetch
+
   f.stubError = () => { throw new Error('stubError not yet implemented') } // Task 4
-  f.save = () => { throw new Error('save not yet implemented') } // Task 3
+  f.save = () => {
+    const json = JSON.stringify(cassette)
+    if (/eyJ[A-Za-z0-9_-]{20,}/.test(json)) throw new Error('cassette appears to contain a JWT — refusing to write')
+    // headers 不存入 Interaction（method/url/reqBody/status/resBody 而已）
+    // → Authorization / x-api-key 天然不落盤；上面的 JWT 偵測是 body 內夾 token 的最後防線
+    writeFileSync(cassettePath, JSON.stringify(cassette, null, 2))
+  }
   return f
 }
