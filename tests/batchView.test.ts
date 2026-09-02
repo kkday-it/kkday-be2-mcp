@@ -189,8 +189,8 @@ describe('app_get_batch_view — inputShape 邊界', () => {
     const r = schema.safeParse({ action_type: 'inventory_platform', prod_oids: Array.from({ length: 11 }, (_, i) => String(i)) })
     expect(r.success).toBe(false)
   })
-  it('0 個 prod_oids 拒絕', () => {
-    expect(schema.safeParse({ action_type: 'inventory_platform', prod_oids: [] }).success).toBe(false)
+  it('0 個 prod_oids schema 層合法(optional);≥1 由 handler 擋(MISSING_ID)', () => {
+    expect(schema.safeParse({ action_type: 'inventory_platform', prod_oids: [] }).success).toBe(true)
   })
   it('action_type 接受 6 種批次型別、拒絕未知型別', () => {
     for (const at of ['inventory_platform', 'shelf_schedule', 'inventory_setting', 'shelf_toggle_product', 'shelf_toggle_plan', 'shelf_toggle_bundle']) {

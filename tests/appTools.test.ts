@@ -1,11 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { appGetChangesetViewTool, appGetConfirmLinkTool, appGetBatchViewTool } from '../src/tools/appTools.js'
+import { appGetChangesetViewTool, appGetConfirmLinkTool, appGetBatchViewTool, appGetAnnouncementViewTool } from '../src/tools/appTools.js'
 import { ApprovalNonceStore } from '../src/core/changeset/approvalNonce.js'
 import { z } from 'zod'
 
 function ctx(over: Partial<any> = {}) {
   return {
     userLabel: 'alice', baseUrl: 'http://127.0.0.1:8787', sessionId: 's1',
+    accessToken: 'fake-jwt',
+    scheduleTz: 'Asia/Taipei',
+    rateBudget: { consume: () => {} },   // 新測試呼叫 handler 需要;既有 zod-only 測試不受影響
     changeSets: {
       get: (id: string) => {
         if (id === 'cs1') return { id: 'cs1', creatorLabel: 'alice', status: 'pending_approval', actionType: 'shelf_toggle_product', note: undefined, diff: [{ a: 1 }], diffVersion: 'v1' }
@@ -15,7 +18,7 @@ function ctx(over: Partial<any> = {}) {
       getResults: () => [],
     },
     nonces: new ApprovalNonceStore(),
-    ...over,
+    ...over,   // gateway 由各測試自帶 mock 路由 override
   } as any
 }
 
@@ -58,4 +61,28 @@ describe('appGetBatchViewTool zod', () => {
     const schema = z.object(appGetBatchViewTool.inputShape as never)
     expect(schema.safeParse({ action_type: 'shelf_toggle_bundle', prod_oids: ['1'] }).success).toBe(true)
   })
+})
+
+it('app_get_batch_view: prod_mids 解析成 canonical oid 後進 buildBatchView,resolved_ids 帶出', async () => {
+  const env = await appGetBatchViewTool.handler(
+    { action_type: 'shelf_schedule', prod_mids: ['10759'], prod_oids: [] } as never,
+    ctx({ gateway: { get: async (p: string) =>
+      p.includes('mid-10759') ? { prod_oid: '38352' } : { /* buildBatchView 下游最小回應 */ } } }))
+  expect(env.resolved_ids).toEqual([{ mid: '10759', oid: '38352' }])
+  expect(env.read_oids).toContain('38352')
+})
+
+it('app_get_batch_view: 兩陣列皆空 → MISSING_ID', async () => {
+  const env = await appGetBatchViewTool.handler(
+    { action_type: 'shelf_schedule', prod_mids: [], prod_oids: [] } as never, ctx({}))
+  expect(env.errors[0].code).toBe('MISSING_ID')
+})
+
+it('app_get_announcement_view: prod_mids 解析後迴圈用 canonical oid,resolved_ids 帶出', async () => {
+  const env = await appGetAnnouncementViewTool.handler(
+    { prod_mids: ['2247'], prod_oids: [] } as never,
+    ctx({ gateway: { get: async (p: string) =>
+      p.includes('mid-2247') ? { prod_oid: '35992' } : { name: 'X' } } }))
+  expect(env.resolved_ids).toEqual([{ mid: '2247', oid: '35992' }])
+  expect(env.read_oids).toContain('35992')
 })
