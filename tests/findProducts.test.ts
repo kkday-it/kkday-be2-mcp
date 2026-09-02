@@ -23,10 +23,12 @@ const info = { description_module: { 'zh-tw': { name: '東京鐵塔門票' } }, 
 const sw = { is_active: true, is_locked_for_active: false }
 
 describe('be2_find_products', () => {
-  it('schema rejects >20 oids and empty list', () => {
+  it('schema rejects >20 oids/mids; empty arrays now allowed at schema level (handler enforces ≥1)', () => {
     const schema = z.object(findProductsTool.inputShape)
-    expect(schema.safeParse({ prod_oids: [] }).success).toBe(false)
+    expect(schema.safeParse({ prod_oids: [] }).success).toBe(true)   // 空陣列 schema 層合法(optional);≥1 由 handler 擋
+    expect(schema.safeParse({}).success).toBe(true)                   // 皆省略亦合法
     expect(schema.safeParse({ prod_oids: Array.from({ length: 21 }, (_, i) => `p${i}`) }).success).toBe(false)
+    expect(schema.safeParse({ prod_mids: Array.from({ length: 21 }, (_, i) => `m${i}`) }).success).toBe(false)
     expect(schema.safeParse({ prod_oids: ['p1'] }).success).toBe(true)
   })
   it('merges info + switch into trimmed items with untrusted envelope', async () => {
@@ -55,6 +57,32 @@ describe('be2_find_products', () => {
     expect(env.items).toHaveLength(1)
     expect(env.errors[0]).toMatchObject({ key: 'bad', status: 403 })
     expect(env.read_oids).toEqual(['p1']) // failed oid is NOT recorded as read
+  })
+  it('prod_mids 與 prod_oids 合併,resolved_ids 帶出', async () => {
+    const env = await findProductsTool.handler({ prod_mids: ['10759'], prod_oids: ['p1'] } as never,
+      ctxWith({ 'mid-10759/info': { prod_oid: '38352' }, '/info': { name: 'X' }, '/switch': { is_active: true } }))
+    expect(env.resolved_ids).toEqual([{ mid: '10759', oid: '38352' }])
+    expect(env.read_oids.sort()).toEqual(['38352', 'p1'])
+  })
+  it('其中一個 mid 解析失敗 → 該筆進 errors,其餘商品仍正常回傳(不拖垮整批)', async () => {
+    const env = await findProductsTool.handler({ prod_mids: ['10759', '999'], prod_oids: [] } as never,
+      ctxWith({
+        'mid-10759/info': { prod_oid: '38352' },
+        'mid-999/info': Object.assign(new Error('404'), { status: 404 }),
+        '/info': { name: 'X' }, '/switch': { is_active: true },
+      }))
+    expect(env.items).toHaveLength(1)
+    expect(env.errors.some(e => e.key === '999')).toBe(true)
+  })
+  it('兩陣列皆空 → MISSING_ID', async () => {
+    const env = await findProductsTool.handler({ prod_mids: [], prod_oids: [] } as never, ctxWith({}))
+    expect(env.errors[0].code).toBe('MISSING_ID')
+  })
+  it('直接用 prod_oid 查詢卻 404 → 錯誤訊息含 mid 提示', async () => {
+    const boom = Object.assign(new Error('GET .../info -> 404: not_found'), { status: 404 })
+    const env = await findProductsTool.handler({ prod_oids: ['546965'] } as never,
+      ctxWith({ '/info': boom, '/switch': boom }))
+    expect(env.errors[0].message).toContain('prod_mid')
   })
 })
 

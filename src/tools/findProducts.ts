@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { ToolDef, ToolContext } from './types.js'
-import { makeEnvelope, toEnvelopeError, type EnvelopeError } from './envelope.js'
+import { makeEnvelope, toEnvelopeError, toEnvelopeErrorWithMidHint, type EnvelopeError } from './envelope.js'
+import { resolveProdOids } from '../gateway/prodOidResolver.js'
 
 // Adjust extraction against tests/fixtures/product-info.json (Task 4). Defensive
 // fallback chain covers documented shape: name lives in description_module[master_lang].
@@ -17,16 +18,22 @@ export function extractProductInfo(raw: unknown): { name?: string; workflow_stat
 }
 
 const inputShape = {
-  prod_oids: z.array(z.string().min(1)).min(1).max(20)
-    .describe('be2 product oids to look up (exact match, max 20 per call)'),
+  prod_mids: z.array(z.string().min(1)).max(20).optional()
+    .describe('be2-web URL product numbers (mid). Resolved to canonical oid and merged with prod_oids.'),
+  prod_oids: z.array(z.string().min(1)).max(20).optional()
+    .describe('be2 product internal oids to look up (exact match). Provide prod_mids and/or prod_oids, ≥1 total.'),
 }
 
-async function lookupOne(oid: string, ctx: ToolContext): Promise<{ item?: unknown; error?: EnvelopeError }> {
+async function lookupOne(oid: string, ctx: ToolContext, fromMid: boolean): Promise<{ item?: unknown; error?: EnvelopeError }> {
   const [info, sw] = await Promise.allSettled([
     ctx.gateway.get(`/product/api/v1/drafts/products/${encodeURIComponent(oid)}/info`, ctx.accessToken),
     ctx.gateway.get(`/product/api/v1/product-configs/${encodeURIComponent(oid)}/switch`, ctx.accessToken),
   ])
-  if (info.status === 'rejected' && sw.status === 'rejected') return { error: toEnvelopeError(oid, info.reason) }
+  if (info.status === 'rejected' && sw.status === 'rejected') {
+    // 原始 prod_oid 輸入的 404 → 附 mid 提示;mid 解析出的 oid → 普通錯誤(使用者本來就用 mid 欄位)。
+    const errFn = fromMid ? toEnvelopeError : toEnvelopeErrorWithMidHint
+    return { error: errFn(oid, info.reason) }
+  }
   const base = info.status === 'fulfilled' ? extractProductInfo(info.value) : {}
   const swVal = sw.status === 'fulfilled' ? (sw.value as Record<string, unknown>) : {}
   return {
@@ -45,7 +52,8 @@ export const findProductsTool: ToolDef<typeof inputShape> = {
   description:
     'Look up be2 products by exact prod_oid list (max 20): returns each product\'s name, workflow status, ' +
     'and on/off-shelf state (is_active). Read-only, no side effects. Use when the user gives product oids; ' +
-    'keyword search is NOT supported in this phase. Per-oid failures are reported in `errors` without failing the batch.',
+    'keyword search is NOT supported in this phase. Per-oid failures are reported in `errors` without failing the batch. ' +
+    'Accepts prod_mids (be2-web URL numbers) and/or prod_oids.',
   inputShape,
   uiResourceUri: 'ui://be2/products-panel.html',
   annotations: {
@@ -56,16 +64,22 @@ export const findProductsTool: ToolDef<typeof inputShape> = {
     openWorldHint: true,
   },
   async handler(args, ctx) {
+    const { resolved, resolutions, errors: resolveErrors } =
+      await resolveProdOids(args.prod_mids ?? [], args.prod_oids ?? [], ctx.gateway, ctx.accessToken)
+    if (resolved.length === 0 && resolveErrors.length === 0) {
+      return makeEnvelope([], [{ key: 'input', code: 'MISSING_ID', message: 'Provide prod_mids or prod_oids (≥1 total).' }])
+    }
+    const midOids = new Set(resolutions.map(r => r.oid))
     // Max 5 oids in flight (2 requests each) — never burst the gateway with 40 concurrent GETs.
     const results: Array<{ item?: unknown; error?: EnvelopeError }> = []
-    const oids: string[] = args.prod_oids
-    for (let i = 0; i < oids.length; i += 5) {
-      results.push(...await Promise.all(oids.slice(i, i + 5).map(oid => lookupOne(oid, ctx))))
+    for (let i = 0; i < resolved.length; i += 5) {
+      results.push(...await Promise.all(resolved.slice(i, i + 5).map(oid => lookupOne(oid, ctx, midOids.has(oid)))))
     }
     return makeEnvelope(
       results.filter(r => r.item).map(r => r.item),
-      results.filter(r => r.error).map(r => r.error!),
+      [...resolveErrors, ...results.filter(r => r.error).map(r => r.error!)],
       results.filter(r => r.item).map(r => (r.item as { prod_oid: string }).prod_oid),
+      resolutions,
     )
   },
 }
