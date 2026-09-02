@@ -132,3 +132,5 @@ Gate 重整（§4）                                        ← D1 載體到位�
 3. **cassette 過期**：stage fixture 會被定期 restore（見 memory `be2-stage-fixture-volatile`），cassette 是快照不受影響，但「契約本身變動」需重錄——是否加 cassette 版本戳 + 定期對 live 校驗，留 writing-plans 評估。
 
 <!-- agy-peer-reviewed: 2026-08-31T16:00:28Z rounds=3 verdict=approved -->
+<!-- agy-peer-reviewed: 2026-09-02 rounds=1 verdict=approved note=§7-D1-downscope+§8-Q1-resolved factual-alignment re-confirmed -->
+
