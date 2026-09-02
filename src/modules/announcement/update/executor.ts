@@ -1,7 +1,7 @@
 import type { ExecCtx } from '../../../core/changeset/module.js'
 import type { AnnouncementUpdateItem, ChangeSetRecord, ItemResult } from '../../../core/changeset/types.js'
 import { itemKey } from './keys.js'
-import { parseCurrentProdOids, type RawAnnouncementDetail } from './diff.js'
+import { parseCurrentProdOids, computeAnnouncementNoop, type RawAnnouncementDetail } from './diff.js'
 import { AnnouncementClient, makeAnnouncementClient } from '../create/svcB2cClient.js'
 import { GatewayError } from '../../../errors.js'
 
@@ -40,6 +40,14 @@ export async function executeAnnouncementUpdateWith(
       try {
         current = await client.getDetail(ctx.accessToken, it.announcementOid) as RawAnnouncementDetail
       } catch { current = undefined }
+      // no-op guard (9b review): if the target is equivalent to the live current, skip the PATCH
+      // entirely — re-sending identical content still fires a back-end cache-clear + front-end
+      // notification for nothing. Mirrors the sibling skipped_noop invariant (shelfToggle/
+      // inventorySetting executors). Reuses the diff layer's single-source-of-truth comparison
+      // (computeAnnouncementNoop) rather than re-inventing it here.
+      if (computeAnnouncementNoop(it, current)) {
+        return { item_key: key, status: 'skipped_noop', before: current ?? null, after: current ?? null, trace_id: traceId }
+      }
       const body = toFullDoc(it, current)
       try {
         // step 2: write the merged full document. announcementOid is validated (zod z.number()

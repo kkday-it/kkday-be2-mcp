@@ -25,6 +25,19 @@ const item: AnnouncementUpdateItem = {
 // (no hand-duplicated logic to drift out of sync).
 const expectedPatchBody = toFullDoc(item, undefined)
 
+// No-op item (9b review): target is byte-for-byte equivalent to what getDetail returns for this
+// oid — same name/is_enabled/prod_oids/start_time/end_time/contents. A DIFFERENT oid (5002) than
+// the happy-path item's, deliberately with NO PATCH interaction recorded for it in the cassette
+// below — if the executor regresses to always-PATCH, the PATCH call would throw "no cassette
+// match" (proving a write was attempted); the fix must instead short-circuit to skipped_noop
+// before ever calling client.patch.
+const NOOP_OID = 5002
+const noopItem: AnnouncementUpdateItem = {
+  announcementOid: NOOP_OID, prod_oids: ['765928'], name: '[CLAUDE-TEST] 相同標題', is_enabled: true,
+  start_time: '2026-08-28 00:00:00', end_time: null, langs: ['zh-tw'],
+  contents: [{ lang: 'zh-tw', content: '[CLAUDE-TEST] 相同內文' }],
+}
+
 beforeAll(() => {
   mkdirSync(CASSETTE_DIR, { recursive: true })
   writeFileSync(CASSETTE_PATH, JSON.stringify({
@@ -60,6 +73,31 @@ beforeAll(() => {
         reqBody: expectedPatchBody,
         status: 200,
         resBody: { metadata: { status: '0000', desc: 'Success' }, data: null },
+      },
+      {
+        // GET for the no-op oid — deliberately NO matching PATCH interaction below.
+        method: 'GET',
+        url: `${BASE_URL}/admin/product/announcement/${NOOP_OID}`,
+        reqBody: null,
+        status: 200,
+        resBody: {
+          metadata: { status: '0000', desc: 'Success' },
+          data: {
+            productAnnouncementOid: NOOP_OID,
+            name: '[CLAUDE-TEST] 相同標題',
+            prodOids: '[765928]',
+            isEnabled: true,
+            startTime: '2026-08-28 00:00:00',
+            endTime: null,
+            createUser: '李佳樺(chiahua.lee)',
+            createDate: '2025-08-08 08:20:16',
+            modifyUser: '李佳樺(chiahua.lee)',
+            modifyDate: '2026-08-29 15:37:12',
+            langs: [
+              { langCode: 'zh-tw', content: '[CLAUDE-TEST] 相同內文' },
+            ],
+          },
+        },
       },
     ],
   }, null, 2))
@@ -115,5 +153,20 @@ describe('executeAnnouncementUpdate via cassette (offline, real client, same-oid
     expect(results).toHaveLength(1)
     expect(results[0].status).toBe('failed')
     expect(results[0].error_code).toBe('AU9997')
+  })
+
+  it('skips the PATCH and reports skipped_noop when target equals current (9b review)', async () => {
+    const fetchImpl = makeCassetteFetch('replay', CASSETTE_PATH)
+    const client = new AnnouncementClient({ baseUrl: BASE_URL, apiKey: 'test-key', fetchImpl })
+    const rec = { id: 'cs1', actionType: 'announcement_update', items: [noopItem] } as unknown as ChangeSetRecord
+
+    const results = await executeAnnouncementUpdateWith(client, ctx(), rec)
+
+    expect(results).toHaveLength(1)
+    // If the executor regressed to always-PATCH, it would hit the unrecorded PATCH interaction
+    // for NOOP_OID, get "no cassette match", and the catch block would report 'failed' —
+    // asserting 'skipped_noop' specifically proves no write was attempted.
+    expect(results[0].status).toBe('skipped_noop')
+    expect((results[0].before as any)?.name).toBe('[CLAUDE-TEST] 相同標題')
   })
 })

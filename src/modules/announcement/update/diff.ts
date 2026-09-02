@@ -58,6 +58,25 @@ function sameContents(a: AnnouncementLangContent[], b: AnnouncementLangContent[]
   return sa.every((v, i) => v.lang === sb[i].lang && v.content === sb[i].content)
 }
 
+// 單一事實來源：current snapshot 與 target item 是否等價（無實際變更）。computeAnnouncementUpdateDiff
+// 的確認頁 noop 判斷、與 executor 的略過 PATCH 判斷，都呼叫這一份比較，避免兩處各寫一套而在
+// 欄位增修時互相漂移（executor 9b review finding）。
+function isNoop(current: AnnouncementCurrentSnapshot, it: AnnouncementUpdateItem): boolean {
+  return current.name === it.name
+    && current.is_enabled === it.is_enabled
+    && current.start_time === it.start_time
+    && (current.end_time ?? null) === (it.end_time ?? null)
+    && sameStringSet(current.prod_oids, it.prod_oids)
+    && sameContents(current.contents, it.contents)
+}
+
+// executor 專用入口：raw GET detail（或 undefined，讀取失敗/未知）直接比對 target，undefined 一律
+// 視為「非 noop」（未知現況不可略過寫入，維持 read-merge-write 現有的保守行為）。
+export function computeAnnouncementNoop(it: AnnouncementUpdateItem, raw: RawAnnouncementDetail | undefined): boolean {
+  if (!raw) return false
+  return isNoop(toCurrentSnapshot(raw), it)
+}
+
 // UNLIKE create (target-only), update 綁 live current：先讀現況（GET detail）再與 target 比較，
 // 供確認頁顯示 before→after + 判斷 noop。client 可為 undefined（dev/test 無 SIT_ANNOUNCE_API_KEY，
 // 或建構失敗）——此時 current = null（未知），不阻擋 staging（同 create 的安全建構模式）。
@@ -82,13 +101,7 @@ export async function computeAnnouncementUpdateDiff(
         current = toCurrentSnapshot(raw)
       } catch { /* leave current = null (讀取失敗/未知，不阻擋 staging) */ }
     }
-    const noop = current !== null
-      && current.name === it.name
-      && current.is_enabled === it.is_enabled
-      && current.start_time === it.start_time
-      && (current.end_time ?? null) === (it.end_time ?? null)
-      && sameStringSet(current.prod_oids, it.prod_oids)
-      && sameContents(current.contents, it.contents)
+    const noop = current !== null && isNoop(current, it)
     out.push({
       announcementOid: it.announcementOid,
       prod_oids: it.prod_oids,
