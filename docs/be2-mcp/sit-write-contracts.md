@@ -312,3 +312,44 @@ be2-web UI 完整鏈路已從原始碼證實(`kkday-be2-web` + `kkday-be2-api`,�
 ### 教訓(第三次同型)
 
 `supplier-configs` PUT 沒有鏡像 GET;真正讀取是「聚合 config 端點」(`items/{oid}/configs`)——與 Phase 3a「數量讀取是 `POST .../search` 非 GET 鏡像」同型。**任何 be2 寫入端點的現況讀取,先讀 be2-web store/api 層源碼找 UI 真實呼叫,不猜 GET 鏡像。**
+
+## mid→oid resolver fixture(Task 7,2026-09-02)
+
+供 `tests/midOidResolver.integration.test.ts`(fixture-gated live 整合測試,`describe.skipIf(!process.env.BE2_LIVE_BEARER)`)與未來任何需要「真實舊商品 `prod_oid ≠ prod_mid`」測資的人使用。
+
+### 候選 fixture pair(spec §2.3,尚未 live 重驗)
+
+| mid | oid | 環境 | 驗證狀態 |
+|---|---|---|---|
+| `mid-10759` | `38352` | be2-220(或 stage) | **PENDING** — 尚未在本 task 對真實 SIT 重新打過,沿用 spec §2.3 記錄的候選值 |
+| `mid-2247` | `35992` | be2-220(或 stage) | **PENDING** — 同上 |
+
+這兩組是 spec 撰寫時記錄的候選,**本 task 沒有執行 live SIT / Playwright 登入去重新確認**(依既有慣例,live 驗證留給有憑證的人工跑一次,見下「Live 驗證 — PENDING」)。任何人要驗收前,應先確認這兩組數字仍對應現存商品、且 `oid ≠ mid`(見下「不可作為驗收 fixture」)。
+
+### resolver 端點
+
+```
+GET /product/api/v1/drafts/products/mid-{mid}/info
+```
+
+`src/gateway/prodOidResolver.ts` 的 `resolveProdOid()` 呼叫此端點,目前**假設 `prod_oid` 為回應頂層欄位**(`(info as Record<string, unknown>)?.prod_oid`)。
+
+**⚠️ 頂層 vs 巢狀:UNVERIFIED。** 這個假設沿用其他 `.../info` 端點(如 `product/{prodOid}/info`)的既有頂層慣例,但尚未對 `mid-{mid}/info` 這支端點實際打過一次真請求確認回應形狀。首次 live 執行(見下)時必須確認:
+- 若 `prod_oid` 確實在頂層 → 現況已對,不用改。
+- 若 `prod_oid` 是巢狀(例如 `data.prod_oid`、`product.prod_oid` 之類)→ 這是一個 **bugfix**:需在 `resolveProdOid()` 的取值處補 fallback(先試頂層、再試已知巢狀路徑),並補一支單元測試鎖住新形狀。這屬於**下一輪 live-time 的 follow-up**,非本 task 範圍(本 task 為 tests + docs only,不碰 `src/`)。
+
+### 不可作為驗收 fixture:巧合相等案例
+
+若挑到的商品剛好 `mid == oid`(例如 `2358`),resolver 完全沒接上、直接把 mid 字串當 oid 誤用也會「碰巧」測試通過(spec §8 已點名的驗收陷阱)。**這類商品不可用來驗收 mid→oid resolver 是否真的生效**——驗收/整合測試必須挑一個 `prod_oid ≠ prod_mid` 的**舊商品**(近期新建商品常見 `oid == mid`,同樣不可用)。
+
+### Live 驗證 — PENDING
+
+本 task(Task 7)依專案慣例(見 CLAUDE.md「開發環境錨定」與本文件其餘 live 驗證段落)**不執行**對 SIT be2-220 的即時網路呼叫、Playwright 登入或任何真實 bearer 取得動作——這一貫是留給持有 `.env` 憑證的人工,以獨立、可重跑、絕不進 CI 的手動步驟完成。
+
+待人工執行的步驟:
+1. 確認 `.env`(或 stage 對應變數)可登入 be2-220 / stage。
+2. 對上表兩組候選 `(mid, oid)` 打一次 `GET /product/api/v1/drafts/products/mid-{mid}/info`,記錄:
+   - `prod_oid` 欄位的實際位置(頂層 or 巢狀)——若非頂層,依上節「bugfix」段補 `resolveProdOid()` fallback + 單元測試。
+   - 該 mid 是否仍解析到上表記錄的 oid(商品可能已下架/oid 回收,見 memory `be2-stage-fixture-volatile`)。
+3. 匯出 `BE2_LIVE_BEARER=<剛登入的 be2 access token>`(不要 commit、不要 log),視需要另設 `BE2_LIVE_MID_FIXTURE`/`BE2_LIVE_OID_FIXTURE` 覆寫預設候選值,執行 `npx vitest run tests/midOidResolver.integration.test.ts`。
+4. 兩案例綠燈後,回本節把「PENDING」改記為已驗證(含日期、環境、實際跑出的 oid)。
