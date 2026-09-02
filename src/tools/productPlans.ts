@@ -39,7 +39,8 @@ export const productPlansTool: ToolDef<typeof inputShape> = {
   description:
     'List a be2 product\'s plans (packages) with each plan\'s on/off-shelf state: pkg_oid, item_oid, plan name, is_active. ' +
     'Read-only, no side effects. Use to inspect plan-level shelf status before/without any change. ' +
-    'When asked about multiple products, call this for each prod_oid, then combine results into a single markdown table (columns: prod_oid, plan name, pkg_oid, is_active). Note that bundle plans cannot be scheduled individually. After presenting, ask the user which plans to modify; do not guess.',
+    'Accepts prod_mid (a be2-web URL product number, auto-resolved to the canonical prod_oid) or prod_oid — pass whichever you have. ' +
+    'When asked about multiple products, call this once per product (by prod_mid or prod_oid), then combine results into a single markdown table (columns: prod_oid, plan name, pkg_oid, is_active). Note that bundle plans cannot be scheduled individually. After presenting, ask the user which plans to modify; do not guess.',
   inputShape,
   uiResourceUri: 'ui://be2/products-panel.html',
   annotations: {

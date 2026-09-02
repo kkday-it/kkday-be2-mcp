@@ -5,8 +5,10 @@ import { resolveProdOids } from '../gateway/prodOidResolver.js'
 
 const inputShape = {
   feature: z.enum(['shelf', 'inventory', 'announce']).optional(),
-  prod_mids: z.array(z.string().min(1)).max(20).optional(),
-  prod_oids: z.array(z.string().min(1)).max(20).optional(),
+  prod_mids: z.array(z.string().min(1)).max(20).optional()
+    .describe('be2-web URL product numbers (mid) to prefill; each is resolved to its canonical prod_oid.'),
+  prod_oids: z.array(z.string().min(1)).max(20).optional()
+    .describe('be2 product internal oids to prefill the panel with.'),
 }
 
 export const openWorkbenchTool: ToolDef<typeof inputShape> = {
@@ -15,7 +17,7 @@ export const openWorkbenchTool: ToolDef<typeof inputShape> = {
     'Open the be2 workbench panel — the single consolidated surface for three product batch tasks: ' +
     '商品上下架 (shelf on/off for products/plans/bundles + reserve-date schedule), 商品庫存 (per-date quantity + platform switch), ' +
     '商品公告 (create multi-locale announcement). Pick a feature from the left nav; no need to switch tools. ' +
-    'feature/prod_oids only prefill the panel — they do NOT satisfy the server-side read-scope gate; only the panel\'s own ' +
+    'feature/prod_mids/prod_oids only prefill the panel (prod_mids are resolved to canonical prod_oids) — they do NOT satisfy the server-side read-scope gate; only the panel\'s own ' +
     'app_get_batch_view / app_get_announcement_view calls establish that. On a host without MCP Apps (e.g. Claude Code), ' +
     'this cannot render a panel — use be2_create_changeset plus the confirm-page flow instead.',
   inputShape,
