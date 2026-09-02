@@ -1,6 +1,7 @@
 import { GatewayError } from '../../../errors.js'
 import { fetchJson } from '../../../gateway/httpJson.js'
 import { decodePlatformId } from './userUuid.js'
+import { announceKeyVarFor } from '../../../config.js'
 
 // svc-b2c 成功 = HTTP 200 且 metadata.status '0000'（§3 契約）。與 core GatewayClient 不同 host/header/
 // envelope，故 module-local 自建。user-uuid 由 accessToken 自解（讀寫三處統一，皆有 accessToken）。
@@ -60,14 +61,37 @@ export class AnnouncementClient {
     const b = this.check('POST announcement', r)
     return (b as { data?: unknown }).data ?? b
   }
+
+  async getDetail(accessToken: string, announcementOid: number | string): Promise<unknown> {
+    const r = await fetchJson(this.fetchImpl, `${this.baseUrl}/admin/product/announcement/${announcementOid}`,
+      { method: 'GET', headers: this.headers(accessToken) }, this.timeoutMs, 'GET announcement detail')
+    const b = this.check('GET announcement detail', r)
+    return (b as { data?: unknown }).data ?? b
+  }
+
+  // PATCH 送整份文件（full REPLACE，§6.2）；response data 恆為 null，故不回傳 unwrap 值。
+  async patch(accessToken: string, announcementOid: number | string, body: Record<string, unknown>): Promise<void> {
+    const r = await fetchJson(this.fetchImpl, `${this.baseUrl}/admin/product/announcement/${announcementOid}`,
+      { method: 'PATCH', headers: this.headers(accessToken), body: JSON.stringify(body) }, this.timeoutMs, 'PATCH announcement')
+    this.check('PATCH announcement', r)
+  }
 }
 
-// 工廠：從 process.env 讀 svc-b2c host（沿用 GATEWAY_URL 的 gateway host + /svc-b2c/api/v1）與固定 api key。
-// live 寫入卡 S2S 403 前，key 可能未設 → 缺 key 時明確報錯（build/單元測試不經此路徑）。
+// env-aware x-api-key 解析：依 BE2_ENV 從 config.ts 的集中映射（announceKeyVarFor）取對應變數名，
+// 避免部署到 stage/prod 時仍誤用 SIT key（D3-5）。映射的單一事實來源在 config.ts，這裡只消費。
+export function resolveAnnounceApiKey(): string {
+  const env = process.env.BE2_ENV ?? 'sit'
+  const varName = announceKeyVarFor(env)
+  const key = process.env[varName]
+  if (!key) throw new GatewayError('ANNOUNCE_KEY_MISSING', `${varName} not set for BE2_ENV=${env}`, 500)
+  return key
+}
+
+// 工廠：從 process.env 讀 svc-b2c host（沿用 GATEWAY_URL 的 gateway host + /svc-b2c/api/v1）與依 BE2_ENV
+// 解析出的 api key。live 寫入卡 S2S 403 前，key 可能未設 → 缺 key 時明確報錯（build/單元測試不經此路徑）。
 export function makeAnnouncementClient(): AnnouncementClient {
   const gw = process.env.GATEWAY_URL
-  const apiKey = process.env.SIT_ANNOUNCE_API_KEY
   if (!gw) throw new GatewayError('GATEWAY_URL_MISSING', 'GATEWAY_URL not set', 500)
-  if (!apiKey) throw new GatewayError('ANNOUNCE_KEY_MISSING', 'SIT_ANNOUNCE_API_KEY not set (announcement live-write blocked)', 500)
+  const apiKey = resolveAnnounceApiKey()
   return new AnnouncementClient({ baseUrl: `${gw.replace(/\/$/, '')}/svc-b2c/api/v1`, apiKey })
 }

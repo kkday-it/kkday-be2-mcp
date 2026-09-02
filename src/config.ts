@@ -7,23 +7,33 @@ const PRESETS = {
     authsvcUrl: 'https://auth-220.sit.kkday.com',
     gatewayUrl: 'https://api-gateway-220.sit.kkday.com',
     keyVar: 'SIT_AUTHSVC_SERVICE_KEY',
+    announceKeyVar: 'SIT_ANNOUNCE_API_KEY',
   },
   sit: {
     authsvcUrl: 'https://auth-220.sit.kkday.com',
     gatewayUrl: 'https://api-gateway-220.sit.kkday.com',
     keyVar: 'SIT_AUTHSVC_SERVICE_KEY',
+    announceKeyVar: 'SIT_ANNOUNCE_API_KEY',
   },
   stage: {
     authsvcUrl: 'https://auth.stage.kkday.com',
     gatewayUrl: 'https://api-gateway.stage.kkday.com',
     keyVar: 'STAGE_AUTHSVC_SERVICE_KEY',
+    announceKeyVar: 'STAGE_ANNOUNCE_API_KEY',
   },
   prod: {
     authsvcUrl: 'https://auth.kkday.com',
     gatewayUrl: 'https://api-gateway.kkday.com',
     keyVar: 'PRODUCTION_AUTHSVC_SERVICE_KEY', // 待正式確認
+    announceKeyVar: 'PROD_ANNOUNCE_API_KEY',
   },
 } as const
+
+// env→announce x-api-key 變數名的單一事實來源（對齊上方 keyVar 慣例）。
+// svcB2cClient.ts 的 resolveAnnounceApiKey() 只消費此映射，不自行硬編。
+export function announceKeyVarFor(env: string): string {
+  return (PRESETS as Record<string, { announceKeyVar?: string }>)[env]?.announceKeyVar ?? 'SIT_ANNOUNCE_API_KEY'
+}
 
 const EnvSchema = z.object({
   BE2_ENV: z.enum(['sit-220', 'sit', 'stage', 'prod']).optional(),

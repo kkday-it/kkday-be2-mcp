@@ -1,0 +1,74 @@
+{
+  "interactions": [
+    {
+      "method": "GET",
+      "url": "https://api-gateway.stage.kkday.com/svc-b2c/api/v1/admin/product/announcement/2404",
+      "reqBody": null,
+      "status": 200,
+      "resBody": {
+        "metadata": { "status": "0000", "desc": "Success" },
+        "data": {
+          "productAnnouncementOid": 2404,
+          "name": "台中岩盤浴",
+          "prodOids": "[268051,285981]",
+          "isEnabled": true,
+          "startTime": "2026-08-28 00:00:00",
+          "endTime": "2026-09-23 12:00:00",
+          "createUser": "李佳樺(chiahua.lee)",
+          "createDate": "2025-08-08 08:20:16",
+          "modifyUser": "李佳樺(chiahua.lee)",
+          "modifyDate": "2026-08-29 15:37:12",
+          "langs": [
+            { "langCode": "en-default", "content": "[fixture] en-default template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "ja-jp", "content": "[fixture] ja-jp template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "ko-kr", "content": "[fixture] ko-kr template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "th-th", "content": "[fixture] th-th template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "vi-vn", "content": "[fixture] vi-vn template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "zh-cn", "content": "[fixture] zh-cn template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "zh-hk", "content": "[fixture] zh-hk template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "zh-my", "content": "[fixture] zh-my template announcement content — real multi-line text was not captured during sniff" },
+            { "langCode": "zh-tw", "content": "[fixture] zh-tw template announcement content — real multi-line text was not captured during sniff" }
+          ]
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "url": "https://api-gateway.stage.kkday.com/svc-b2c/api/v1/admin/product/announcement",
+      "reqBody": {
+        "name": "[CLAUDE-TEST] 契約探測POST 可刪",
+        "isEnabled": true,
+        "prodOids": [765928],
+        "startTime": "2026-09-01 00:00:00",
+        "endTime": "",
+        "langSettings": [
+          { "langCode": "zh-tw", "content": "[CLAUDE-TEST] 自動化契約探測POST，可刪。" }
+        ]
+      },
+      "status": 200,
+      "resBody": {
+        "metadata": { "status": "0000", "desc": "Success" },
+        "data": null
+      }
+    },
+    {
+      "method": "PATCH",
+      "url": "https://api-gateway.stage.kkday.com/svc-b2c/api/v1/admin/product/announcement/3084",
+      "reqBody": {
+        "name": "[CLAUDE-TEST] 自動化契約探測 可刪",
+        "isEnabled": true,
+        "prodOids": [765928],
+        "startTime": "2026-09-01 00:00:00",
+        "endTime": null,
+        "langSettings": [
+          { "langCode": "zh-tw", "content": "[CLAUDE-TEST] 自動化契約探測，可刪。EDIT2" }
+        ]
+      },
+      "status": 200,
+      "resBody": {
+        "metadata": { "status": "0000", "desc": "Success" },
+        "data": null
+      }
+    }
+  ]
+}

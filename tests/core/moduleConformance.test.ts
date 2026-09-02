@@ -14,6 +14,10 @@ const SAMPLES: Record<string, unknown> = {
     prod_oids: ['7781'], name: '公告', is_enabled: true,
     start_time: '2026-09-01 00:00:00', langs: ['zh-tw'], contents: [{ lang: 'zh-tw', content: 'hi' }],
   },
+  announcement_update: {
+    announcementOid: 3084, prod_oids: ['765928'], name: '公告(更新)', is_enabled: true,
+    start_time: '2026-09-01 00:00:00', langs: ['zh-tw'], contents: [{ lang: 'zh-tw', content: 'hi' }],
+  },
 }
 
 const DIFF_SAMPLES: Record<string, any[]> = {
@@ -27,6 +31,16 @@ const DIFF_SAMPLES: Record<string, any[]> = {
     prod_oids: ['7781'], product_names: ['A'], name: '公告', is_enabled: true,
     start_time: '2026-09-01 00:00:00', end_time: null, langs: ['zh-tw'],
     contents: [{ lang: 'zh-tw', content: 'hi' }], existing_count: 0, noop: false,
+  }],
+  announcement_update: [{
+    announcementOid: 3084, prod_oids: ['765928'], product_names: ['A'], name: '公告(更新)', is_enabled: true,
+    start_time: '2026-09-01 00:00:00', end_time: null, langs: ['zh-tw'],
+    contents: [{ lang: 'zh-tw', content: 'hi' }],
+    current: {
+      name: '公告(舊)', is_enabled: true, prod_oids: ['765928'], start_time: '2026-08-28 00:00:00',
+      end_time: null, langs: ['zh-tw'], contents: [{ lang: 'zh-tw', content: 'old' }],
+    },
+    noop: false,
   }],
 }
 
@@ -99,6 +113,10 @@ describe('module conformance', () => {
         // announcement 是 create（target-only，無 live current）——改一個進 hash 的 target 欄位
         // （name）證明 diffVersion 非恆定 hash。其 staleness 綁的是 target payload，非 live 現況。
         mutated[0].name = mutated[0].name + '-changed'
+      } else if (type === 'announcement_update') {
+        // announcement_update 綁 live current（跟 create 不同）——改現況快照的欄位證明 diffVersion
+        // 對 live 現況變動敏感（別人在批准前又改了現況，diffVersion 應該跟著變、觸發 stale 偵測）。
+        mutated[0].current.name = mutated[0].current.name + '-changed'
       }
       expect(m.diffVersion(mutated)).not.toBe(m.diffVersion(diffSample as any))
     })
