@@ -5,6 +5,7 @@ import { buildBatchView, type BatchViewActionType } from './batchView.js'
 import { createChangesetCore, createChangesetInputShape } from '../core/changeset/tools.js'
 import { extractProductInfo } from './findProducts.js'
 import { makeAnnouncementClient } from '../modules/announcement/create/svcB2cClient.js'
+import { resolveProdOids } from '../gateway/prodOidResolver.js'
 
 // 無 existence leak：找不到 id 與「id 存在但非自己建立」回同一種錯誤，讓外部觀察者無法用
 // error 差異探測他人 change-set 是否存在。
@@ -136,7 +137,8 @@ export const appGetBatchViewTool: AppToolDef = {
   description: 'Panel-only: load products -> plans + current state for the batch wizard (registers server-side read-scope).',
   inputShape: {
     action_type: z.enum(['inventory_platform', 'shelf_schedule', 'inventory_setting', 'shelf_toggle_product', 'shelf_toggle_plan', 'shelf_toggle_bundle']),
-    prod_oids: z.array(z.string().min(1)).min(1).max(10),
+    prod_mids: z.array(z.string().min(1)).max(10).optional(),
+    prod_oids: z.array(z.string().min(1)).max(10).optional(),
   } as never,
   annotations: {
     title: 'Get batch view',
@@ -149,12 +151,22 @@ export const appGetBatchViewTool: AppToolDef = {
     // 沿用既有 L0/L2 讀取工具慣例：view 每次呼叫做真實 gateway 讀取，計一次讀取 budget（與
     // appRateBudget 的面板輪詢節流是兩個獨立額度，見 appPipeline.ts AppToolContext 註解）。
     ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId)
+    // Combined cap: each array has max(10) but without a joint limit the tool could feed up to 20 oids
+    // into buildBatchView — double the documented ≤10 and the gateway burst assumption. Fail fast.
+    if ((args.prod_mids?.length ?? 0) + (args.prod_oids?.length ?? 0) > 10) {
+      return makeEnvelope([], [{ key: 'input', code: 'TOO_MANY_IDS', message: 'Provide at most 10 ids total across prod_mids and prod_oids.' }])
+    }
+    const { resolved, resolutions, errors: resolveErrors } =
+      await resolveProdOids(args.prod_mids ?? [], args.prod_oids ?? [], ctx.gateway, ctx.accessToken)
+    if (resolved.length === 0 && resolveErrors.length === 0) {
+      return makeEnvelope([], [{ key: 'input', code: 'MISSING_ID', message: 'Provide prod_mids or prod_oids.' }])
+    }
     const { products, errors, read_oids } = await buildBatchView(
-      ctx.gateway, ctx.accessToken, args.action_type as BatchViewActionType, args.prod_oids as string[],
+      ctx.gateway, ctx.accessToken, args.action_type as BatchViewActionType, resolved,
     )
     // schedule_tz（spec §9：面板須標示實際 BE2_TZ 而非通用「伺服器時區」）——由 ctx 帶出給面板 step-1
     // 顯示。排程輸入的 wall-clock 即以此 tz 於 server 端換算 UTC。
-    return makeEnvelope([{ products, schedule_tz: ctx.scheduleTz }], errors, read_oids)
+    return makeEnvelope([{ products, schedule_tz: ctx.scheduleTz }], [...resolveErrors, ...errors], read_oids, resolutions)
   },
 }
 
@@ -194,12 +206,24 @@ export const appCreateChangesetTool: AppToolDef = {
 export const appGetAnnouncementViewTool: AppToolDef = {
   name: 'app_get_announcement_view',
   description: 'Panel-only: load products (names + existing announcement count) for the announcement wizard (registers server-side read-scope for prod_oids).',
-  inputShape: { prod_oids: z.array(z.string().min(1)).min(1).max(10) } as never,
+  inputShape: {
+    prod_mids: z.array(z.string().min(1)).max(10).optional(),
+    prod_oids: z.array(z.string().min(1)).max(10).optional(),
+  } as never,
   annotations: { title: 'Get announcement view', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   async handler(args, ctx: AppToolContext) {
     ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId)
-    const prodOids = args.prod_oids as string[]
-    const errors: EnvelopeError[] = []
+    // Combined cap: each array has max(10) but without a joint limit the tool could read up to 20 oids —
+    // double the documented ≤10 and the gateway burst assumption. Fail fast.
+    if ((args.prod_mids?.length ?? 0) + (args.prod_oids?.length ?? 0) > 10) {
+      return makeEnvelope([], [{ key: 'input', code: 'TOO_MANY_IDS', message: 'Provide at most 10 ids total across prod_mids and prod_oids.' }])
+    }
+    const { resolved: prodOids, resolutions, errors: resolveErrors } =
+      await resolveProdOids(args.prod_mids ?? [], args.prod_oids ?? [], ctx.gateway, ctx.accessToken)
+    if (prodOids.length === 0 && resolveErrors.length === 0) {
+      return makeEnvelope([], [{ key: 'input', code: 'MISSING_ID', message: 'Provide prod_mids or prod_oids.' }])
+    }
+    const errors: EnvelopeError[] = [...resolveErrors]
     const products: Array<{ prod_oid: string; name?: string; existing_count: number | null }> = []
     // existing_count 是 best-effort context（live 讀取卡 svc-b2c S2S 403、且 dev/test 可能無
     // SIT_ANNOUNCE_API_KEY）。client 建不起來或 list 失敗一律靜默降級（existing_count = null 未知），
@@ -228,14 +252,22 @@ export const appGetAnnouncementViewTool: AppToolDef = {
         counts = (!anyGroupable && items.length > 0) ? null : m
       } catch { counts = null }
     }
+    // read_oids must reflect ONLY products this user actually read here — never the full resolved set.
+    // Because the mid→oid cache is global (a cache hit skips the per-user mid-info call), registering an
+    // unread oid would let user B pass the scope-gate for an oid mapped by user A's earlier lookup. So an
+    // oid whose info GET fails (403/404) is reported as an error but NOT added to read_oids.
+    const readOids: string[] = []
     for (const oid of prodOids) {
       let name: string | undefined
-      try { name = extractProductInfo(await ctx.gateway.get(`/product/api/v1/drafts/products/${encodeURIComponent(oid)}/info`, ctx.accessToken)).name }
+      try {
+        name = extractProductInfo(await ctx.gateway.get(`/product/api/v1/drafts/products/${encodeURIComponent(oid)}/info`, ctx.accessToken)).name
+        readOids.push(oid)
+      }
       catch (e) { errors.push(toEnvelopeError(oid, e)) }
       const existing: number | null = counts ? (counts.get(oid) ?? 0) : null
       products.push({ prod_oid: oid, name, existing_count: existing })
     }
-    return makeEnvelope([{ products }], errors, prodOids)
+    return makeEnvelope([{ products }], errors, readOids, resolutions)
   },
 }
 
