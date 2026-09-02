@@ -60,6 +60,33 @@ describe('be2_get_product_plans', () => {
     expect(env.errors).toHaveLength(1)
     expect(env.errors[0]).toMatchObject({ key: 'p1', status: 500 })
   })
+
+  it('只給 prod_mid → 呼叫 resolver、底層打 canonical oid、resolved_ids 帶出', async () => {
+    const env = await productPlansTool.handler({ prod_mid: '10759' } as never,
+      ctxWith({ 'mid-10759/info': { prod_oid: 38352 }, '/packages': pkgs, '/package-configs': { config_data: { k1: { is_active: true } } } }))
+    expect(env.items).toEqual([{ pkg_oid: 'k1', item_oid: 'i1', name: '標準方案', is_active: true }])
+    expect(env.resolved_ids).toEqual([{ mid: '10759', oid: '38352' }])
+    expect(env.read_oids).toContain('38352')
+  })
+
+  it('只給 prod_oid → 不呼叫 resolver、無 resolved_ids', async () => {
+    const env = await productPlansTool.handler({ prod_oid: 'p1' },
+      ctxWith({ '/packages': pkgs, '/package-configs': { config_data: { k1: { is_active: true } } } }))
+    expect('resolved_ids' in env).toBe(false)
+    expect(env.read_oids).toContain('p1')
+  })
+
+  it('兩者皆空 → MISSING_ID error,不打任何 API', async () => {
+    const env = await productPlansTool.handler({} as never, ctxWith({}))
+    expect(env.items).toEqual([])
+    expect(env.errors[0].code).toBe('MISSING_ID')
+  })
+
+  it('兩者都給且解析結果不一致 → MID_OID_MISMATCH,不悄悄擇一', async () => {
+    const env = await productPlansTool.handler({ prod_mid: '10759', prod_oid: '999' } as never,
+      ctxWith({ 'mid-10759/info': { prod_oid: 38352 } }))
+    expect(env.errors[0].code).toBe('MID_OID_MISMATCH')
+  })
 })
 
 describe.skipIf(!existsSync('tests/fixtures/packages.json'))('fixture: real SIT shape', () => {
