@@ -58,14 +58,16 @@
 
 實攔：UI 只改一個語系的 content，PATCH body 仍夾帶 `name/isEnabled/prodOids/startTime/endTime` 全欄位 + **完整 langSettings 陣列**。前端送「整份目標文件」非 diff。→ executor 走 **read-merge-write 讀出現況全欄位、覆蓋目標欄位、整包送回**。
 
-**⚠️ 單次觀察未證實的一點**：本次公告只有單一語系，無法排除「後端對 langSettings 做 upsert-by-langCode」。要證實「省略某語系是否被刪」，需**一次多語系觀察**（拿 2+ 語系公告，PATCH 只送一個 langCode 看另一個是否消失）——列 executor 的 follow-up，不阻擋產出（前端既然整包送，module 比照整包送即安全）。
+**✅ 多語系語義已證實（2026-09-02 stage live e2e）＝ per-lang full REPLACE，省略某語系 = 刪掉它**。實驗：建 `[en-default, zh-tw]` 公告 → PATCH 只送 `langSettings=[zh-tw]` → 重讀回 `[zh-tw]`，en-default 消失。後端**不做** upsert-by-langCode。
+
+**→ 安全含意（module 使用契約，實作必知）**：`announcement_update` 的 item **必須攜帶完整語系集**（`contents`/`langSettings` 要涵蓋所有想保留的語系），與 `name/prodOids` 等其他欄位一樣是「整份目標文件」。**只帶部分語系會默默刪掉其他語系。** 現行 executor 送 `it.contents` 全量（不 merge current langs）＝正確地實作了「item = 完整目標文件」語義；itemSchema 亦以此為前提。**若未來要支援「部分語系編輯」，executor 必須改為 merge current langs**（把 current 有、item 沒帶的語系補回 langSettings）——目前不做（YAGNI），但列為已知擴充點。
 
 ### 6.3 讀寫不對稱地雷（實作必看）
 
 - **欄位名**：READ（GET 詳情）用 `langs`，WRITE 用 `langSettings`（同結構 `[{langCode, content}]`）。
 - **prodOids 型別三態**：GET 詳情回**字串** `"[268051,285981]"`、list 回**真陣列** `[765928]`、寫入送 **int 陣列**。diff 格比對時要正規化。
 
-**結論：欄位 gate 不 block schema/keys/diff/renderer/ui 五格（欄位已知）；但 executor 的 read-merge-write 邏輯依賴 merge-vs-replace 語義 → executor 格同時被「授權 gate」與「語義未知」雙重 gate。**
+**結論（2026-09-02 更新）：兩個 gate 都已解——授權 gate 於 stage 消除（§5）、merge-vs-replace 語義於 stage live e2e 證實（§6.2）。module 六格全產、已 live 驗收（我方 `AnnouncementClient.patch` 對 stage 真 200/`0000`）。**
 
 ## 7. 參考格對照（stage② 用）
 
