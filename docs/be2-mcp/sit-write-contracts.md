@@ -244,6 +244,21 @@ be2-220 真人登入 + playwright，商品 2247、item 1677495（**sku_by_date**
 2. **SIT be2-220 仍卡** auth-service verify v2 per-URI 規則（403，與上節同），RD 授權 grant 尚未生效。要 SIT 也綠，仍需該 URI 規則綁的 business action 加進帳號群組（解卡請求見上節）。
 3. per-環境授權差異（stage 有該 action、be2-220 沒有）與 Phase 2a shelf-toggle 同構，再次確認。
 
+### REF：be2 後台「修改商品庫存」UI 操作路徑（Confluence QS/2192212021）
+
+> 來源：Confluence「Be2 修改商品庫存」（QA Squad 知識庫 QS space，pageId `2192212021`，陈海东 2026-07-20）。**營運人員視角**的後台點擊教學，補足本文件其餘各節「API 契約 / verify 除錯」的**另一半**（同一件事的 UI 面）。原頁四張截圖為 media blob，此處只保留步驟文字，圖請開原頁：<https://kkday.atlassian.net/wiki/spaces/QS/pages/2192212021/Be2>。
+
+UI 四步 ↔ 本 repo 已出土的端點/契約對照：
+
+| # | 原頁 UI 操作 | 對應本文件已驗證的端點/契約 |
+|---|---|---|
+| 1 | be2 後台用**商品 id** 找到商品 → 進「庫存設定」 | 商品定位：`pkg_oid → item_oid`（`be2_get_product_plans` / probe-sit）；庫存頁載入走 `basic-info`（見「inventory-platform read」節，繞過 configs 403） |
+| 2 | 選對應**方案 + 庫存設定 + 供應商** | 粒度 = `item_oid × supplier_oid`；模式切換 `PUT item-configs/{itemOid}/inventory-setting`（`control_type∈[0,1,2]`, `inventory_type∈[null,0,1]`）＋供應商層布林 `PUT items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting`（見「2026-08-10 追加」§4） |
+| 3 | 選**庫存方式 → 搜索庫存** | 逐日數量讀取 = `POST /product/api/v1/items/{itemOid}/inventories/search`（**非** GET；GET 是 S2S 內部端點對 user token 一律 403，見「2026-08-10 追加」）；回應形狀 `data[itemOid].fullday`（見「2026-08-19 追加①」） |
+| 4 | 對搜索結果**編輯 → 結果立即生效** | 逐日寫入 = `PUT /product/api/v1/items/{itemOid}/inventories/{supplierOid}/quantity`，body `{inventory_data:{modify_type,remain_qty},modify_user}`（`modify_type` 0=adjust／1=replace，`remain_qty` 讀寫同形；見「2026-08-19 追加②」）。**「立即生效」= 無排程**：庫存端點全為即時寫入，寫入後清可售 cache 立即影響前台（見 `probe-inventory-native-schedule.md`——塊 B 排程層須自建，be2 無原生庫存排程） |
+
+**用途**：新增/檢視庫存 module 或對營運人員解說時，用此表把「使用者在後台點什麼」對回「MCP 實際打哪支 API」。UI 操作教學的權威在該 Confluence 頁，端點契約的權威在本文件各節。
+
 ## inventory-platform read (Phase 4a Task 1, 2026-08-14)
 
 目的:為 `inventory_platform` change-set(切換方案的庫存管理平台:BE2／BE2_SCM／EXTERNAL)定案「以 `(item_oid, supplier_oid)` 為鍵讀兩布林 `is_external_inventory`/`is_inventory_mgmt`」的讀取端點,供 Task 3 `readSupplierInventorySetting()` 實作依據。已知寫入契約(design doc §4.1,未在本次驗證):`PUT items/{itemOid}/supplier-configs/{supplierOid}/inventory-setting` body `{is_external_inventory, is_inventory_mgmt, modify_user}`。
