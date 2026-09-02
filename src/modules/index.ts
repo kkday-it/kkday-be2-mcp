@@ -5,6 +5,7 @@ import { inventoryPlatformModule } from './product/inventoryPlatform/module.js'
 import { shelfScheduleModule } from './product/shelfSchedule/module.js'
 import { shelfToggleBundleModule } from './product/shelfToggleBundle/module.js'
 import { announcementCreateModule } from './announcement/create/module.js'
+import { announcementUpdateModule } from './announcement/update/module.js'
 
 export function registerAllModules(): void {
   const existing = new Set(listModules().map(m => m.actionType))
@@ -15,6 +16,7 @@ export function registerAllModules(): void {
   if (!existing.has(shelfScheduleModule.actionType)) registerModule(shelfScheduleModule)
   if (!existing.has(shelfToggleBundleModule.actionType)) registerModule(shelfToggleBundleModule)
   if (!existing.has(announcementCreateModule.actionType)) registerModule(announcementCreateModule)
+  if (!existing.has(announcementUpdateModule.actionType)) registerModule(announcementUpdateModule)
 }
 
 registerAllModules()

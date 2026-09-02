@@ -10,6 +10,11 @@ import { renderConfirm } from './renderer.js'
 import { makeAnnouncementClient } from './svcB2cClient.js'
 
 const langContentShape = z.object({ lang: z.string().min(1), content: z.string() })
+// .strict()：announcement_update 的 itemSchema 是 create 的超集（多一個必填 announcementOid，
+// module-onboarding §3/9b）。core/changeset/tools.ts 的 itemShape 是 z.union(所有 module schema)——
+// 若 create 這份非 strict，update item（含 announcementOid）會被 create 的寬鬆 schema「命中」並把
+// announcementOid 剝除（zod 預設 strip 模式），union 短路成 create 的形狀，PK 遺失。strict 讓多餘鍵
+// 的 update item 無法命中 create schema，跟 shelf_toggle 的 product/plan 是同一個既有修法（見該檔案）。
 const announcementItemShape = z.object({
   prod_oids: z.array(z.string().min(1)).min(1),
   name: z.string().min(1).max(254),
@@ -18,7 +23,7 @@ const announcementItemShape = z.object({
   end_time: z.string().nullable().optional(),
   langs: z.array(z.string().min(1)).min(1),
   contents: z.array(langContentShape),
-})
+}).strict()
 
 function isAnnouncementItem(i: unknown): i is AnnouncementCreateItem {
   const a = i as AnnouncementCreateItem
