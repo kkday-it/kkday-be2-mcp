@@ -78,6 +78,16 @@ describe('be2_find_products', () => {
     const env = await findProductsTool.handler({ prod_mids: [], prod_oids: [] } as never, ctxWith({}))
     expect(env.errors[0].code).toBe('MISSING_ID')
   })
+
+  it('合併總量 > 20 → TOO_MANY_IDS(在打 gateway 前擋下,避免 20→40 oid 破壞 burst 假設)', async () => {
+    // ctxWith({}) 對任何 gateway.get 都 throw;若未在 resolve 前擋下,會回 gateway 錯誤而非 TOO_MANY_IDS。
+    const env = await findProductsTool.handler(
+      { prod_mids: Array.from({ length: 11 }, (_, i) => `m${i}`),
+        prod_oids: Array.from({ length: 10 }, (_, i) => `o${i}`) } as never,
+      ctxWith({}))
+    expect(env.errors[0].code).toBe('TOO_MANY_IDS')
+    expect(env.items).toEqual([])
+  })
   it('直接用 prod_oid 查詢卻 404 → 錯誤訊息含 mid 提示', async () => {
     const boom = Object.assign(new Error('GET .../info -> 404: not_found'), { status: 404 })
     const env = await findProductsTool.handler({ prod_oids: ['546965'] } as never,

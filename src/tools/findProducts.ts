@@ -64,6 +64,12 @@ export const findProductsTool: ToolDef<typeof inputShape> = {
     openWorldHint: true,
   },
   async handler(args, ctx) {
+    // Combined cap: prod_mids/prod_oids each have max(20), but without a joint limit the tool could
+    // resolve up to 40 oids — double the documented ≤20 and the gateway burst assumption. Fail fast
+    // before hitting the gateway.
+    if ((args.prod_mids?.length ?? 0) + (args.prod_oids?.length ?? 0) > 20) {
+      return makeEnvelope([], [{ key: 'input', code: 'TOO_MANY_IDS', message: 'Provide at most 20 ids total across prod_mids and prod_oids.' }])
+    }
     const { resolved, resolutions, errors: resolveErrors } =
       await resolveProdOids(args.prod_mids ?? [], args.prod_oids ?? [], ctx.gateway, ctx.accessToken)
     if (resolved.length === 0 && resolveErrors.length === 0) {

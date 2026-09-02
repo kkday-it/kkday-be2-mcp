@@ -86,3 +86,37 @@ it('app_get_announcement_view: prod_mids 解析後迴圈用 canonical oid,resolv
   expect(env.resolved_ids).toEqual([{ mid: '2247', oid: '35992' }])
   expect(env.read_oids).toContain('35992')
 })
+
+it('app_get_announcement_view: 讀取失敗的 oid 不進 read_oids(只登記成功讀到的,防跨-user cache scope 繞過)', async () => {
+  const env = await appGetAnnouncementViewTool.handler(
+    { prod_oids: ['good1', 'bad1'] } as never,
+    ctx({ gateway: { get: async (p: string) => {
+      if (p.includes('/drafts/products/bad1/info')) throw Object.assign(new Error('403 no permission'), { status: 403 })
+      if (p.includes('/drafts/products/good1/info')) return { name: 'Good' }
+      throw Object.assign(new Error('404'), { status: 404 })
+    } } }))
+  expect(env.read_oids).toContain('good1')          // 本 user 實際讀到 → 登記
+  expect(env.read_oids).not.toContain('bad1')        // 讀取失敗(403)→ 不得進 scope substrate
+  expect(env.errors.some(e => e.key === 'bad1')).toBe(true)
+})
+
+it('app_get_batch_view: 合併總量 > 10 → TOO_MANY_IDS(不 burst gateway)', async () => {
+  let called = false
+  const env = await appGetBatchViewTool.handler(
+    { action_type: 'shelf_schedule',
+      prod_mids: Array.from({ length: 6 }, (_, i) => `m${i}`),
+      prod_oids: Array.from({ length: 5 }, (_, i) => `o${i}`) } as never,
+    ctx({ gateway: { get: async () => { called = true; return {} } } }))
+  expect(env.errors[0].code).toBe('TOO_MANY_IDS')
+  expect(called).toBe(false)
+})
+
+it('app_get_announcement_view: 合併總量 > 10 → TOO_MANY_IDS(不 burst gateway)', async () => {
+  let called = false
+  const env = await appGetAnnouncementViewTool.handler(
+    { prod_mids: Array.from({ length: 6 }, (_, i) => `m${i}`),
+      prod_oids: Array.from({ length: 5 }, (_, i) => `o${i}`) } as never,
+    ctx({ gateway: { get: async () => { called = true; return {} } } }))
+  expect(env.errors[0].code).toBe('TOO_MANY_IDS')
+  expect(called).toBe(false)
+})

@@ -151,6 +151,11 @@ export const appGetBatchViewTool: AppToolDef = {
     // 沿用既有 L0/L2 讀取工具慣例：view 每次呼叫做真實 gateway 讀取，計一次讀取 budget（與
     // appRateBudget 的面板輪詢節流是兩個獨立額度，見 appPipeline.ts AppToolContext 註解）。
     ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId)
+    // Combined cap: each array has max(10) but without a joint limit the tool could feed up to 20 oids
+    // into buildBatchView — double the documented ≤10 and the gateway burst assumption. Fail fast.
+    if ((args.prod_mids?.length ?? 0) + (args.prod_oids?.length ?? 0) > 10) {
+      return makeEnvelope([], [{ key: 'input', code: 'TOO_MANY_IDS', message: 'Provide at most 10 ids total across prod_mids and prod_oids.' }])
+    }
     const { resolved, resolutions, errors: resolveErrors } =
       await resolveProdOids(args.prod_mids ?? [], args.prod_oids ?? [], ctx.gateway, ctx.accessToken)
     if (resolved.length === 0 && resolveErrors.length === 0) {
@@ -208,6 +213,11 @@ export const appGetAnnouncementViewTool: AppToolDef = {
   annotations: { title: 'Get announcement view', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   async handler(args, ctx: AppToolContext) {
     ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId)
+    // Combined cap: each array has max(10) but without a joint limit the tool could read up to 20 oids —
+    // double the documented ≤10 and the gateway burst assumption. Fail fast.
+    if ((args.prod_mids?.length ?? 0) + (args.prod_oids?.length ?? 0) > 10) {
+      return makeEnvelope([], [{ key: 'input', code: 'TOO_MANY_IDS', message: 'Provide at most 10 ids total across prod_mids and prod_oids.' }])
+    }
     const { resolved: prodOids, resolutions, errors: resolveErrors } =
       await resolveProdOids(args.prod_mids ?? [], args.prod_oids ?? [], ctx.gateway, ctx.accessToken)
     if (prodOids.length === 0 && resolveErrors.length === 0) {
@@ -242,14 +252,22 @@ export const appGetAnnouncementViewTool: AppToolDef = {
         counts = (!anyGroupable && items.length > 0) ? null : m
       } catch { counts = null }
     }
+    // read_oids must reflect ONLY products this user actually read here — never the full resolved set.
+    // Because the mid→oid cache is global (a cache hit skips the per-user mid-info call), registering an
+    // unread oid would let user B pass the scope-gate for an oid mapped by user A's earlier lookup. So an
+    // oid whose info GET fails (403/404) is reported as an error but NOT added to read_oids.
+    const readOids: string[] = []
     for (const oid of prodOids) {
       let name: string | undefined
-      try { name = extractProductInfo(await ctx.gateway.get(`/product/api/v1/drafts/products/${encodeURIComponent(oid)}/info`, ctx.accessToken)).name }
+      try {
+        name = extractProductInfo(await ctx.gateway.get(`/product/api/v1/drafts/products/${encodeURIComponent(oid)}/info`, ctx.accessToken)).name
+        readOids.push(oid)
+      }
       catch (e) { errors.push(toEnvelopeError(oid, e)) }
       const existing: number | null = counts ? (counts.get(oid) ?? 0) : null
       products.push({ prod_oid: oid, name, existing_count: existing })
     }
-    return makeEnvelope([{ products }], errors, prodOids, resolutions)
+    return makeEnvelope([{ products }], errors, readOids, resolutions)
   },
 }
 
