@@ -26,7 +26,11 @@ export function normalizeBody(body: unknown): unknown {
 }
 
 export function matchKey(method: string, url: string, body: unknown): string {
-  return `${method.toUpperCase()} ${normalizeUrl(url)} ${JSON.stringify(normalizeBody(body))}`
+  // body 用 ?? null 正規化：GET 等無 body 請求時 fetch init 沒有 body → bodyToJson 回傳 undefined，
+  // 但手工撰寫/探測腳本存的 cassette 常寫 "reqBody": null（JSON 沒有 undefined）。兩者語意相同（皆「無 body」），
+  // 若不正規化，JSON.stringify(undefined) 產生字面 "undefined" 而 JSON.stringify(null) 產生 "null"，
+  // 造成同一支 GET 請求對不上手工 cassette，讓 replay 誤判為「no cassette match」。
+  return `${method.toUpperCase()} ${normalizeUrl(url)} ${JSON.stringify(normalizeBody(body ?? null))}`
 }
 
 export type CassetteFetch = typeof fetch & {

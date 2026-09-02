@@ -61,6 +61,20 @@ export class AnnouncementClient {
     const b = this.check('POST announcement', r)
     return (b as { data?: unknown }).data ?? b
   }
+
+  async getDetail(accessToken: string, announcementOid: number | string): Promise<unknown> {
+    const r = await fetchJson(this.fetchImpl, `${this.baseUrl}/admin/product/announcement/${announcementOid}`,
+      { method: 'GET', headers: this.headers(accessToken) }, this.timeoutMs, 'GET announcement detail')
+    const b = this.check('GET announcement detail', r)
+    return (b as { data?: unknown }).data ?? b
+  }
+
+  // PATCH 送整份文件（full REPLACE，§6.2）；response data 恆為 null，故不回傳 unwrap 值。
+  async patch(accessToken: string, announcementOid: number | string, body: Record<string, unknown>): Promise<void> {
+    const r = await fetchJson(this.fetchImpl, `${this.baseUrl}/admin/product/announcement/${announcementOid}`,
+      { method: 'PATCH', headers: this.headers(accessToken), body: JSON.stringify(body) }, this.timeoutMs, 'PATCH announcement')
+    this.check('PATCH announcement', r)
+  }
 }
 
 // env-aware x-api-key 解析：依 BE2_ENV 從 config.ts 的集中映射（announceKeyVarFor）取對應變數名，
