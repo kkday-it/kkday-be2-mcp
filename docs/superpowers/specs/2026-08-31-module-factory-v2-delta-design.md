@@ -120,14 +120,14 @@ Gate 重整（§4）                                        ← D1 載體到位�
 ## 7. 測試與驗收
 
 - D0：cassette harness 自身單元測試（record 一筆→replay 命中→比不到丟錯）；用 announcement-update 三筆真流量當 fixture。
-- D1：Workflow 腳本故意中斷一格 → `resumeFromRunId` 只重跑該格、前面快取命中（實測可續跑）。
+- D1（**2026-09-02 下修**）：交付 = Workflow 載體文件 `references/workflow-carrier.md`（腳本骨架 + `resumeFromRunId` 用法 + gate 邊界）齊備即達標。**「故意中斷一格 → 實測 resume 快取命中」的 live 實證延後**——它屬 factory **執行期**驗證（需真跑 Workflow 多代理），非本 delta 的 code；等首次用 v2 Workflow 載體實跑一個 module 時順帶驗。原「實測可續跑」為 code-review 指出 plan 相對 spec under-scope、diff 忠實跟隨 plan，故據實對齊。
 - D3：對一個已知 SIT-gated 標的跑 discovery，驗證自動退避 stage 並取得 200。
 - D4：對 announcement_update 跑 discovery，驗證繼承節（host/envelope/header/授權碼/row 欄位）標「繼承自 create」、且 executor 需要的三支 read-merge-write endpoint（GET 詳情 + POST 差異 + PATCH）都有 sniff 並錄成 cassette（不是只 sniff PATCH）。
 - 整體 dogfood：用 v2 實際產出 `announcement_update` module（契約已 GREEN，見 contract 報告），當 v2 的第一個真實驗收標的 + 第一捲 cassette。
 
 ## 8. 開放問題
 
-1. **merge-vs-replace 的多語系邊界**：單次觀察未證實「PATCH 省略某 langCode 是否刪該語系」。executor 比照前端「整包送 langSettings」即安全，但列 follow-up：拿 2+ 語系公告做一次多語系 PATCH 觀察。
+1. **merge-vs-replace 的多語系邊界 — ✅ 已解（2026-09-02 stage live e2e）**：實測 = per-lang **full REPLACE**，PATCH 省略某 langCode **會刪掉該語系**（建 `[en,zh-tw]` → 只送 zh-tw → en 消失）。→ executor 送整包 `it.contents` 為正確且必要（item 須帶完整語系集）。詳見 contract `sit-announcement-update-contract.md` §6.2。（原「未證實」已由 dogfood Gate② 消除。）
 2. **stage 殘留清理**：實跡跑在 stage 商品 765928 留 2 筆已停用 `[CLAUDE-TEST]` 公告（oid 3084/3085），BE2 前台無刪除鈕，需 DELETE API 或有權限者處理。
 3. **cassette 過期**：stage fixture 會被定期 restore（見 memory `be2-stage-fixture-volatile`），cassette 是快照不受影響，但「契約本身變動」需重錄——是否加 cassette 版本戳 + 定期對 live 校驗，留 writing-plans 評估。
 

@@ -5,8 +5,10 @@
 >
 > 追溯補記（2026-08-19 起才有本規則，先前的 spec 異動追溯登記於下）。
 
-## 2026-08-31
+## 2026-09-02
 
+- `2026-08-31-module-factory-v2-delta-design.md` §7（D1 驗收下修）/ 把 D1 驗收從「Workflow 腳本故意中斷一格 → resumeFromRunId 實測可續跑」改為「交付 = 載體文件 `workflow-carrier.md` 齊備即達標;live resume 實證延後(屬 factory 執行期驗證,需真跑 Workflow 多代理,非本 delta code),首次用 v2 載體實跑 module 時順帶驗」/ 為什麼:雙軸 code-review(Spec 軸)指出 plan Task 7 相對 spec §7 under-scope(只 scope 寫文件、無「真跑+殺一格+示範 resume」的任務),diff 忠實跟隨 under-scoped plan → 據實對齊驗收準則(使用者選項 A,2026-09-02)。PR #13。
+- `2026-08-31-module-factory-v2-delta-design.md` §8 Q1（多語系開放問題 → 已解）/ 從「單次觀察未證實 PATCH 省略某 langCode 是否刪」改為「已解:stage live e2e 證實 per-lang full REPLACE,省略即刪;executor 送整包 it.contents 正確且必要」/ 為什麼:dogfood Gate② 的 stage live e2e 已消除此未知(contract §6.2 已記),spec §8 原文與 contract 自相矛盾,依 CLAUDE.md「規格矛盾要處理」對齊實況。
 - `2026-08-31-module-factory-v2-delta-design.md`（全檔，新建）/ Module Factory v2 delta：把 v1 三段闘關（`2026-08-18-module-factory-design.md`）升級成可續跑 + 離線 replay + 環境退避。六個 delta：**D0** record/replay cassette harness（`tests/support/cassette.ts`，攔 `fetchImpl` 縫，foundational 前置）、**D1** Workflow 載體 + resume（退休 v1 §5 對背景 Workflow 的否決——`resumeFromRunId` 讓 gate 暫停後可續跑，理由已過時）、**D2** cassette 錄放整合三段（段②測試預設 cassette-backed、零 live）、**D3** discovery 環境退避（SIT 撞 403/502 自動改打 stage，不立即判授權 gate）、**D4** 姊妹契約繼承（同 domain 標的 90% 離線繼承、只 sniff 新增部分）、**D5** sniff 用 `page.route`+`postData()`（`browser_network_requests` 對 BE2 SPA 抓不到 body）、**D6** 可攜性文件。Gate 從 3 收斂到 2 人工（Gate①計畫核准 / Gate② live 寫入），discovery 綠燈全自動，但**保留 v1 GATE 1 欄位/授權 gate 判定核心不弱化** / 為什麼：2026-08-31 用 v1 對 `announcement_update` 實跡跑逼出四摩擦點（不可續跑 / 無離線 replay / 環境卡死誤判成授權 gate / 重造姊妹契約）+ 兩探索發現（page.route、可攜性），全有實證，證據見 `docs/be2-mcp/sit-announcement-update-contract.md`。
 - `../../be2-mcp/sit-announcement-update-contract.md`（非 specs/ 目錄，附記）/ 新建 announcement_update 契約報告並經 stage 實攔改為 GREEN：授權 gate 解除（stage POST/PATCH 皆 200/`0000`，SIT 403 判定為環境問題）、merge-vs-replace 解出 = full REPLACE、補齊 POST/PATCH wire body 與讀寫欄位不對稱地雷（READ `langs` / WRITE `langSettings`；prodOids 型別三態）/ 為什麼：v2 spec §1 的證據來源，此處交叉登記。
 
