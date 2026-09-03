@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="900" viewBox="0 0 1280 900" font-family="PingFang TC, Noto Sans TC, Helvetica, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrowDash" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94A3B8"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="900" fill="#FFFFFF"/>
+
+  <!-- Title -->
+  <text x="40" y="42" font-size="22" font-weight="700" fill="#111827">be2-mcp 部署架構圖</text>
+  <text x="40" y="66" font-size="12.5" fill="#6B7280">SIT / Stage / Prod 同形狀（每環境換 host ＋ 一把 service key）｜github.com/kkday-it/kkday-be2-mcp｜2026-09-03</text>
+
+  <!-- ===== Zone: 員工筆電 ===== -->
+  <rect x="40" y="92" width="380" height="212" rx="10" fill="#EEF2FF" stroke="#818CF8" stroke-width="1.2"/>
+  <text x="58" y="118" font-size="13" font-weight="700" fill="#3730A3">員工筆電（公司網 / VPN）</text>
+
+  <rect x="60" y="132" width="340" height="72" rx="6" fill="#FFFFFF" stroke="#6366F1" stroke-width="1.2"/>
+  <text x="76" y="158" font-size="14" font-weight="600" fill="#312E81">Claude Code / Claude Desktop</text>
+  <text x="76" y="180" font-size="11.5" fill="#4B5563">MCP client（OAuth 2.1 ＋ PKCE，本機發起）</text>
+
+  <rect x="60" y="216" width="340" height="72" rx="6" fill="#FFFFFF" stroke="#6366F1" stroke-width="1.2"/>
+  <text x="76" y="242" font-size="14" font-weight="600" fill="#312E81">瀏覽器</text>
+  <text x="76" y="264" font-size="11.5" fill="#4B5563">be2-auth POPUP 登入・change-set 確認頁核准</text>
+
+  <!-- ===== Zone: EKS ===== -->
+  <rect x="40" y="360" width="770" height="310" rx="10" fill="#F5F7FA" stroke="#94A3B8" stroke-width="1.2"/>
+  <text x="58" y="384" font-size="13" font-weight="700" fill="#334155">AWS EKS（內網，不開公網）</text>
+
+  <!-- Ingress -->
+  <rect x="60" y="398" width="310" height="52" rx="6" fill="#E2E8F0" stroke="#64748B" stroke-width="1.2"/>
+  <text x="76" y="420" font-size="13.5" font-weight="600" fill="#1E293B">內網 TLS Ingress</text>
+  <text x="76" y="438" font-size="11" fill="#475569">HTTPS 終結 → HTTP :8787｜來源限公司網 / VPN</text>
+
+  <!-- CronJob -->
+  <rect x="490" y="398" width="300" height="52" rx="6" fill="#E2E8F0" stroke="#64748B" stroke-width="1.2"/>
+  <text x="506" y="420" font-size="13.5" font-weight="600" fill="#1E293B">dkron / CronJob</text>
+  <text x="506" y="438" font-size="11" fill="#475569">每日呼叫 oauth-purge（HTTP endpoint）</text>
+
+  <!-- be2-mcp pod -->
+  <rect x="60" y="478" width="390" height="172" rx="8" fill="#E3F2FD" stroke="#1E5AA8" stroke-width="1.6"/>
+  <text x="78" y="506" font-size="15" font-weight="700" fill="#0D3C78">be2-mcp（Node.js 22・Express ＋ MCP SDK）</text>
+  <text x="78" y="530" font-size="11.5" fill="#1E3A5F">Streamable HTTP：/mcp・/oauth/*・/confirm/*・/healthz・/readyz</text>
+  <text x="78" y="552" font-size="11.5" fill="#1E3A5F">OAuth 2.1 外殼（DCR＋PKCE）＋ auth-service 認證內核</text>
+  <text x="78" y="574" font-size="11.5" fill="#1E3A5F">change-set draft-only・人工批准後才執行寫入</text>
+  <text x="78" y="596" font-size="11.5" fill="#1E3A5F">append-only 稽核・per-user rate budget</text>
+  <text x="78" y="618" font-size="11.5" fill="#1E3A5F">身分一律由 token 推導・不自建 RBAC（businessList）</text>
+
+  <!-- PostgreSQL -->
+  <rect x="490" y="478" width="300" height="76" rx="6" fill="#FEF3E2" stroke="#C05621" stroke-width="1.4"/>
+  <text x="506" y="502" font-size="13.5" font-weight="700" fill="#7B341E">PostgreSQL（獨立 DB）</text>
+  <text x="506" y="522" font-size="10.5" fill="#7B341E">OAuth 外殼・be2 token store（憑證不離境）</text>
+  <text x="506" y="538" font-size="10.5" fill="#7B341E">change-set・web session・audit_log（需備份）</text>
+
+  <!-- Redis -->
+  <rect x="490" y="572" width="300" height="76" rx="6" fill="#FFFFFF" stroke="#C05621" stroke-width="1.4" stroke-dasharray="6 4"/>
+  <text x="506" y="596" font-size="13.5" font-weight="700" fill="#7B341E">Redis（多副本時必要）</text>
+  <text x="506" y="616" font-size="10.5" fill="#7B341E">token refresh single-flight・批准 nonce</text>
+  <text x="506" y="632" font-size="10.5" fill="#7B341E">inventory per-key mutex（分散式鎖）</text>
+
+  <!-- ===== Right column ===== -->
+  <rect x="850" y="398" width="390" height="76" rx="6" fill="#F5F7FA" stroke="#94A3B8" stroke-width="1.2"/>
+  <text x="866" y="422" font-size="13" font-weight="700" fill="#334155">config-manager（env.kkday.com）＋ k8s Secret</text>
+  <text x="866" y="442" font-size="10.5" fill="#475569">一環境一份 config；API_AUTH_SERVICE_KEY 走 Secret</text>
+  <text x="866" y="458" font-size="10.5" fill="#475569">機密不進 git / image，log 不出現明文</text>
+
+  <rect x="850" y="494" width="390" height="76" rx="6" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.2" stroke-dasharray="6 4"/>
+  <text x="866" y="518" font-size="13" font-weight="700" fill="#334155">觀測（Observability）</text>
+  <text x="866" y="538" font-size="10.5" fill="#475569">結構化 log → stdout → Kibana（new-kklog）</text>
+  <text x="866" y="554" font-size="10.5" fill="#475569">OpenTelemetry trace：OTEL_MODE=otlp（選配 collector）</text>
+
+  <rect x="850" y="590" width="390" height="60" rx="6" fill="#FFFFFF" stroke="#94A3B8" stroke-width="1.2" stroke-dasharray="6 4"/>
+  <text x="866" y="614" font-size="13" font-weight="700" fill="#334155">DB migration 流程</text>
+  <text x="866" y="634" font-size="10.5" fill="#475569">schema 由 migration 建立；runtime 不做 DDL</text>
+
+  <!-- ===== Zone: 下游 ===== -->
+  <rect x="40" y="712" width="1200" height="130" rx="10" fill="#EDF7ED" stroke="#68A868" stroke-width="1.2"/>
+  <text x="58" y="736" font-size="13" font-weight="700" fill="#22543D">下游（server egress 白名單僅此兩個 host 的 443）</text>
+
+  <rect x="80" y="750" width="480" height="76" rx="6" fill="#FFFFFF" stroke="#2F855A" stroke-width="1.4"/>
+  <text x="96" y="776" font-size="14" font-weight="700" fill="#22543D">kkday-auth-service</text>
+  <text x="96" y="798" font-size="11" fill="#276749">S2S（service key）：login 換碼・/verify・/refresh-token</text>
+  <text x="96" y="814" font-size="11" fill="#276749">授權以 businessList ＋ /verify 為準（fail-closed）</text>
+
+  <rect x="640" y="750" width="560" height="76" rx="6" fill="#FFFFFF" stroke="#2F855A" stroke-width="1.4"/>
+  <text x="656" y="776" font-size="14" font-weight="700" fill="#22543D">be2 API Gateway</text>
+  <text x="656" y="798" font-size="11" fill="#276749">/be2/api/v1（be2-api）・/product/api/v1（product-service）</text>
+  <text x="656" y="814" font-size="11" fill="#276749">以使用者 be2 token 代呼叫（非共用帳號）</text>
+
+  <!-- ===== Arrows ===== -->
+  <!-- client zone -> ingress -->
+  <line x1="230" y1="304" x2="217" y2="394" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="240" y="336" font-size="11" fill="#334155">MCP Streamable HTTP／確認頁（HTTPS 內網）</text>
+
+  <!-- ingress -> pod -->
+  <line x1="215" y1="450" x2="215" y2="474" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="228" y="468" font-size="10.5" fill="#334155">HTTP :8787</text>
+
+  <!-- cron -> pod -->
+  <line x1="560" y1="450" x2="430" y2="474" stroke="#475569" stroke-width="1.4" marker-end="url(#arrow)"/>
+
+  <!-- pod -> PG -->
+  <line x1="450" y1="516" x2="486" y2="516" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- pod -> Redis (dashed) -->
+  <line x1="450" y1="610" x2="486" y2="610" stroke="#94A3B8" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrowDash)"/>
+
+  <!-- config -> pod -->
+  <polyline points="846,436 470,462 460,474" fill="none" stroke="#94A3B8" stroke-width="1.3" marker-end="url(#arrowDash)"/>
+  <text x="600" y="462" font-size="10.5" fill="#64748B">env / secrets 注入</text>
+
+  <!-- pod -> auth-service -->
+  <line x1="200" y1="650" x2="260" y2="746" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="120" y="690" font-size="11" fill="#334155">S2S：service key（443）</text>
+
+  <!-- pod -> gateway -->
+  <line x1="400" y1="650" x2="860" y2="746" stroke="#475569" stroke-width="1.6" marker-end="url(#arrow)"/>
+  <text x="560" y="686" font-size="11" fill="#334155">使用者 token 代呼叫（443）</text>
+
+  <!-- browser -> auth-service popup (dashed, left margin route) -->
+  <polyline points="56,252 26,252 26,788 76,788" fill="none" stroke="#94A3B8" stroke-width="1.4" stroke-dasharray="6 4" marker-end="url(#arrowDash)"/>
+  <text x="34" y="700" font-size="10.5" fill="#64748B" transform="rotate(-90 34 700)">be2-auth POPUP 登入（瀏覽器直連，非 server egress）</text>
+
+  <!-- Footnote -->
+  <text x="40" y="874" font-size="11" fill="#6B7280">備註：不需公網 ingress（client 皆員工本機）；prod 上線前需將 be2-mcp 部署 origin 納入 auth-service BE2_DOMAIN 白名單；audit_log 為 append-only、隨 DB 備份保留。</text>
+</svg>
