@@ -1,20 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import type { Server } from 'node:http'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { buildApp } from '../src/server/app.js'
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Config } from '../src/config.js'
+import type { Db } from '../src/store/dbTypes.js'
 
 let backupHtml: string | null = null
 describe('Dev Panel Harness (APP_DEV_PANEL flag)', () => {
-  let server: Server, base: string, db: ReturnType<typeof openDb>
+  let server: Server, base: string, db: Db
   const originalEnv = process.env.APP_DEV_PANEL
 
-  beforeEach(() => {
-    db = openDb(':memory:')
-    new IdentityStore(db).upsert({
+  beforeEach(async () => {
+    db = await openTestDb()
+    await new IdentityStore(db).upsert({
       identityId: 'id-1', userLabel: 'dev@kkday.com', accessToken: 'a', refreshToken: 'r',
       businessList: [], accessExpiresAt: Date.now() + 3600000, updatedAt: Date.now()
     })
@@ -27,9 +28,9 @@ describe('Dev Panel Harness (APP_DEV_PANEL flag)', () => {
     writeFileSync(real, '<head></head><body><h1>Panel</h1></body>')
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     if (server) server.close()
-    db.close()
+    await db.close()
     const real = join(process.cwd(), 'dist', 'ui', 'batch-wizard.html')
     if (backupHtml != null) writeFileSync(real, backupHtml)
     else rmSync(real, { force: true })

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import express from 'express'
 import type { Server } from 'node:http'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
@@ -16,7 +16,7 @@ function fakeJwt(claims: object): string {
 }
 let server: Server, base: string, identities: IdentityStore, credentials: CredentialStore, webSessions: WebSessionStore
 beforeEach(async () => {
-  const db = openDb(':memory:')
+  const db = await openTestDb()
   identities = new IdentityStore(db); credentials = new CredentialStore(db)
   webSessions = new WebSessionStore(db, { now: () => 1000 })
   const jwt = fakeJwt({ authKey: 'approver@kkday.com', exp: Math.floor(Date.now() / 1000) + 3000 })
@@ -48,14 +48,14 @@ describe('SSO routes', () => {
     const sid = /be2mcp_sid=([^;]+)/.exec(setCookie)![1]
     // Task 4: web_sessions now stores identity_id (not userLabel directly) — the identity it
     // points at is what carries the userLabel.
-    const sess = webSessions.get(sid)!
-    expect(identities.get(sess.identityId)!.userLabel).toBe('approver@kkday.com')
+    const sess = (await webSessions.get(sid))!
+    expect((await identities.get(sess.identityId))!.userLabel).toBe('approver@kkday.com')
     // the credential minted for this cookie must be kind='web_session' (Task 4 kind gate) —
     // never 'static_bearer', which is what enroll.ts's static-bearer path would have produced.
-    const cred = credentials.getBySecret(sid)!
+    const cred = (await credentials.getBySecret(sid))!
     expect(cred.kind).toBe('web_session')
     // the be2 token was stored under hash(sessionId) so getFreshByCredHash works later
-    expect(identities.get(cred.identityId)!.userLabel).toBe('approver@kkday.com')
+    expect((await identities.get(cred.identityId))!.userLabel).toBe('approver@kkday.com')
   })
   it('POST /confirm/session rejects a missing code', async () => {
     const r = await fetch(`${base}/confirm/session`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { ReadOidStore } from '../src/store/readOidStore.js'
 import { RateBudget } from '../src/limits/rateBudget.js'
@@ -31,12 +31,12 @@ describe('validateInventoryItems', () => {
   })
 })
 
-function makeCtx(over: Partial<L2ToolContext> = {}): { ctx: L2ToolContext; store: ChangeSetStore; readOids: ReadOidStore; urls: string[] } {
-  const db = openDb(':memory:')
+async function makeCtx(over: Partial<L2ToolContext> = {}): Promise<{ ctx: L2ToolContext; store: ChangeSetStore; readOids: ReadOidStore; urls: string[] }> {
+  const db = await openTestDb()
   const store = new ChangeSetStore(db, { now: () => 1000 })
   const readOids = new ReadOidStore(db, { now: () => 1000 })
   const rateBudget = new RateBudget(db, { now: () => 1000 })
-  readOids.record('s1', ['i1'])
+  await readOids.record('s1', ['i1'])
   const gateway = {
     get: vi.fn(async () => ({ item_config: { inventory_setting: { control_type: 1, inventory_type: 0 } } })),
     post: vi.fn(async () => ({ 'i1': { fullday: 10 } })),
@@ -59,28 +59,28 @@ const invArgs = {
 
 describe('be2_create_changeset (inventory_setting)', () => {
   it('creates an inventory change-set with fullday diff and emits confirm url', async () => {
-    const { ctx, urls, store } = makeCtx()
+    const { ctx, urls, store } = await makeCtx()
     const env = await createChangesetTool.handler(invArgs, ctx)
     expect(env.errors).toEqual([])
     const out = env.items[0] as { changeset_id: string; diff: { items: Array<{ current: number; target: number }> } }
     expect(out.diff.items[0].current).toBe(10)
     expect(out.diff.items[0].target).toBe(50)
     expect(urls).toHaveLength(1)
-    expect(store.get(out.changeset_id)?.status).toBe('pending_approval')
+    expect((await store.get(out.changeset_id))?.status).toBe('pending_approval')
   })
   it('rejects an unqueried item_oid with SCOPE_NOT_READ', async () => {
-    const { ctx } = makeCtx()
+    const { ctx } = await makeCtx()
     const env = await createChangesetTool.handler(
       { ...invArgs, items: [{ ...invArgs.items[0], item_oid: 'i-not-read' }] }, ctx)
     expect(env.errors[0].code).toBe('SCOPE_NOT_READ')
   })
   it('rejects when businessList lacks the inventory action code', async () => {
-    const { ctx } = makeCtx({ businessList: ['product.product-sale-status.update'] })
+    const { ctx } = await makeCtx({ businessList: ['product.product-sale-status.update'] })
     const env = await createChangesetTool.handler(invArgs, ctx)
     expect(env.errors[0].code).toBe('ACTION_NOT_ALLOWED')
   })
   it('rejects mixed shelf/inventory item shapes for this action_type', async () => {
-    const { ctx } = makeCtx()
+    const { ctx } = await makeCtx()
     const env = await createChangesetTool.handler(
       { ...invArgs, items: [{ prod_oid: 'p1', target_is_active: false }] }, ctx)
     expect(env.errors[0].code).toBe('INVALID_ITEMS')

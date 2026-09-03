@@ -1,16 +1,16 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { buildApp } from '../src/server/app.js'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import type { Config } from '../src/config.js'
-import type Database from 'better-sqlite3'
+import type { Db } from '../src/store/dbTypes.js'
 
 // Task 6：OAuth discovery（RFC 9728 protected-resource + RFC 8414 authorization-server metadata）。
 // 這兩支是 Claude OAuth client 拿到 be2-mcp base URL 後第一個打的端點，公開、不需 bearer。
-let http: Server, base: string, db: Database.Database
+let http: Server, base: string, db: Db
 
 beforeAll(async () => {
-  db = openDb(':memory:')
+  db = await openTestDb()
   const config: Config = {
     authsvcUrl: 'https://auth.invalid', gatewayUrl: 'https://gw.invalid',
     serviceKey: 'sk', port: 0, db: { host: 'localhost', ssl: false }, schedulerMode: 'poller', otelMode: 'off', scheduleTz: 'Asia/Taipei',
@@ -21,7 +21,7 @@ beforeAll(async () => {
   await new Promise<void>(r => http.listen(0, () => r()))
   base = `http://127.0.0.1:${(http.address() as { port: number }).port}`
 })
-afterAll(() => { http.close(); db.close() })
+afterAll(async () => { http.close(); await db.close() })
 
 describe('OAuth discovery', () => {
   it('authorization-server metadata 宣告 S256 + none + endpoints', async () => {

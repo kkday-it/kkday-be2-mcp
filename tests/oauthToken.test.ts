@@ -2,12 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { createHash, randomBytes } from 'node:crypto'
 import { buildApp } from '../src/server/app.js'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { OAuthStore } from '../src/oauth/oauthStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import type { Config } from '../src/config.js'
-import type Database from 'better-sqlite3'
+import type { Db } from '../src/store/dbTypes.js'
 
 // Task 10：POST /oauth/token 是 OAuth 外殼的認證核心——PKCE 驗證、code 一次性、refresh
 // rotation + reuse-detection family revoke。這是「認證繞過」影響面最大的一支端點，測試需
@@ -31,17 +31,17 @@ const CONFIG: Config = {
 
 // 每個測試前：db + 一個已登入 identity + 一個 client C + 一個 authz code 綁 (C, redirect, challenge, identity)。
 // exp 預設給很長的 TTL（Date.now() + 60_000），除非測試自己要驗過期案例才覆寫。
-function seedCode(db: Database.Database, opts: { verifier: string; identityId?: string; exp?: number }): { rawCode: string; identityId: string } {
+async function seedCode(db: Db, opts: { verifier: string; identityId?: string; exp?: number }): Promise<{ rawCode: string; identityId: string }> {
   const identityId = opts.identityId ?? 'I1'
   const identities = new IdentityStore(db)
   const oauth = new OAuthStore(db)
-  identities.upsert({
+  await identities.upsert({
     identityId, userLabel: 'u', accessToken: fakeJwt(Math.floor(Date.now() / 1000) + 3600),
     refreshToken: 'R', businessList: [], accessExpiresAt: Date.now() + 3600_000, updatedAt: 1,
   })
-  if (!oauth.getClient(CLIENT_ID)) oauth.insertClient({ clientId: CLIENT_ID, redirectUris: [REDIRECT_URI], createdAt: 1 })
+  if (!(await oauth.getClient(CLIENT_ID))) await oauth.insertClient({ clientId: CLIENT_ID, redirectUris: [REDIRECT_URI], createdAt: 1 })
   const rawCode = randomBytes(16).toString('hex')
-  oauth.insertAuthCode({
+  await oauth.insertAuthCode({
     codeHash: CredentialStore.hash(rawCode), clientId: CLIENT_ID, redirectUri: REDIRECT_URI,
     codeChallenge: s256(opts.verifier), identityId, exp: opts.exp ?? Date.now() + 60_000, consumed: 0,
   })
@@ -49,16 +49,16 @@ function seedCode(db: Database.Database, opts: { verifier: string; identityId?: 
 }
 
 describe('POST /oauth/token', () => {
-  let http: Server, base: string, db: Database.Database
+  let http: Server, base: string, db: Db
 
   beforeEach(async () => {
-    db = openDb(':memory:')
+    db = await openTestDb()
     const app = buildApp({ config: CONFIG, db })
     http = createServer(app)
     await new Promise<void>(r => http.listen(0, () => r()))
     base = `http://127.0.0.1:${(http.address() as { port: number }).port}`
   })
-  afterEach(() => new Promise<void>(r => http.close(() => { db.close(); r() })))
+  afterEach(() => new Promise<void>(r => http.close(() => { void db.close().then(() => r()) })))
 
   async function post(path: string, body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
     const r = await fetch(`${base}${path}`, {
@@ -83,7 +83,7 @@ describe('POST /oauth/token', () => {
   }
 
   it('正確 verifier → 發 token 且該 access 能過 /mcp；同一個 code 事後用錯 verifier 重放 → invalid_grant', async () => {
-    const { rawCode } = seedCode(db, { verifier: 'VER' })
+    const { rawCode } = await seedCode(db, { verifier: 'VER' })
     const ok = await post('/oauth/token', {
       grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER',
       client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
@@ -111,7 +111,7 @@ describe('POST /oauth/token', () => {
   // 有效。這裡用一支全新、尚未被消費的 code 單獨驗證 PKCE mismatch 會被擋下——是 PKCE 檢查本身
   // 在擋，不是一次性檢查順便擋住。
   it('PKCE 單獨驗證：全新未消費的 code + 錯誤 verifier → invalid_grant，且 code 未被消費（可用正確 verifier 換到）', async () => {
-    const { rawCode } = seedCode(db, { verifier: 'RIGHT' })
+    const { rawCode } = await seedCode(db, { verifier: 'RIGHT' })
     const bad = await post('/oauth/token', {
       grant_type: 'authorization_code', code: rawCode, code_verifier: 'WRONG',
       client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
@@ -129,7 +129,7 @@ describe('POST /oauth/token', () => {
   })
 
   it('code 一次性：同 code 換兩次 → 第二次 invalid_grant', async () => {
-    const { rawCode } = seedCode(db, { verifier: 'VER' })
+    const { rawCode } = await seedCode(db, { verifier: 'VER' })
     const first = await post('/oauth/token', {
       grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER',
       client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
@@ -144,7 +144,7 @@ describe('POST /oauth/token', () => {
   })
 
   it('client_id / redirect_uri 對不上綁定的 code → invalid_grant', async () => {
-    const { rawCode } = seedCode(db, { verifier: 'VER' })
+    const { rawCode } = await seedCode(db, { verifier: 'VER' })
     const wrongClient = await post('/oauth/token', {
       grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER',
       client_id: 'someone-else', redirect_uri: REDIRECT_URI,
@@ -161,7 +161,7 @@ describe('POST /oauth/token', () => {
   })
 
   it('過期的 code → invalid_grant', async () => {
-    const { rawCode } = seedCode(db, { verifier: 'VER', exp: Date.now() - 1000 })
+    const { rawCode } = await seedCode(db, { verifier: 'VER', exp: Date.now() - 1000 })
     const r = await post('/oauth/token', {
       grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER',
       client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
@@ -184,7 +184,7 @@ describe('POST /oauth/token', () => {
 
   it('refresh rotation：舊 access 立即失效、舊 refresh 再用觸發 family revoke（撤銷整個 token family）', async () => {
     // 換到 {access1, refresh1}
-    const { rawCode } = seedCode(db, { verifier: 'VER' })
+    const { rawCode } = await seedCode(db, { verifier: 'VER' })
     const first = await post('/oauth/token', {
       grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER',
       client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,

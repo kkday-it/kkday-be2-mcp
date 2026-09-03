@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { getUiCapability, registerAppTool, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import type Database from 'better-sqlite3'
+import type { Db } from '../store/dbTypes.js'
 import type { Config } from '../config.js'
 import { IdentityStore } from '../store/identityStore.js'
 import { CredentialStore } from '../store/credentialStore.js'
@@ -42,7 +42,7 @@ import type { L2ToolDef } from './l2Context.js'
 import { buildHostGuard } from './hostGuard.js'
 import { AppError } from '../errors.js'
 
-export interface ServerDeps { config: Config; db: Database.Database }
+export interface ServerDeps { config: Config; db: Db }
 
 // host 在 initialize 的 capabilities.extensions 宣告 MCP Apps 支援才回 true。
 // 用途：capability-gate —— 只對支援 Apps 的 host 註冊 app-only tools（否則非 Apps host
@@ -89,11 +89,11 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // 否則保留（同一 identity 常見同時掛 static_bearer + web_session 兩個 credential 並存）。
   // 供下方 WebSessionStore 的 onDelete 使用（session 登出/idle-expiry/dead-session 皆需回收
   // 它所擁有的 be2 token，見 Fix 2）。
-  function purgeCredential(hash: string): void {
-    const cred = credentials.get(hash)
+  async function purgeCredential(hash: string): Promise<void> {
+    const cred = await credentials.get(hash)
     if (!cred) return
-    credentials.delete(hash)
-    if (credentials.countByIdentity(cred.identityId) === 0) identities.delete(cred.identityId)
+    await credentials.delete(hash)
+    if (await credentials.countByIdentity(cred.identityId) === 0) await identities.delete(cred.identityId)
   }
   // Shared across the tool pipeline (TokenManager) and the SSO router (Task 6): both need to
   // exchange/refresh be2 tokens against the same auth-service client, and reusing one instance
@@ -106,10 +106,10 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // Task 2: TokenManager 直接操作 identity 層（be2 refresh 只在 identity 這格 rotate 一次，
   // 多個 credential 共用同一 identity 時不會互撞）。
   const tokenManager = new TokenManager({ identities, credentials }, authServiceClient, {
-    onReauthRequired: (identityId) => {
+    onReauthRequired: async (identityId) => {
       // identity 列刻意留下（oauth-purge 會清 ghost），web_session/static_bearer 一併撤銷是刻意的——同一 identity 的 be2 refresh 死了，所有面向的憑證都已無法服務。
-      credentials.deleteByIdentity(identityId)
-      oauthStore.deleteRefreshByIdentity(identityId)
+      await credentials.deleteByIdentity(identityId)
+      await oauthStore.deleteRefreshByIdentity(identityId)
     }
   })
   const rateBudget = new RateBudget(db)
@@ -244,12 +244,14 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   app.use(express.json())
   app.get('/healthz', (_req, res) => { res.status(200).send('ok') })
   app.get('/readyz', (_req, res) => {
-    try {
-      db.prepare('SELECT 1').get()
-      res.status(200).json({ status: 'ready' })
-    } catch {
-      res.status(503).json({ status: 'not-ready' })
-    }
+    void (async () => {
+      try {
+        await db.query('SELECT 1')
+        res.status(200).json({ status: 'ready' })
+      } catch {
+        res.status(503).json({ status: 'not-ready' })
+      }
+    })()
   })
   app.use(buildHostGuard())
   // Task 6：OAuth discovery（RFC 9728 + RFC 8414）——公開端點，Claude 的 OAuth client
@@ -298,7 +300,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
       // static bearer both resolve here — CredentialStore doesn't distinguish them by shape).
       const auth = req.header('authorization') ?? ''
       const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : ''
-      const cred = bearer ? credentials.getBySecret(bearer) : undefined
+      const cred = bearer ? await credentials.getBySecret(bearer) : undefined
       if (!cred) {
         // Task 10: RFC 9728 — an unauthenticated/unknown-bearer request to a protected resource
         // should point the client at protected-resource discovery so an OAuth-aware client (the

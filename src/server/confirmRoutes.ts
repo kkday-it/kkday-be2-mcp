@@ -7,7 +7,7 @@ import { AppError } from '../errors.js'
 import type { TokenManager } from '../auth/tokenManager.js'
 import type { WebSessionStore } from './webSessionStore.js'
 import type { CredentialStore } from '../store/credentialStore.js'
-import type { AnyDiffItem } from '../core/changeset/types.js'
+import type { AnyDiffItem, ChangeSetRecord } from '../core/changeset/types.js'
 import { esc } from '../core/changeset/html.js'
 import type { ConfirmView } from '../core/changeset/module.js'
 import { requireSession } from './sessionGate.js'
@@ -67,7 +67,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
 
   function loginRedirect(res: express.Response, next: string) { res.redirect(302, `/confirm/login?next=${encodeURIComponent(next)}`) }
 
-  async function liveDiff(rec: NonNullable<ReturnType<typeof deps.changeSets.get>>, accessToken: string) {
+  async function liveDiff(rec: ChangeSetRecord, accessToken: string) {
     const mod = getModule(rec.actionType)
     const diff = await mod.computeDiff({ gateway: deps.gateway, accessToken, userLabel: rec.creatorLabel }, rec.items) as AnyDiffItem[]
     return { diff, version: mod.diffVersion(diff) }
@@ -77,7 +77,7 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
     res.setHeader('Referrer-Policy', 'no-referrer')
     const who = await requireSession(gateDeps, req)
     if (!who) { loginRedirect(res, `/confirm/${req.params.id}`); return }
-    const rec = deps.changeSets.get(String(req.params.id))
+    const rec = await deps.changeSets.get(String(req.params.id))
     // IDOR: only the change-set's creator may view it. Generic 404 either way — no existence leak
     // for a different user's change-set id.
     if (!rec || !sameUser(rec.creatorLabel, who.userLabel) || (rec.status !== 'pending_approval' && rec.status !== 'scheduled')) { res.status(404).send('not found'); return }
@@ -108,7 +108,7 @@ ${view.tableHtml}
     res.setHeader('Referrer-Policy', 'no-referrer')
     const who = await requireSession(gateDeps, req)
     if (!who) { loginRedirect(res, `/confirm/${req.params.id}`); return }
-    const rec = deps.changeSets.get(String(req.params.id))
+    const rec = await deps.changeSets.get(String(req.params.id))
     if (!rec || !sameUser(rec.creatorLabel, who.userLabel) || rec.status !== 'pending_approval') { res.status(404).send('not found'); return }
     // Task 11: the actual recompute-diff -> staleness -> CAS -> resolve-modify_user -> execute ->
     // audit sequence now lives in src/changeset/confirmService.ts's approveAndExecute — shared
@@ -152,12 +152,12 @@ ${view.tableHtml}
     res.setHeader('Referrer-Policy', 'no-referrer')
     const who = await requireSession(gateDeps, req)
     if (!who) { loginRedirect(res, `/confirm/${req.params.id}`); return }
-    const rec = deps.changeSets.get(String(req.params.id))
+    const rec = await deps.changeSets.get(String(req.params.id))
     if (!rec || !sameUser(rec.creatorLabel, who.userLabel)) { res.status(404).send('not found'); return }
     // 只有 scheduled 可取消(spec §8):cancelled 是唯一允許的人工轉移、終態。
-    const won = deps.changeSets.casStatus(rec.id, 'scheduled', 'cancelled', deps.now())
+    const won = await deps.changeSets.casStatus(rec.id, 'scheduled', 'cancelled', deps.now())
     if (!won) { res.status(409).send('已被處理或非排程狀態'); return }
-    deps.audit.record({
+    await deps.audit.record({
       userLabel: who.userLabel, sessionId: who.sessionId,
       clientInfo: 'confirm-page:' + String(req.headers['user-agent'] ?? '').slice(0, 80),
       tool: 'changeset.cancel', params: { changeset_id: rec.id, ip: req.ip },
@@ -170,13 +170,13 @@ ${view.tableHtml}
     res.setHeader('Referrer-Policy', 'no-referrer')
     const who = await requireSession(gateDeps, req)
     if (!who) { loginRedirect(res, `/confirm/${req.params.id}`); return }
-    const rec = deps.changeSets.get(String(req.params.id))
+    const rec = await deps.changeSets.get(String(req.params.id))
     if (!rec || !sameUser(rec.creatorLabel, who.userLabel)) { res.status(404).send('not found'); return }
     // Same CAS discipline as approve: only a still-pending change-set can be rejected. Prevents
     // rejecting a change-set that has already been approved/executed (or rejected) concurrently.
-    const won = deps.changeSets.casStatus(rec.id, 'pending_approval', 'rejected', deps.now())
+    const won = await deps.changeSets.casStatus(rec.id, 'pending_approval', 'rejected', deps.now())
     if (!won) { res.status(409).send('已被處理或已過期'); return }
-    deps.audit.record({
+    await deps.audit.record({
       userLabel: who.userLabel, sessionId: who.sessionId,
       clientInfo: 'confirm-page:' + String(req.headers['user-agent'] ?? '').slice(0, 80),
       tool: 'changeset.reject', params: { changeset_id: rec.id, ip: req.ip },

@@ -1,15 +1,15 @@
 import { describe, it, expect, vi } from 'vitest'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { TokenManager } from '../src/auth/tokenManager.js'
 import type { AuthServiceClient } from '../src/auth/authServiceClient.js'
 
-function setup(accessExpiresAt: number, refreshImpl: () => Promise<unknown>) {
-  const db = openDb(':memory:')
+async function setup(accessExpiresAt: number, refreshImpl: () => Promise<unknown>) {
+  const db = await openTestDb()
   const identities = new IdentityStore(db)
   const credentials = new CredentialStore(db)
-  identities.upsert({ identityId: 'id-1', userLabel: 'u', accessToken: 'old', refreshToken: 'r0',
+  await identities.upsert({ identityId: 'id-1', userLabel: 'u', accessToken: 'old', refreshToken: 'r0',
     businessList: [], accessExpiresAt, updatedAt: 0 })
   const auth = { refresh: vi.fn(refreshImpl) } as unknown as AuthServiceClient
   const t = { v: 1_000_000 }
@@ -23,14 +23,14 @@ const fakeJwt = (expMs: number) => {
 }
 
 it('getFreshByIdentityId returns fresh context; unknown id → AuthError', async () => {
-  const { tm } = setup(Number.MAX_SAFE_INTEGER, async () => { throw new Error('no refresh expected') })
+  const { tm } = await setup(Number.MAX_SAFE_INTEGER, async () => { throw new Error('no refresh expected') })
   const u = await tm.getFreshByIdentityId('id-1')
   expect(u).toMatchObject({ identityId: 'id-1', accessToken: 'old' })
   await expect(tm.getFreshByIdentityId('nope')).rejects.toMatchObject({ code: 'UNKNOWN_IDENTITY' })
 })
 
 it('keepAlive refreshes only identities expiring within windowMs, and only when claim wins', async () => {
-  const { tm, auth, t } = setup(1_000_000 + 30_000 /* 30s 內到期 */, async () =>
+  const { tm, auth, t } = await setup(1_000_000 + 30_000 /* 30s 內到期 */, async () =>
     ({ accessToken: fakeJwt(1_000_000 + 3_600_000), refreshToken: 'r1', businessList: [] }))
   const out1 = await tm.keepAlive(['id-1'], { windowMs: 60_000, claimTtlMs: 30_000 })
   expect(out1.refreshed).toEqual(['id-1'])
@@ -45,7 +45,7 @@ it('keepAlive refreshes only identities expiring within windowMs, and only when 
 })
 
 it('keepAlive reports terminal failures without throwing', async () => {
-  const { tm } = setup(1_000_000 + 30_000, async () => {
+  const { tm } = await setup(1_000_000 + 30_000, async () => {
     const { AuthError } = await import('../src/errors.js')
     throw new AuthError('AU9001', 'revoked', 401)
   })
@@ -57,9 +57,9 @@ it('keepAlive reports terminal failures without throwing', async () => {
 it('keepAlive skips when another instance holds the claim', async () => {
   // 直接對 DB 先搶 claim(模擬另一實例),再 keepAlive——與 window 判斷解耦,真正驗到
   // claimKeepalive 的防撞行為(案例 2 的第二輪其實被 window 短路,走不到 claim)。
-  const { tm, identities, auth } = setup(1_000_000 + 30_000, async () =>
+  const { tm, identities, auth } = await setup(1_000_000 + 30_000, async () =>
     ({ accessToken: fakeJwt(1_000_000 + 3_600_000), refreshToken: 'r1', businessList: [] }))
-  expect(identities.claimKeepalive('id-1', 990_000, 30_000)).toBe(true)   // 990k > 1000k-30k → 本 process 再搶必輸
+  expect(await identities.claimKeepalive('id-1', 990_000, 30_000)).toBe(true)   // 990k > 1000k-30k → 本 process 再搶必輸
   const out = await tm.keepAlive(['id-1'], { windowMs: 60_000, claimTtlMs: 30_000 })
   expect(out.refreshed).toEqual([])
   expect(out.failed).toEqual([])
@@ -68,7 +68,7 @@ it('keepAlive skips when another instance holds the claim', async () => {
 
 it('keepAlive force-refreshes inside windowMs even beyond tokenManager skew (no spin band)', async () => {
   // access 於 8min 後到期:> skew(setup 傳 60_000=1min)但 < window(10min)——必須真的 refresh,不得空轉。
-  const { tm, auth } = setup(1_000_000 + 8 * 60_000, async () =>
+  const { tm, auth } = await setup(1_000_000 + 8 * 60_000, async () =>
     ({ accessToken: fakeJwt(1_000_000 + 3_600_000), refreshToken: 'r1', businessList: [] }))
   const out = await tm.keepAlive(['id-1'], { windowMs: 10 * 60_000, claimTtlMs: 30_000 })
   expect(out.refreshed).toEqual(['id-1'])

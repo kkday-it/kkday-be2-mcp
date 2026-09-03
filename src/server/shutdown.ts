@@ -5,7 +5,7 @@ export interface ShutdownDeps {
     closeIdleConnections?: () => void
     closeAllConnections?: () => void
   }
-  db: { close: () => void }
+  db: { close: () => Promise<void> }
   stopScheduler?: () => Promise<void>
   shutdownOtel: () => Promise<void>
   graceMs: number
@@ -54,7 +54,7 @@ export function makeShutdown(deps: ShutdownDeps): () => Promise<void> {
       hadError = true
       console.error('[be2-mcp] shutdown sequence error:', (e as Error).message)
     } finally {
-      try { deps.db.close() } catch (e) { hadError = true; console.error('[be2-mcp] db.close error during shutdown:', (e as Error).message) }
+      try { await deps.db.close() } catch (e) { hadError = true; console.error('[be2-mcp] db.close error during shutdown:', (e as Error).message) }
       clearTimeout(timer)
       exit(hadError ? 1 : 0)
     }

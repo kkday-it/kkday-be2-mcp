@@ -68,10 +68,10 @@ function runWrapped<Ctx>(
         const user = await deps.tokenManager.getFreshAccessToken(reqCtx.bearer)
         userLabel = user.userLabel
         span.setAttribute('user_id', userLabel)
-        deps.rateBudget.consume(userLabel, reqCtx.sessionId)
+        await deps.rateBudget.consume(userLabel, reqCtx.sessionId)
         const toolCtx = buildCtx(user, reqCtx)
         const envelope = await callHandler(toolCtx, args)
-        if (envelope.read_oids.length) deps.readOids.record(reqCtx.sessionId, envelope.read_oids)
+        if (envelope.read_oids.length) await deps.readOids.record(reqCtx.sessionId, envelope.read_oids)
         if (envelope.errors.length > 0) {
           // Fully failed (no items) => audited as error. Items + errors => status stays ok but
           // the first error entry is still recorded into audit error_message: that's how a
@@ -96,7 +96,7 @@ function runWrapped<Ctx>(
         if (status === 'error') console.error(`be2-mcp tool ${toolName} failed:`, e)
         result = errResult(code, message)
       } finally {
-        deps.audit.record({
+        await deps.audit.record({
           userLabel, sessionId: reqCtx.sessionId, clientInfo: reqCtx.clientInfo, tool: toolName,
           // message may be set even when status==='ok' (partial errors / degrade warnings) —
           // record it so the audit trail shows warn-and-proceed outcomes, not just failures.

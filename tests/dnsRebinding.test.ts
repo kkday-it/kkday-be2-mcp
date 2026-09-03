@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { createServer, type Server, request as httpRequest } from 'node:http'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { buildApp } from '../src/server/app.js'
 import type { Config } from '../src/config.js'
 
@@ -54,7 +54,7 @@ describe('DNS-Rebinding and Host Header Guard', () => {
   let port: number
 
   beforeAll(async () => {
-    const db = openDb(':memory:')
+    const db = await openTestDb()
     const config: Config = {
       authsvcUrl: 'https://auth.invalid',
       gatewayUrl: 'https://gw.invalid',
@@ -139,7 +139,7 @@ describe('DNS-Rebinding and Host Header Guard', () => {
   })
 
   it('supports custom allowed hosts via APP_ALLOWED_HOSTS env', async () => {
-    const db = openDb(':memory:')
+    const db = await openTestDb()
     const config: Config = {
       authsvcUrl: 'https://auth.invalid',
       gatewayUrl: 'https://gw.invalid',

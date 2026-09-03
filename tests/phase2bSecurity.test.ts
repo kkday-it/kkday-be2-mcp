@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { buildApp } from '../src/server/app.js'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import type { Config } from '../src/config.js'
-import type Database from 'better-sqlite3'
+import type { Db } from '../src/store/dbTypes.js'
 
 // Phase 2b exit-gate security tests (Task 7). Unlike tests/confirmRoutes.test.ts (which exercises
 // buildConfirmRouter in isolation), these spin the FULL built app (buildApp), the same way
@@ -34,10 +34,10 @@ function fakeJwt(claims: Record<string, unknown> = {}): string {
   return `${b64({ alg: 'HS256' })}.${b64({ exp: Math.floor(Date.now() / 1000) + 3600, ...claims })}.sig`
 }
 
-let httpServer: Server, base: string, db: Database.Database, store: ChangeSetStore, webSessions: WebSessionStore
+let httpServer: Server, base: string, db: Db, store: ChangeSetStore, webSessions: WebSessionStore
 
-function seed(id: string, creatorLabel = 'owner@kkday.com') {
-  store.create({
+async function seed(id: string, creatorLabel = 'owner@kkday.com') {
+  await store.create({
     id, creatorLabel, creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_product',
     items: [{ prod_oid: 'p1', target_is_active: false }],
     diff: [{ prod_oid: 'p1', name: 'Prod A', current_is_active: true, target_is_active: false, no_op: false }],
@@ -53,19 +53,19 @@ function seed(id: string, creatorLabel = 'owner@kkday.com') {
 // /confirm/session), not the generic 'static_bearer' enroll.ts produces. Mint it the same way
 // here — via IdentityStore/CredentialStore directly against the shared `db` — so requireSession's
 // credential-kind gate accepts these fixture sessions exactly like a real be2-auth SSO login would.
-function seedSession(sid: string, userLabel: string) {
+async function seedSession(sid: string, userLabel: string) {
   const identities = new IdentityStore(db)
   const credentials = new CredentialStore(db)
   const identityId = `ident-${sid}`
-  identities.upsert({
+  await identities.upsert({
     identityId, userLabel,
     accessToken: fakeJwt({ authKey: userLabel, platformId: 'plat-uuid-test' }), refreshToken: 'r', businessList: [],
     accessExpiresAt: Date.now() + 3600_000, updatedAt: Date.now(),
   })
-  credentials.insert({
+  await credentials.insert({
     credHash: CredentialStore.hash(sid), identityId, kind: 'web_session', expiresAt: null, updatedAt: Date.now(),
   })
-  webSessions.create(sid, identityId)
+  await webSessions.create(sid, identityId)
   return identityId
 }
 
@@ -82,11 +82,11 @@ async function startApp(gatewayUrl = 'https://gw.invalid'): Promise<void> {
 }
 
 beforeEach(async () => {
-  db = openDb(':memory:')
+  db = await openTestDb()
   store = new ChangeSetStore(db)
   webSessions = new WebSessionStore(db)
-  seedSession('sid-owner', 'owner@kkday.com')
-  seedSession('sid-other', 'other@kkday.com')
+  await seedSession('sid-owner', 'owner@kkday.com')
+  await seedSession('sid-other', 'other@kkday.com')
   await startApp()
 })
 
@@ -97,7 +97,7 @@ afterEach(async () => {
 
 describe('phase2b security — self-approval closed (Phase 2a hole, closed by SSO session auth)', () => {
   it('POST /confirm/<id>/approve with NO cookie AND the removed ?token= capability param does not execute', async () => {
-    seed('cs-self')
+    await seed('cs-self')
     // An agent (or anyone forwarding the change-set id it was told) tries the OLD Phase 2a
     // capability-token contract: no session cookie, just `?token=` on the URL.
     const res = await fetch(`${base}/confirm/cs-self/approve?token=anything-an-agent-could-guess-or-relay`, {
@@ -110,11 +110,11 @@ describe('phase2b security — self-approval closed (Phase 2a hole, closed by SS
     // so this fails exactly like a bare request with no cookie at all: redirect to login, no 200.
     expect(res.status).toBe(302)
     expect(res.headers.get('location')).toBe('/confirm/login?next=%2Fconfirm%2Fcs-self')
-    expect(store.get('cs-self')!.status).toBe('pending_approval')
+    expect((await store.get('cs-self'))!.status).toBe('pending_approval')
   })
 
   it('GET /confirm/<id> with the removed ?token= capability param does not leak the diff either', async () => {
-    seed('cs-self-2')
+    await seed('cs-self-2')
     const res = await fetch(`${base}/confirm/cs-self-2?token=anything`, { redirect: 'manual' })
     expect(res.status).toBe(302)
     expect(res.headers.get('location')).toContain('/confirm/login')
@@ -123,7 +123,7 @@ describe('phase2b security — self-approval closed (Phase 2a hole, closed by SS
 
 describe('phase2b security — IDOR (a different be2 user cannot touch your change-set)', () => {
   it('a valid session cookie for a DIFFERENT user cannot approve -> 404, no execute', async () => {
-    seed('cs-idor', 'owner@kkday.com')
+    await seed('cs-idor', 'owner@kkday.com')
     const res = await fetch(`${base}/confirm/cs-idor/approve`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie: 'be2mcp_sid=sid-other' },
@@ -131,11 +131,11 @@ describe('phase2b security — IDOR (a different be2 user cannot touch your chan
       redirect: 'manual',
     })
     expect(res.status).toBe(404)
-    expect(store.get('cs-idor')!.status).toBe('pending_approval')
+    expect((await store.get('cs-idor'))!.status).toBe('pending_approval')
   })
 
   it('a valid session cookie for a DIFFERENT user cannot even view the change-set -> 404 (no existence leak)', async () => {
-    seed('cs-idor-2', 'owner@kkday.com')
+    await seed('cs-idor-2', 'owner@kkday.com')
     const res = await fetch(`${base}/confirm/cs-idor-2`, { headers: { cookie: 'be2mcp_sid=sid-other' } })
     expect(res.status).toBe(404)
   })
@@ -144,28 +144,28 @@ describe('phase2b security — IDOR (a different be2 user cannot touch your chan
 // Resolves the be2 identity a session secret's credential currently points at (undefined once the
 // credential — and, if orphaned, the identity — has been purged). Mirrors what
 // TokenStore.getByBearerHash used to answer, without the deleted adapter.
-function identityFor(secret: string) {
-  const cred = new CredentialStore(db).get(CredentialStore.hash(secret))
+async function identityFor(secret: string) {
+  const cred = await new CredentialStore(db).get(CredentialStore.hash(secret))
   if (!cred) return undefined
   return new IdentityStore(db).get(cred.identityId)
 }
 
 describe('phase2b security — session teardown purges the be2 token, not just the web-session row (Fix 2)', () => {
   it('POST /confirm/logout purges the be2 token for that session', async () => {
-    expect(identityFor('sid-owner')).toBeDefined()
+    expect(await identityFor('sid-owner')).toBeDefined()
     const res = await fetch(`${base}/confirm/logout`, { method: 'POST', headers: { cookie: 'be2mcp_sid=sid-owner' } })
     expect(res.status).toBe(200)
-    expect(identityFor('sid-owner')).toBeUndefined()
+    expect(await identityFor('sid-owner')).toBeUndefined()
   })
 
   it('an idle-expired session, once lazily reaped by requireSession, also purges its be2 token', async () => {
     // The app's own WebSessionStore instance has no fake clock injected (default idleTtlMs 8h) —
     // backdate last_seen_at directly to simulate 9h of inactivity without a real wait.
-    db.prepare('UPDATE web_sessions SET last_seen_at = ? WHERE session_id = ?').run(Date.now() - 9 * 3600_000, 'sid-owner')
-    expect(identityFor('sid-owner')).toBeDefined()
+    await db.query('UPDATE web_sessions SET last_seen_at = $1 WHERE session_id = $2', [Date.now() - 9 * 3600_000, 'sid-owner'])
+    expect(await identityFor('sid-owner')).toBeDefined()
     const res = await fetch(`${base}/confirm/anything`, { headers: { cookie: 'be2mcp_sid=sid-owner' }, redirect: 'manual' })
     expect(res.status).toBe(302) // idle-expired -> requireSession treats as no-session -> login redirect
-    expect(identityFor('sid-owner')).toBeUndefined()
+    expect(await identityFor('sid-owner')).toBeUndefined()
   })
 
   it('logout of one credential does NOT orphan an identity another credential (e.g. the Phase 1a static bearer) still references', async () => {
@@ -174,14 +174,14 @@ describe('phase2b security — session teardown purges the be2 token, not just t
     // countByIdentity(...) === 0 first, this would fail — the static_bearer credential minted
     // below would be orphaned even though it never logged out.
     const credentials = new CredentialStore(db)
-    const sharedIdentityId = seedSession('sid-shared', 'shared@kkday.com')
-    credentials.insert({ credHash: CredentialStore.hash('static-bearer-shared'), identityId: sharedIdentityId, kind: 'static_bearer', expiresAt: null, updatedAt: Date.now() })
+    const sharedIdentityId = await seedSession('sid-shared', 'shared@kkday.com')
+    await credentials.insert({ credHash: CredentialStore.hash('static-bearer-shared'), identityId: sharedIdentityId, kind: 'static_bearer', expiresAt: null, updatedAt: Date.now() })
 
     const res = await fetch(`${base}/confirm/logout`, { method: 'POST', headers: { cookie: 'be2mcp_sid=sid-shared' } })
     expect(res.status).toBe(200)
 
-    expect(identityFor('sid-shared')).toBeUndefined()               // the web_session credential is gone
-    expect(identityFor('static-bearer-shared')).toBeDefined()       // the identity + sibling credential survive
+    expect(await identityFor('sid-shared')).toBeUndefined()               // the web_session credential is gone
+    expect(await identityFor('static-bearer-shared')).toBeDefined()       // the identity + sibling credential survive
   })
 })
 
@@ -214,7 +214,7 @@ describe('phase2b security — reject-after-done (carry-forward from Phase 2a, s
       await new Promise<void>(r => httpServer.close(() => r()))
       await startApp()
 
-      seed('cs-done', 'owner@kkday.com')
+      await seed('cs-done', 'owner@kkday.com')
       const g = await fetch(`${base}/confirm/cs-done`, { headers: { cookie: 'be2mcp_sid=sid-owner' } })
       const dv = /data-diff-version="([^"]+)"/.exec(await g.text())![1]
 
@@ -224,14 +224,14 @@ describe('phase2b security — reject-after-done (carry-forward from Phase 2a, s
         body: JSON.stringify({ diff_version: dv }),
       })
       expect(approveRes.status).toBe(200)
-      expect(store.get('cs-done')!.status).toBe('done')
+      expect((await store.get('cs-done'))!.status).toBe('done')
 
       const rejectRes = await fetch(`${base}/confirm/cs-done/reject`, {
         method: 'POST',
         headers: { cookie: 'be2mcp_sid=sid-owner' },
       })
       expect(rejectRes.status).toBe(409)
-      expect(store.get('cs-done')!.status).toBe('done')
+      expect((await store.get('cs-done'))!.status).toBe('done')
     } finally {
       // no cleanup needed
     }

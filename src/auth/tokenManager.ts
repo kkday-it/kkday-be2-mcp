@@ -12,7 +12,7 @@ export interface TokenManagerStores { identities: IdentityStore; credentials: Cr
 export class TokenManager {
   private skewMs: number
   private now: () => number
-  private onReauthRequired?: (identityId: string) => void
+  private onReauthRequired?: (identityId: string) => void | Promise<void>
   // Single-flight 現在以 identityId 為 key（而非個別 credential 的 hash）——be2 refresh
   // 只在 identity 這一層 rotate 一次；同一 identity 底下無論幾個 credential（oauth_access /
   // static_bearer / web_session）並發觸發 refresh 都必須共用同一次 in-flight refresh，
@@ -22,7 +22,7 @@ export class TokenManager {
   private inflight = new Map<string, Promise<Identity>>()
 
   constructor(private stores: TokenManagerStores, private auth: AuthServiceClient,
-    opts: { skewMs?: number; now?: () => number; onReauthRequired?: (identityId: string) => void } = {}) {
+    opts: { skewMs?: number; now?: () => number; onReauthRequired?: (identityId: string) => void | Promise<void> } = {}) {
     this.skewMs = opts.skewMs ?? 5 * 60_000
     this.now = opts.now ?? Date.now
     this.onReauthRequired = opts.onReauthRequired
@@ -38,16 +38,16 @@ export class TokenManager {
   }
 
   async getFreshByCredHash(credHash: string): Promise<UserAuthContext> {
-    const cred = this.stores.credentials.get(credHash)
+    const cred = await this.stores.credentials.get(credHash)
     if (!cred) throw new AuthError('UNKNOWN_BEARER', 'unknown bearer token — reconnect your MCP client (it will be prompted to re-authorize via OAuth); headless fallback: npm run bootstrap-user', 401)
-    const identity = this.stores.identities.get(cred.identityId)
+    const identity = await this.stores.identities.get(cred.identityId)
     if (!identity) throw new AuthError('UNKNOWN_BEARER', 'unknown bearer token — reconnect your MCP client (it will be prompted to re-authorize via OAuth); headless fallback: npm run bootstrap-user', 401)
     return this.freshFromIdentity(identity, cred.identityId)
   }
 
   /** 排程執行入口(spec §6):以持久化的 identityId 直接取新鮮 token。 */
   async getFreshByIdentityId(identityId: string): Promise<UserAuthContext> {
-    const identity = this.stores.identities.get(identityId)
+    const identity = await this.stores.identities.get(identityId)
     if (!identity) throw new AuthError('UNKNOWN_IDENTITY', 'identity no longer exists — the scheduled change-set cannot execute; re-create it after logging in again', 401)
     return this.freshFromIdentity(identity, identityId)
   }
@@ -67,10 +67,10 @@ export class TokenManager {
       // 整段(get/window/claim/refresh)都在 try 內——「永不 throw」涵蓋 DB 層意外拋錯,
       // 單一 id 失敗不得中斷迴圈、遺失其餘 id 的結果。
       try {
-        const identity = this.stores.identities.get(id)
+        const identity = await this.stores.identities.get(id)
         if (!identity) { failed.push({ identityId: id, code: 'UNKNOWN_IDENTITY', terminal: true }); continue }
         if (identity.accessExpiresAt - this.now() >= opts.windowMs) continue
-        if (!this.stores.identities.claimKeepalive(id, this.now(), opts.claimTtlMs)) continue
+        if (!(await this.stores.identities.claimKeepalive(id, this.now(), opts.claimTtlMs))) continue
         let flight = this.inflight.get(id)
         if (!flight) {
           flight = this.doRefresh(identity, id).finally(() => this.inflight.delete(id))
@@ -110,7 +110,7 @@ export class TokenManager {
       // disabled — fail closed, require re-enroll.
       if (e instanceof AuthError && e.status >= 400 && e.status < 500) {
         try {
-          this.onReauthRequired?.(identityId)
+          await this.onReauthRequired?.(identityId)
         } catch (err) {
           console.error('onReauthRequired callback failed:', err)
         }
@@ -130,7 +130,7 @@ export class TokenManager {
       accessExpiresAt: decodeJwtExpMs(tokens.accessToken),
       updatedAt: this.now(),
     }
-    this.stores.identities.upsert(updated)
+    await this.stores.identities.upsert(updated)
     return updated
   }
 }

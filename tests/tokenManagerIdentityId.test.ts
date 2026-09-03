@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { TokenManager } from '../src/auth/tokenManager.js'
@@ -7,7 +7,7 @@ import type { AuthServiceClient } from '../src/auth/authServiceClient.js'
 
 describe('TokenManager IdentityId Threading', () => {
   it('getFreshAccessToken returns the identityId backing the credential', async () => {
-    const db = openDb(':memory:')
+    const db = await openTestDb()
     const identities = new IdentityStore(db)
     const credentials = new CredentialStore(db)
     identities.upsert({ identityId: 'id-9', userLabel: 'u', accessToken: 'tok', refreshToken: 'r',

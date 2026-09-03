@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { buildApp } from '../src/server/app.js'
@@ -101,7 +101,7 @@ describe('Tool Annotations - Integration through tools/list', () => {
   const BEARER = 'be2mcp_' + 't'.repeat(48)
 
   beforeAll(async () => {
-    const db = openDb(':memory:')
+    const db = await openTestDb()
     const identityId = 'id-test-ann'
     new IdentityStore(db).upsert({
       identityId,

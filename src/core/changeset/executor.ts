@@ -31,15 +31,15 @@ export interface ExecutorIdentity { accessToken: string; userLabel: string; modi
 function clientInfoFor(who: ExecutorIdentity): string { return who.channel === 'scheduler' ? 'scheduler' : who.channel === 'panel' ? 'app-panel' : 'confirm-page' }
 
 export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, who: ExecutorIdentity): Promise<{ status: 'done' | 'partial' | 'failed'; results: ItemResult[] } | null> {
-  const rec = deps.changeSets.get(changesetId)
+  const rec = await deps.changeSets.get(changesetId)
   if (!rec) throw new AppError('NOT_FOUND', 'change-set not found', 404)
   // 塊 B(spec §7):執行起點改 CAS——排程回收方與「還活著只是慢」的實例最多一方能贏,
   // exactly-once 執行的結構性保證。即時批准路徑不受影響(caller 先贏 pending→approved 才進來)。
   // CAS 輸時分流:executing/終態 = 輸掉競態(別的實例在跑/已跑完)→ null 靜默讓行;
   // 其餘狀態(pending/scheduled/rejected/…)= 呼叫端誤用 → BAD_STATE(read-then-throw 不可
   // 當防線——併發輸方讀到 executing 若 throw,scheduler tick 會被整輪打斷)。
-  if (!deps.changeSets.casStatus(changesetId, 'approved', 'executing')) {
-    const cur = deps.changeSets.get(changesetId)?.status
+  if (!(await deps.changeSets.casStatus(changesetId, 'approved', 'executing'))) {
+    const cur = (await deps.changeSets.get(changesetId))?.status
     if (cur === 'executing' || cur === 'done' || cur === 'partial' || cur === 'failed') return null
     throw new AppError('BAD_STATE', `change-set is ${cur}, not approved`, 409)
   }
@@ -62,9 +62,9 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
       error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: 'n/a',
     }))
   }
-  deps.changeSets.recordResults(changesetId, results)
+  await deps.changeSets.recordResults(changesetId, results)
   for (const r of results) {
-    deps.audit.record({
+    await deps.audit.record({
       userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: clientInfoFor(who), tool: 'changeset.execute',
       params: { changeset_id: changesetId, item: r.item_key },
       status: (r.status === 'done' || r.status === 'skipped_noop') ? 'ok' : 'error',
@@ -73,7 +73,7 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
   }
   const status = results.every(r => r.status === 'done' || r.status === 'skipped_noop') ? 'done'
     : results.every(r => r.status === 'failed') ? 'failed' : 'partial'
-  deps.changeSets.setStatus(changesetId, status, deps.now())
+  await deps.changeSets.setStatus(changesetId, status, deps.now())
   return { status, results }
 }
 

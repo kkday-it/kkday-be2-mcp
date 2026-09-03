@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { enrollUser, generateBearer } from '../src/auth/enroll.js'
@@ -9,8 +9,8 @@ function fakeJwt(expSec: number, extraClaims: Record<string, unknown> = {}): str
   return `${b64({ alg: 'HS256' })}.${b64({ exp: expSec, ...extraClaims })}.sig`
 }
 
-function makeDeps() {
-  const db = openDb(':memory:')
+async function makeDeps() {
+  const db = await openTestDb()
   return { identities: new IdentityStore(db), credentials: new CredentialStore(db) }
 }
 
@@ -22,18 +22,18 @@ describe('enroll', () => {
   })
 
   it('enroll 建 identity + static_bearer credential 指向它', async () => {
-    const { identities, credentials } = makeDeps()
+    const { identities, credentials } = await makeDeps()
     const auth = {
       exchangeCode: async () => ({ accessToken: fakeJwt(2_000_000_000), refreshToken: 'R', businessList: [] }),
     } as never
     const { bearer } = await enrollUser({ identities, credentials, auth }, { userLabel: 'u', code: 'C' }, () => 1)
-    const cred = credentials.getBySecret(bearer)!
+    const cred = (await credentials.getBySecret(bearer))!
     expect(cred.kind).toBe('static_bearer')
-    expect(identities.get(cred.identityId)).toMatchObject({ refreshToken: 'R' })
+    expect(await identities.get(cred.identityId)).toMatchObject({ refreshToken: 'R' })
   })
 
   it('enrolls via account+password: login -> exchange -> store, returns bearer that resolves', async () => {
-    const { identities, credentials } = makeDeps()
+    const { identities, credentials } = await makeDeps()
     const jwt = fakeJwt(2_000_000_000)
     const auth = {
       login: vi.fn(async () => ({ authorizationCode: 'code-1' })),
@@ -42,16 +42,16 @@ describe('enroll', () => {
     const { bearer } = await enrollUser({ identities, credentials, auth: auth as never },
       { userLabel: 'pilot@kkday.com', account: 'pilot@kkday.com', password: 'pw' })
     expect(auth.login).toHaveBeenCalledWith('pilot@kkday.com', 'pw', { otp: undefined })
-    const cred = credentials.getBySecret(bearer)!
+    const cred = (await credentials.getBySecret(bearer))!
     expect(cred.kind).toBe('static_bearer')
-    const identity = identities.get(cred.identityId)!
+    const identity = (await identities.get(cred.identityId))!
     expect(identity.userLabel).toBe('pilot@kkday.com')
     expect(identity.accessToken).toBe(jwt)
     expect(identity.accessExpiresAt).toBe(2_000_000_000_000)
   })
 
   it('derives stored userLabel from the access token authKey claim, not the passed-in label, when authKey is present', async () => {
-    const { identities, credentials } = makeDeps()
+    const { identities, credentials } = await makeDeps()
     const jwt = fakeJwt(2_000_000_000, { authKey: 'real.identity@kkday.com' })
     const auth = {
       login: vi.fn(async () => ({ authorizationCode: 'code-1' })),
@@ -59,12 +59,12 @@ describe('enroll', () => {
     }
     const { bearer } = await enrollUser({ identities, credentials, auth: auth as never },
       { userLabel: 'label-passed-at-enroll-time@kkday.com', account: 'pilot@kkday.com', password: 'pw' })
-    const cred = credentials.getBySecret(bearer)!
-    expect(identities.get(cred.identityId)!.userLabel).toBe('real.identity@kkday.com')
+    const cred = (await credentials.getBySecret(bearer))!
+    expect((await identities.get(cred.identityId))!.userLabel).toBe('real.identity@kkday.com')
   })
 
   it('falls back to the passed-in userLabel when the token has no authKey claim', async () => {
-    const { identities, credentials } = makeDeps()
+    const { identities, credentials } = await makeDeps()
     const jwt = fakeJwt(2_000_000_000)
     const auth = {
       login: vi.fn(async () => ({ authorizationCode: 'code-1' })),
@@ -72,12 +72,12 @@ describe('enroll', () => {
     }
     const { bearer } = await enrollUser({ identities, credentials, auth: auth as never },
       { userLabel: 'fallback@kkday.com', account: 'pilot@kkday.com', password: 'pw' })
-    const cred = credentials.getBySecret(bearer)!
-    expect(identities.get(cred.identityId)!.userLabel).toBe('fallback@kkday.com')
+    const cred = (await credentials.getBySecret(bearer))!
+    expect((await identities.get(cred.identityId))!.userLabel).toBe('fallback@kkday.com')
   })
 
   it('enrolls via pasted authorizationCode (browser fallback), skipping login', async () => {
-    const { identities, credentials } = makeDeps()
+    const { identities, credentials } = await makeDeps()
     const auth = {
       login: vi.fn(),
       exchangeCode: vi.fn(async () => ({ accessToken: fakeJwt(2_000_000_000), refreshToken: 'r', businessList: [] })),
@@ -85,6 +85,6 @@ describe('enroll', () => {
     const { bearer } = await enrollUser({ identities, credentials, auth: auth as never }, { userLabel: 'p@kkday.com', code: 'uuid-9' })
     expect(auth.login).not.toHaveBeenCalled()
     expect(auth.exchangeCode).toHaveBeenCalledWith('uuid-9')
-    expect(credentials.getBySecret(bearer)).toBeDefined()
+    expect(await credentials.getBySecret(bearer)).toBeDefined()
   })
 })

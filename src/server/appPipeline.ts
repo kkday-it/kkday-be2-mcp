@@ -133,7 +133,7 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
         // so app_get_batch_view's oids land in the identical session-scoped store
         // be2_create_changeset's SCOPE_NOT_READ gate reads from. Harmless no-op for the other app
         // tools (view/confirm-link/confirm), which never populate envelope.read_oids.
-        if (envelope.read_oids.length) deps.readOids.record(reqCtx.sessionId, envelope.read_oids)
+        if (envelope.read_oids.length) await deps.readOids.record(reqCtx.sessionId, envelope.read_oids)
         // Task 6: mirrors toolPipeline.ts's runWrapped exactly (was previously out of sync — see
         // carry-forward from Task 2 review). Fully failed (no items) => audited as error. Items +
         // errors => status stays ok but the first error entry is STILL recorded into audit
@@ -160,7 +160,7 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
         // comment above at the envelope.errors branch) — record it as-is, matching
         // toolPipeline.ts's runWrapped, so the audit trail shows warn-and-proceed outcomes too,
         // not only hard failures.
-        deps.audit.record({ userLabel, sessionId: reqCtx.sessionId, clientInfo: reqCtx.clientInfo,
+        await deps.audit.record({ userLabel, sessionId: reqCtx.sessionId, clientInfo: reqCtx.clientInfo,
           tool: `app/${tool.name}`, params: auditParams, status, errorMessage: message,
           traceId, durationMs: Date.now() - started })
         span.end()

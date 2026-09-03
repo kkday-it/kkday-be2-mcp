@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import express from 'express'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { buildConfirmRouter } from '../src/server/confirmRoutes.js'
 import type { Server } from 'node:http'
+import type { Db } from '../src/store/dbTypes.js'
 import type { ShelfScheduleItem } from '../src/core/changeset/types.js'
 
 // Task 4: mirrors the harness in tests/confirmRoutesInventory.test.ts (buildConfirmRouter in
@@ -44,8 +45,8 @@ function fakeGw(opts: { rows: Array<Record<string, unknown>> }) {
   }
 }
 
-function seedSchedule(store: ChangeSetStore, id: string, item: ShelfScheduleItem, creatorLabel = USER_LABEL) {
-  store.create({
+async function seedSchedule(store: ChangeSetStore, id: string, item: ShelfScheduleItem, creatorLabel = USER_LABEL) {
+  await store.create({
     id, creatorLabel, creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_schedule',
     items: [item],
     // rec.diff/diffVersion are never read by GET/approve (both always recompute via liveDiff).
@@ -53,15 +54,15 @@ function seedSchedule(store: ChangeSetStore, id: string, item: ShelfScheduleItem
   })
 }
 
-let server: Server, base: string, store: ChangeSetStore, db: ReturnType<typeof openDb>, webSessions: WebSessionStore, gw: ReturnType<typeof fakeGw>
+let server: Server, base: string, store: ChangeSetStore, db: Db, webSessions: WebSessionStore, gw: ReturnType<typeof fakeGw>
 
 beforeEach(async () => {
-  db = openDb(':memory:')
+  db = await openTestDb()
   store = new ChangeSetStore(db, { now: () => 1000 })
   webSessions = new WebSessionStore(db, { now: () => 1000 })
   const credentials = new CredentialStore(db)
-  credentials.insert({ credHash: CredentialStore.hash(SID), identityId: 'ident-sched', kind: 'web_session', expiresAt: null, updatedAt: 1000 })
-  webSessions.create(SID, 'ident-sched')
+  await credentials.insert({ credHash: CredentialStore.hash(SID), identityId: 'ident-sched', kind: 'web_session', expiresAt: null, updatedAt: 1000 })
+  await webSessions.create(SID, 'ident-sched')
   gw = fakeGw({ rows: [{ pkg_oid: 'k1', name: 'Plan A', is_bundle: false, reserve_queue: [{ reserve_date: '2027-01-01 00:00:00', reserve_status: true }] }] })
 
   const sessionTokens: Record<string, { accessToken: string; userLabel: string }> = {
@@ -88,7 +89,7 @@ beforeEach(async () => {
 
 describe('confirm routes — shelf_schedule renderer (Task 4)', () => {
   it('GET renders current queue -> new queue with the "整組取代" red-text warning and UTC label', async () => {
-    seedSchedule(store, 'cs-sched-1', { prod_oid: 'p1', pkg_oid: 'k1', queue: [{ reserve_date_utc: '2027-03-01 00:00:00', reserve_status: false }] })
+    await seedSchedule(store, 'cs-sched-1', { prod_oid: 'p1', pkg_oid: 'k1', queue: [{ reserve_date_utc: '2027-03-01 00:00:00', reserve_status: false }] })
     const res = await http(base, 'GET', '/confirm/cs-sched-1', undefined, COOKIE)
     expect(res.status).toBe(200)
     expect(res.text).toContain('整組取代')
@@ -99,29 +100,29 @@ describe('confirm routes — shelf_schedule renderer (Task 4)', () => {
   })
 
   it('GET on a noop change-set (target already matches live current) surfaces (無變更)', async () => {
-    seedSchedule(store, 'cs-sched-noop', { prod_oid: 'p1', pkg_oid: 'k1', queue: [{ reserve_date_utc: '2027-01-01 00:00:00', reserve_status: true }] })
+    await seedSchedule(store, 'cs-sched-noop', { prod_oid: 'p1', pkg_oid: 'k1', queue: [{ reserve_date_utc: '2027-01-01 00:00:00', reserve_status: true }] })
     const res = await http(base, 'GET', '/confirm/cs-sched-noop', undefined, COOKIE)
     expect(res.status).toBe(200)
     expect(res.text).toContain('無變更')
   })
 
   it('approve executes the PUT against .../package-configs/reserve-active and marks done', async () => {
-    seedSchedule(store, 'cs-sched-2', { prod_oid: 'p1', pkg_oid: 'k1', queue: [{ reserve_date_utc: '2027-03-01 00:00:00', reserve_status: false }] })
+    await seedSchedule(store, 'cs-sched-2', { prod_oid: 'p1', pkg_oid: 'k1', queue: [{ reserve_date_utc: '2027-03-01 00:00:00', reserve_status: false }] })
     const page = await http(base, 'GET', '/confirm/cs-sched-2', undefined, COOKIE)
     const version = /data-diff-version="([^"]+)"/.exec(page.text)![1]
     const res = await http(base, 'POST', '/confirm/cs-sched-2/approve', { diff_version: version }, COOKIE)
     expect(res.status).toBe(200)
-    expect(store.get('cs-sched-2')!.status).toBe('done')
+    expect((await store.get('cs-sched-2'))!.status).toBe('done')
     expect(gw.calls.some(c => c.m === 'PUT' && c.path === '/product/api/v1/products/p1/package-configs/reserve-active')).toBe(true)
   })
 
   it('approve 409s when the live current_queue drifted since the page was rendered (stale guard)', async () => {
-    seedSchedule(store, 'cs-sched-3', { prod_oid: 'p1', pkg_oid: 'k1', queue: [{ reserve_date_utc: '2027-03-01 00:00:00', reserve_status: false }] })
+    await seedSchedule(store, 'cs-sched-3', { prod_oid: 'p1', pkg_oid: 'k1', queue: [{ reserve_date_utc: '2027-03-01 00:00:00', reserve_status: false }] })
     const page = await http(base, 'GET', '/confirm/cs-sched-3', undefined, COOKIE)
     const version = /data-diff-version="([^"]+)"/.exec(page.text)![1]
     gw.rows = [{ pkg_oid: 'k1', name: 'Plan A', is_bundle: false, reserve_queue: [{ reserve_date: '2027-05-05 00:00:00', reserve_status: true }] }]
     const res = await http(base, 'POST', '/confirm/cs-sched-3/approve', { diff_version: version }, COOKIE)
     expect(res.status).toBe(409)
-    expect(store.get('cs-sched-3')!.status).toBe('pending_approval')
+    expect((await store.get('cs-sched-3'))!.status).toBe('pending_approval')
   })
 })

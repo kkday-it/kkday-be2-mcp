@@ -84,7 +84,7 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
     // staleness) so the next read sees it. Gated on status still being pending_approval inside
     // updateDiff itself — if a concurrent approve/reject/expiry already moved this change-set on,
     // this is correctly a no-op (never resurrects/overwrites a decided change-set).
-    deps.changeSets.updateDiff(rec.id, diff, version)
+    await deps.changeSets.updateDiff(rec.id, diff, version)
     return { stale: true }
   }
 
@@ -112,11 +112,11 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
     if (rec.schedule.executeAtUtc <= deps.now()) {
       throw new AppError('SCHEDULE_IN_PAST', 'scheduled time has passed — cancel and re-create with a new time', 409)
     }
-    const won = deps.changeSets.setScheduled(rec.id, {
+    const won = await deps.changeSets.setScheduled(rec.id, {
       identityId: who.identityId, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId,
     }, deps.now())
     if (!won) return { casFailed: true }
-    deps.audit.record({
+    await deps.audit.record({
       userLabel: who.userLabel, sessionId: who.sessionId,
       clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
       tool: 'changeset.approve',
@@ -130,7 +130,7 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
   // transition may proceed to executeChangeSet. This is what guarantees execute-exactly-once
   // under concurrent approvals — including the cross-channel case now possible post-Task-11 (one
   // approval via the confirm page, another via the panel, for the same change-set).
-  const wonCas = deps.changeSets.casStatus(rec.id, 'pending_approval', 'approved', deps.now())
+  const wonCas = await deps.changeSets.casStatus(rec.id, 'pending_approval', 'approved', deps.now())
   if (!wonCas) return { casFailed: true }
 
   // Audit the human DECISION itself (governance event "human approved change-set X at T via
@@ -138,7 +138,7 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
   // tool='changeset.execute'. Preserves the confirm-page's original ip/clientInfo audit fields
   // (params.audit) verbatim — dropping IP audit here was an explicitly called-out regression risk
   // during this extraction.
-  deps.audit.record({
+  await deps.audit.record({
     userLabel: who.userLabel, sessionId: who.sessionId,
     clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
     tool: 'changeset.approve',

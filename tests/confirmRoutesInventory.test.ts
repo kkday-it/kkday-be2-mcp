@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import express from 'express'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
@@ -8,6 +8,7 @@ import { CredentialStore } from '../src/store/credentialStore.js'
 import { buildConfirmRouter } from '../src/server/confirmRoutes.js'
 import type { Server } from 'node:http'
 import type { InventoryItem } from '../src/core/changeset/types.js'
+import type { Db } from '../src/store/dbTypes.js'
 
 // Phase 3a Task 7: mirrors the harness in tests/confirmRoutes.test.ts (buildConfirmRouter in
 // isolation, plain fetch against a listening express app, redirect:'manual') — but seeds
@@ -52,8 +53,8 @@ function fakeGw(opts: { qty: Record<string, number> }) {
   }
 }
 
-function seedInventory(store: ChangeSetStore, id: string, item: InventoryItem, creatorLabel = USER_LABEL) {
-  store.create({
+async function seedInventory(store: ChangeSetStore, id: string, item: InventoryItem, creatorLabel = USER_LABEL) {
+  await store.create({
     id, creatorLabel, creatorBearerHash: 'bh', sessionId: 's', actionType: 'inventory_setting',
     items: [item],
     // rec.diff/diffVersion are never read by GET/approve (both always recompute via liveDiff) —
@@ -62,16 +63,16 @@ function seedInventory(store: ChangeSetStore, id: string, item: InventoryItem, c
   })
 }
 
-let server: Server, base: string, store: ChangeSetStore, db: ReturnType<typeof openDb>, webSessions: WebSessionStore, gw: ReturnType<typeof fakeGw>
+let server: Server, base: string, store: ChangeSetStore, db: Db, webSessions: WebSessionStore, gw: ReturnType<typeof fakeGw>
 
 beforeEach(async () => {
-  db = openDb(':memory:')
+  db = await openTestDb()
   store = new ChangeSetStore(db, { now: () => 1000 })
   webSessions = new WebSessionStore(db, { now: () => 1000 })
   const credentials = new CredentialStore(db)
   // Task 4: requireSession gates on credentials.getBySecret(sid).kind === 'web_session'.
-  credentials.insert({ credHash: CredentialStore.hash(SID), identityId: 'ident-inv', kind: 'web_session', expiresAt: null, updatedAt: 1000 })
-  webSessions.create(SID, 'ident-inv')
+  await credentials.insert({ credHash: CredentialStore.hash(SID), identityId: 'ident-inv', kind: 'web_session', expiresAt: null, updatedAt: 1000 })
+  await webSessions.create(SID, 'ident-inv')
   gw = fakeGw({ qty: { 'i1': { fullday: 10 } as any } })
 
   const sessionTokens: Record<string, { accessToken: string; userLabel: string }> = {
@@ -98,7 +99,7 @@ beforeEach(async () => {
 
 describe('confirm routes — inventory_setting per-date render (Phase 3a Task 7)', () => {
   it('GET renders fullday rows + the high-risk banner', async () => {
-    seedInventory(store, 'cs-inv-1', { item_oid: 'i1', supplier_oid: 's1', quantity: 50 })
+    await seedInventory(store, 'cs-inv-1', { item_oid: 'i1', supplier_oid: 's1', quantity: 50 })
     const res = await http(base, 'GET', '/confirm/cs-inv-1', undefined, COOKIE)
     expect(res.status).toBe(200)
     expect(res.text).toContain('立即影響前台可售')
@@ -109,24 +110,24 @@ describe('confirm routes — inventory_setting per-date render (Phase 3a Task 7)
   })
 
   it('approve: write drift between render and approve does NOT 409 for SET because target is absolute', async () => {
-    seedInventory(store, 'cs-inv-adj', { item_oid: 'i1', supplier_oid: 's1', quantity: 50 })
+    await seedInventory(store, 'cs-inv-adj', { item_oid: 'i1', supplier_oid: 's1', quantity: 50 })
     const page = await http(base, 'GET', '/confirm/cs-inv-adj', undefined, COOKIE)
     const version = /data-diff-version="([^"]+)"/.exec(page.text)![1]
     gw.qty['i1'] = { fullday: 25 } as any   // live drift after the user saw the page
     const res = await http(base, 'POST', '/confirm/cs-inv-adj/approve', { diff_version: version }, COOKIE)
     expect(res.status).toBe(409) // SET always 409s on drift
-    expect(store.get('cs-inv-adj')!.status).toBe('pending_approval')
+    expect((await store.get('cs-inv-adj'))!.status).toBe('pending_approval')
     expect((gw.qty['i1'] as any).fullday).toBe(25)
   })
 
   it('approve: a SET change-set 409s when the base drifted (stale guard intact)', async () => {
-    seedInventory(store, 'cs-inv-set', { item_oid: 'i1', supplier_oid: 's1', quantity: 100 })
+    await seedInventory(store, 'cs-inv-set', { item_oid: 'i1', supplier_oid: 's1', quantity: 100 })
     const page = await http(base, 'GET', '/confirm/cs-inv-set', undefined, COOKIE)
     const version = /data-diff-version="([^"]+)"/.exec(page.text)![1]
     gw.qty['i1'] = { fullday: 11 } as any
     const res = await http(base, 'POST', '/confirm/cs-inv-set/approve', { diff_version: version }, COOKIE)
     expect(res.status).toBe(409)
-    expect(store.get('cs-inv-set')!.status).toBe('pending_approval')
+    expect((await store.get('cs-inv-set'))!.status).toBe('pending_approval')
     expect((gw.qty['i1'] as any).fullday).toBe(11)   // no write happened
   })
 })

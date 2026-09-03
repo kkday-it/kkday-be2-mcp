@@ -11,7 +11,7 @@ export interface SessionUser { sessionId: string; userLabel: string; accessToken
 export async function requireSession(deps: SessionGateDeps, req: express.Request): Promise<SessionUser | undefined> {
   const sid = parseCookies(req.header('cookie'))['be2mcp_sid']
   if (!sid) return undefined
-  const sess = deps.webSessions.get(sid)   // undefined if idle-expired (row deleted)
+  const sess = await deps.webSessions.get(sid)   // undefined if idle-expired (row deleted)
   if (!sess) return undefined
   // Task 4 kind gate: the be2mcp_sid cookie must resolve to a credential MINTED BY the
   // confirm-page SSO login (kind === 'web_session'). An agent holding its own oauth_access or
@@ -19,7 +19,7 @@ export async function requireSession(deps: SessionGateDeps, req: express.Request
   // structurally, not just because the secret happens to be "unknown" (it is a perfectly known,
   // valid credential — just of the wrong kind for this surface). This is what makes
   // self-approval impossible even if the agent knows the change-set id (鐵則 #4).
-  const cred = deps.credentials.getBySecret(sid)
+  const cred = await deps.credentials.getBySecret(sid)
   if (!cred || cred.kind !== 'web_session') return undefined
   let user
   try {
@@ -28,10 +28,10 @@ export async function requireSession(deps: SessionGateDeps, req: express.Request
     // be2 refresh token expired/revoked (AuthError REAUTH_REQUIRED) or upstream unavailable:
     // the web session is dead. Delete it and treat as no-session so the caller redirects to
     // login — otherwise every /confirm request 500s in a loop until the idle TTL. (agy round-1)
-    deps.webSessions.delete(sid)
+    await deps.webSessions.delete(sid)
     return undefined
   }
-  deps.webSessions.touch(sid)
+  await deps.webSessions.touch(sid)
   // Security fix (final whole-branch review finding, credential-at-rest leak): never hand back
   // the raw cookie secret `sid` as the audited sessionId. `sid` IS the web_session credential's
   // secret — audit_log is append-only (no-delete trigger), so a raw sid landing in a row would
