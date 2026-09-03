@@ -3,7 +3,7 @@ import { openTestDb } from './support/testDb.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 
 // 註：Task 5 前這裡有一條「openDb 對 legacy web_sessions（無 identity_id 欄）重建表」測試——
-// 那條測的是 src/store/db.ts（better-sqlite3 on-disk 開檔）在偵測到舊 schema 時的
+// 那條測的是 src/store/db.ts（舊 SQLite driver on-disk 開檔）在偵測到舊 schema 時的
 // runtime 重建行為，屬 SQLite-only 概念（PG 沒有「開檔時發現欄位對不上就重建」這回事，
 // schema 一律由 forward-only migrations 定義，見 db/migrations/）。db.ts 本身排定於
 // Task 7 隨 app.ts 改線刪除，故此測試在 Db 抽象下沒有對應語意，隨本次轉換移除，

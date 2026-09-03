@@ -15,7 +15,7 @@ function rec(over: Partial<ChangeSetRecord> = {}): ChangeSetRecord {
 describe('ChangeSetStore', () => {
   // Task 5 precedent (webSessionStore.test.ts)：原本這裡有一條「openDb 對 legacy on-disk
   // change_sets（含 approval_token_hash NOT NULL）自動移除該欄」的回歸測試，測的是舊
-  // src/store/db.ts（better-sqlite3 開檔時偵測到舊 schema 就地 ALTER）這個 SQLite-only 行為。
+  // src/store/db.ts（舊 SQLite driver 開檔時偵測到舊 schema 就地 ALTER）這個 SQLite-only 行為。
   // PG 版沒有「開檔時發現欄位對不上就重建/改欄」這回事——schema 一律由 db/migrations/ 的
   // forward-only migrations 定義（baseline 早已不含 approval_token_hash）。在 Db 抽象下這條
   // 測試沒有對應語意，移除；不構成 ChangeSetStore 本身覆蓋率的弱化。

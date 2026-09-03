@@ -26,7 +26,7 @@ export interface OAuthPurgeResult {
 
 // Task 7: converted to the async Db interface (pg.Pool / PGlite, spec §3.1) — the exported
 // business logic (three DELETEs) is small and self-contained, and leaving it stranded on the
-// deleted better-sqlite3 Database type would make it untestable (tests/oauthPurge.test.ts already
+// deleted legacy SQLite Database type would make it untestable (tests/oauthPurge.test.ts already
 // exercises it against the shared PGlite-backed test harness, tests/support/testDb.ts). Only the
 // CLI entrypoint below (which needs real config.db/createPgDb wiring) is left as a stub for
 // Task 9 — this function itself needed no further conversion.
