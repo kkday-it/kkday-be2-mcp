@@ -200,20 +200,22 @@ client 接入（本機）：`claude mcp add be2-mcp --transport http http://127.
 > 權威規範已收進 repo：`docs/be2-mcp/vibe-cloud-ready-spec.md`（來源 kkday-it/kkday-vibe-framework）。
 > 平台設定分 **APP CONFIG（非機密）** + **APP SECRET（機密，config-manager 注入 k8s Secret）** 兩塊 dotenv。
 > **決策**：分階段——先產本差距分析 + 遷移 spec/plan（走主管線），實際重構下輪分批。
+> **更新（2026-09-03）**：#4/#5/#6/#7/#8 已由 `feat/pg-migration` 分支關閉（見下表與
+> `docs/superpowers/specs/2026-09-03-pg-migration-design.md`）。
 
 | # | 約束 | be2-mcp 現況 | 判定 | 遷移動作 |
 |---|---|---|---|---|
-| 1 | 綁 `0.0.0.0`（非 127.0.0.1） | 綁 `127.0.0.1`（本機 MCP 設計） | 🟡 | 容器化時綁 `0.0.0.0`、讀 `PORT` |
-| 3 | 完全無狀態、可多副本 | tokenManager single-flight / scheduler poller / inventory executor **in-process 鎖** | 🔴 | 去 in-process 鎖 → 外部（PG advisory lock / Redis） |
-| 4 | 不寫本機磁碟（除 /tmp） | 寫 `./data/*.sqlite` | 🔴 | 狀態進外部 DB；無本機檔 |
-| 5 | 禁 SQLite/檔案型 DB | 全用 better-sqlite3 | 🔴 | **核心**：store 抽象 → PostgreSQL |
-| 6 | DB = 外部 PostgreSQL + TLS | 無 | 🔴 | 接 RDS PostgreSQL（`DB_HOST/PORT/USER/PASSWORD/NAME`、`sslmode=no-verify`、小連線池） |
-| 7 | runtime 不做 DDL（forward-only migration） | `openDb()` 啟動 `CREATE TABLE` | 🔴 | schema 改 repo 內 forward-only SQL migration；app 帳號只 CRUD |
-| 8 | 排程 = HTTP endpoint（帶 bearer、idempotent） | in-process poller | 🔴 | scheduler 改對外可觸發 HTTP endpoint（K8s CronJob 打） |
-| 2/9/10/11/12 | env secret / S3 SDK 憑證鏈 / stdout / health 無依賴 / adapter | env OK、`/healthz` OK、console 進 stdout（缺 LOG_LEVEL 結構化）；無 S3；adapter 部分 | 🟢🟡 | 補結構化 stdout（LOG_LEVEL）、`ctx.*` adapter 化、`.env.example` 三分類、`PROJECT.yaml` |
+| 1 | 綁 `0.0.0.0`（非 127.0.0.1） | `APP_BIND_HOST`（預設 `127.0.0.1`，部署可調 `0.0.0.0`；Phase A 已補） | 🟢 | 已可用，非本案動作 |
+| 3 | 完全無狀態、可多副本 | tokenManager single-flight / inventory executor 仍是 **in-process 鎖**；CAS/rate budget 已是 DB 條件式 UPDATE（多實例安全） | 🔴 | 留給 HA 階段：single-flight + inventory mutex 去 in-process → Redis/分散式鎖。scheduler 認領（CAS）與 web session 現況（in-memory）亦留待該階段一併檢視 |
+| 4 | 不寫本機磁碟（除 /tmp） | ✅ **已關閉**（`feat/pg-migration`）：`./data/*.sqlite` 已刪除，狀態全在外部 PostgreSQL | ✅ | 已完成 |
+| 5 | 禁 SQLite/檔案型 DB | ✅ **已關閉**：`better-sqlite3` 依賴已移除（`package.json`/`src`/`tests`/`scripts` 零引用） | ✅ | 已完成 |
+| 6 | DB = 外部 PostgreSQL + TLS | ✅ **已關閉**：`pg.Pool`（`PgDb`），`DB_HOST/PORT/USER/PASSWORD/NAME` 或 `DATABASE_URL`，TLS `rejectUnauthorized:false`（RDS `sslmode=no-verify`） | ✅ | 已完成 |
+| 7 | runtime 不做 DDL（forward-only migration） | ✅ **已關閉**：`openDb()` 的 runtime `CREATE TABLE` 已刪除；schema 由 `db/migrations/*.sql` + `npm run db:migrate`（forward-only、advisory lock）管理；app role（`be2mcp_app`）無 DDL 權限 | ✅ | 已完成 |
+| 8 | 排程 = HTTP endpoint（帶 bearer、idempotent） | ✅ **已關閉**：`POST /api/jobs/oauth-purge`、`POST /api/jobs/scheduler-tick`（`Authorization: Bearer $CRON_SECRET`，idempotent）；`SCHEDULER_MODE=poller\|http` 切換，`http` 模式停用內建 poller | ✅ | 已完成 |
+| 2/9/10/11/12 | env secret / S3 SDK 憑證鏈 / stdout / health 無依賴 / adapter | env OK、`/healthz` OK（不查 DB）、console 進 stdout（缺 LOG_LEVEL 結構化）；無 S3；adapter 部分 | 🟢🟡 | 補結構化 stdout（LOG_LEVEL）、`ctx.*` adapter 化、`.env.example` 三分類、`PROJECT.yaml` |
 
-**與原設計一致**：`be2-mcp-auth-design.md` 的 Option 1 明寫 token store = 內網共用 **Redis/DB**；現在的 SQLite 是 Phase 1a 簡化，生產本就預期換外部 DB。
+**與原設計一致**：`be2-mcp-auth-design.md` 的 Option 1 明寫 token store = 內網共用 **Redis/DB**；SQLite 曾是 Phase 1a 簡化，`feat/pg-migration` 已換成生產預期的外部 DB。
 
-**遷移核心槓桿**：store SQLite→PostgreSQL 一動，連帶解 #4/#5/#6/#7 + 多副本（#3 的鎖改 PG/Redis）。scheduler #8 另一條。→ 詳見遷移 spec（待產，`docs/superpowers/specs/`）。
+**遷移核心槓桿（已兌現）**：store SQLite→PostgreSQL 一動，連帶解 #4/#5/#6/#7；scheduler #8 另立兩支 job endpoint 一併關閉。**剩餘缺口收斂到 #3**（in-process 鎖 + in-memory session），留給多副本 HA 階段——單副本部署下 #3 不阻擋上線。
 
 **命名對齊**：平台用 `APP_ENV`/`APP_PORT`/`APP_NAME`；be2-mcp 用 `APP_ENV`/`APP_PORT`。`config.ts` 加 compat（同時吃 `APP_ENV`）或部署時對映。auth-service key 平台命名 `API_AUTH_SERVICE_*`，我方 `*_AUTHSVC_SERVICE_KEY`，需對映 + 確認 scope。
