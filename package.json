@@ -34,7 +34,6 @@
     "@opentelemetry/exporter-trace-otlp-http": "^0.221.0",
     "@opentelemetry/sdk-node": "^0.221.0",
     "@opentelemetry/sdk-trace-base": "^2.10.0",
-    "better-sqlite3": "^13.0.3",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "pg": "^8.23.0",
@@ -43,7 +42,6 @@
   "devDependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
     "@electric-sql/pglite": "^0.5.8",
-    "@types/better-sqlite3": "^9.6.0",
     "@types/express": "^5.0.6",
     "@types/node": "^26.2.0",
     "@types/pg": "^8.23.1",

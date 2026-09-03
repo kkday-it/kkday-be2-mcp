@@ -84,7 +84,7 @@ describe('POST /oauth/revoke(RFC 7009,spec §4)', () => {
   it('consumed / 已過期的 refresh 呈上 → 照樣命中、整 family 撤銷(spec §4.2)', async () => {
     // consumed:模擬已被 rotation 標記過的舊 refresh
     const g1 = await seedGrant(db, { identityId: 'IC' })
-    await db.query('UPDATE oauth_refresh SET consumed = 1 WHERE identity_id = $1', ['IC'])
+    await db.query('UPDATE oauth_refresh SET consumed = TRUE WHERE identity_id = $1', ['IC'])
     expect((await revoke({ token: g1.rawRefresh })).status).toBe(200)
     expect(await g1.oauth.countRefreshByIdentity('IC')).toBe(0)
     expect(await g1.creds.getBySecret(g1.rawAccess)).toBeUndefined()
