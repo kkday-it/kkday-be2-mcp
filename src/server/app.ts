@@ -40,6 +40,8 @@ import { APP_TOOLS } from '../tools/appTools.js'
 import type { ToolDef } from '../tools/types.js'
 import type { L2ToolDef } from './l2Context.js'
 import { buildHostGuard } from './hostGuard.js'
+import { buildJobRoutes } from './jobRoutes.js'
+import { runOAuthPurge } from '../../scripts/oauth-purge.js'
 import { AppError } from '../errors.js'
 
 export interface ServerDeps { config: Config; db: Db }
@@ -174,6 +176,12 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     scheduleTz: config.scheduleTz,
   }
 
+  // Task 10: created here (rather than at the bottom of buildApp, its previous home) so
+  // `scheduler.tick`/`scheduler.auditStranded` are available for the /api/jobs/* router below —
+  // jobRoutes must call the SAME tick the in-process poller uses (SCHEDULER_MODE=http just
+  // swaps who calls it: an external cron via HTTP instead of index.ts's setTimeout loop).
+  const scheduler = makeScheduler({ changeSets, gateway, audit, now: Date.now, tokenManager })
+
   const transports = new Map<string, StreamableHTTPServerTransport>()
   // Binds a session-id to the IDENTITY the creating bearer resolved to (spec §6.2) — not to the
   // bearer's own credential hash. Task 5: this is what lets an OAuth reference token rotate
@@ -254,6 +262,22 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     })()
   })
   app.use(buildHostGuard())
+  // Task 10：cron HTTP endpoints（/api/jobs/oauth-purge、/api/jobs/scheduler-tick）——掛在
+  // hostGuard 之後、MCP bearer 驗證（/mcp handler 內）之前；它自帶獨立的 CRON_SECRET bearer
+  // 驗證（常數時間比對），與 be2 credential 體系無關，呼叫方是叢集內的 cron controller。
+  // runTick 打的就是上面 scheduler.tick——SCHEDULER_MODE=http 時外部 cron 驅動的 tick跟
+  // poller 模式下 in-process setTimeout 迴圈驅動的是同一顆函式，行為完全一致。
+  app.use(buildJobRoutes({
+    cronSecret: config.cronSecret,
+    // Fresh object literal (not the OAuthPurgeResult-typed value itself) so it structurally
+    // satisfies buildJobRoutes' Record<string, number> return type without a cast — OAuthPurgeResult
+    // is a closed interface (no index signature) and isn't assignable to Record<string, number> as-is.
+    runPurge: async () => {
+      const result = await runOAuthPurge(db, Date.now())
+      return { expiredAuthCodes: result.expiredAuthCodes, expiredRefresh: result.expiredRefresh, ghostIdentities: result.ghostIdentities }
+    },
+    runTick: scheduler.tick,
+  }))
   // Task 6：OAuth discovery（RFC 9728 + RFC 8414）——公開端點，Claude 的 OAuth client
   // 用它找到 authorize/token/register 端點與 PKCE/public-client 能力，無需 bearer。
   // Task 2: baseUrl now driven by config.publicBaseUrl (set during config loading / initialization).
@@ -356,8 +380,11 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     })
   })
 
-  const scheduler = makeScheduler({ changeSets, gateway, audit, now: Date.now, tokenManager })
   app.locals.startScheduler = scheduler.start
+  // Task 10: exposed so index.ts's SCHEDULER_MODE=http branch can run the startup stranded-audit
+  // once without starting the in-process poller loop (poller mode gets this for free — start()
+  // fires it internally before entering the setTimeout loop, see scheduler.ts).
+  app.locals.auditStranded = scheduler.auditStranded
 
   return app
 }

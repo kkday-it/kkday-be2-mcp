@@ -3,6 +3,7 @@ import { initOtel, shutdownOtel } from './otel.js'
 import { createPgDb } from './store/pgDb.js'
 import { buildApp } from './server/app.js'
 import { makeShutdown } from './server/shutdown.js'
+import { shouldStartPoller } from './server/schedulerMode.js'
 
 const config = loadConfig()
 initOtel(config.otelMode)
@@ -12,7 +13,17 @@ const app = buildApp({ config, db })
 let stopScheduler: (() => Promise<void>) | undefined
 const server = app.listen(config.port, config.bindHost, () => {
   console.log(`be2-mcp listening on ${config.publicBaseUrl}/mcp (bind ${config.bindHost}:${config.port}, env: ${config.gatewayUrl})`)
-  stopScheduler = (app.locals.startScheduler as (() => () => Promise<void>) | undefined)?.()
+  // Task 10: SCHEDULER_MODE=http — cloud-ready 硬約束「排程走 HTTP endpoint 非 in-process
+  // timer」（CLAUDE.md 上雲硬約束）：不啟動 poller，改由外部 cron 打
+  // POST /api/jobs/scheduler-tick 驅動同一顆 scheduler.tick。poller 模式下 start() 內部會在
+  // 進入 setTimeout 迴圈前先跑一次 auditStranded()（見 scheduler.ts）；http 模式沒有 start()
+  // 可以搭這班順風車，故這裡直接呼叫 app.locals.auditStranded 補上同一次啟動時警示。
+  if (shouldStartPoller(config)) {
+    stopScheduler = (app.locals.startScheduler as (() => () => Promise<void>) | undefined)?.()
+  } else {
+    void (app.locals.auditStranded as (() => Promise<void>) | undefined)?.()
+      .catch(err => console.error('[be2-mcp] auditStranded (SCHEDULER_MODE=http startup) error:', (err as Error).message))
+  }
 })
 
 const shutdown = makeShutdown({
