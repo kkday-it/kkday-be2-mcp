@@ -52,7 +52,7 @@ export function runOAuthPurge(db: Database.Database, now: number): OAuthPurgeRes
 const isMainModule = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
 if (isMainModule) {
   const cfg = loadConfig()
-  const db = openDb(cfg.dbPath)
+  const db = openDb('./data/be2-mcp-transition.sqlite')  // TODO(Task 7): switch to createPgDb(cfg.db)
   const result = runOAuthPurge(db, Date.now())
   console.log(`oauth-purge done: expiredAuthCodes=${result.expiredAuthCodes} expiredRefresh=${result.expiredRefresh} ghostIdentities=${result.ghostIdentities}`)
 }

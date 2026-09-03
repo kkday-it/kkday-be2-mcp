@@ -19,7 +19,7 @@ beforeAll(async () => {
   oauthStore = new OAuthStore(db)
   const config: Config = {
     authsvcUrl: 'https://auth.invalid', gatewayUrl: 'https://gw.invalid',
-    serviceKey: 'sk', port: 0, dbPath: ':memory:', otelMode: 'off', scheduleTz: 'Asia/Taipei',
+    serviceKey: 'sk', port: 0, db: { host: 'localhost', ssl: false }, schedulerMode: 'poller', otelMode: 'off', scheduleTz: 'Asia/Taipei',
     bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
   }
   const app = buildApp({ config, db })

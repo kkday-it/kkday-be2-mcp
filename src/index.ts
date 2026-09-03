@@ -6,7 +6,7 @@ import { makeShutdown } from './server/shutdown.js'
 
 const config = loadConfig()
 initOtel(config.otelMode)
-const db = openDb(config.dbPath)
+const db = openDb('./data/be2-mcp-transition.sqlite')  // TODO(Task 7): switch to createPgDb(config.db)
 const app = buildApp({ config, db })
 
 let stopScheduler: (() => Promise<void>) | undefined

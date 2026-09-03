@@ -1,5 +1,3 @@
-// @ts-nocheck
-// TODO(Task 4): remove @ts-nocheck once src/config.ts exports resolveDbConnection
 // scripts/db-migrate.ts
 // `npm run db:migrate` — CI / k8s Job 用（cloud spec §2.5、部署序：migrate 成功才 rollout）。
 // 連線 env 與 app 相同（DB_* 或 DATABASE_URL），但應以 be2mcp_owner 帳號執行（spec §8.2）。

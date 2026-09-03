@@ -60,7 +60,8 @@ describe('DNS-Rebinding and Host Header Guard', () => {
       gatewayUrl: 'https://gw.invalid',
       serviceKey: 'sk',
       port: 0,
-      dbPath: ':memory:',
+      db: { host: 'localhost', ssl: false },
+      schedulerMode: 'poller',
       otelMode: 'off', scheduleTz: 'Asia/Taipei',
       bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
     }
@@ -144,7 +145,8 @@ describe('DNS-Rebinding and Host Header Guard', () => {
       gatewayUrl: 'https://gw.invalid',
       serviceKey: 'sk',
       port: 0,
-      dbPath: ':memory:',
+      db: { host: 'localhost', ssl: false },
+      schedulerMode: 'poller',
       otelMode: 'off', scheduleTz: 'Asia/Taipei',
       bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
     }

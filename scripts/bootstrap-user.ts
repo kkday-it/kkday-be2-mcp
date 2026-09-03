@@ -15,7 +15,7 @@ import { parseArgs } from 'node:util'
 
 const { values } = parseArgs({ options: { otp: { type: 'string' }, code: { type: 'string' }, label: { type: 'string' } } })
 const cfg = loadConfig()
-const db = openDb(cfg.dbPath)
+const db = openDb('./data/be2-mcp-transition.sqlite')  // TODO(Task 7): switch to createPgDb(cfg.db)
 const identities = new IdentityStore(db)
 const credentials = new CredentialStore(db)
 const auth = new AuthServiceClient({ baseUrl: cfg.authsvcUrl, serviceKey: cfg.serviceKey })
