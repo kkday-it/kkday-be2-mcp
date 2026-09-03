@@ -32,6 +32,9 @@ describe('announcementUpdateModule', () => {
     expect(m.itemSchema.safeParse(createShape).success).toBe(false)
     expect(m.isItem(createShape)).toBe(false)
   })
+  it('itemSchema is strict — rejects unknown extra fields (parity with the create schema)', () => {
+    expect(m.itemSchema.safeParse({ ...item, bogus_field: 1 }).success).toBe(false)
+  })
   it('isItem type guard', () => {
     expect(m.isItem(item)).toBe(true)
     expect(m.isItem({ item_oid: '1' })).toBe(false)

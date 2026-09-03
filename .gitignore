@@ -27,3 +27,4 @@ docs/be2-mcp/poc-overview.md
 
 # test-generated cassette fixtures (recreated at runtime)
 tests/support/__fixtures__/
+tests/announcement/update/__fixtures__/
