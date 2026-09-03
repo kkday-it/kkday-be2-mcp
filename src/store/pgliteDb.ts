@@ -17,10 +17,9 @@ function wrap(q: PGlite | Transaction): Pick<Db, 'query'> {
           }
         }
       }
-      // affectedRows 對 SELECT 實跑觀察為 0（非 undefined）——`??` 不會 fallback，
-      // 故改用 `||`：INSERT/UPDATE/DELETE 有實際 affectedRows(>0) 時優先採用（CAS 依賴之），
-      // 否則（SELECT，或 UPDATE/DELETE 影響 0 筆）以 rows.length 兜底，兩者此時皆為 0 恰好一致。
-      return { rows: r.rows as R[], rowCount: r.affectedRows || r.rows.length }
+      // rowCount 來自 PGlite command-tag：SELECT 回傳行數、UPDATE/DELETE 回傳異動行數；
+      // 優先採用 rowCount（PGlite 原生），fallback rows.length 作為兜底（SELECT 或異動 0 筆兩者值同）。
+      return { rows: r.rows as R[], rowCount: r.rowCount ?? r.rows.length }
     },
   }
 }
