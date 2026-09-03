@@ -9,6 +9,7 @@
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:pg": "vitest run --config vitest.pg.config.ts",
     "eval": "tsx eval/run-eval.ts",
     "bootstrap-user": "tsx scripts/bootstrap-user.ts",
     "probe-sit": "tsx scripts/probe-sit.ts",
