@@ -1,7 +1,15 @@
 import { randomUUID, createHash } from 'node:crypto'
+import { PGlite } from '@electric-sql/pglite'
 import { loadConfig } from '../src/config.js'
 import { AuthServiceClient } from '../src/auth/authServiceClient.js'
 import { GatewayClient } from '../src/gateway/client.js'
+import type { Db } from '../src/store/dbTypes.js'
+import { wrapPgliteDb } from '../src/store/pgliteDb.js'
+import { runMigrations } from '../src/store/migrate.js'
+import { ReadOidStore } from '../src/store/readOidStore.js'
+import { ChangeSetStore } from '../src/core/changeset/store.js'
+import { RateBudget } from '../src/limits/rateBudget.js'
+import { AuditLog } from '../src/audit/auditLog.js'
 import { createChangesetCore } from '../src/core/changeset/tools.js'
 import { approveAndExecute, type ConfirmServiceDeps } from '../src/core/changeset/confirmService.js'
 import { modifyUserFromToken } from '../src/server/app.js'
@@ -9,6 +17,22 @@ import { sanitizeQueue } from '../src/modules/product/shelfSchedule/validate.js'
 import { queuesEqual, sortQueue } from '../src/modules/product/shelfSchedule/diff.js'
 import type { L2ToolContext } from '../src/server/l2Context.js'
 import type { ScheduleEntry, ShelfScheduleDiffItem } from '../src/core/changeset/types.js'
+
+// In-memory PGlite + migrations, built from src-internal modules only (never tests/support/testDb.ts —
+// this is a script that could in principle be run outside a test runner). Mirrors the isolation
+// semantics the old openDb(':memory:') gave this script: a fresh, throwaway DB per run, never a real
+// PG connection (this script must NEVER touch real PG — see header comment below).
+async function createIsolatedDb(): Promise<Db> {
+  const pg = new PGlite()
+  await runMigrations({
+    query: async (sql, params) => {
+      const r = await pg.query<Record<string, unknown>>(sql, params as never[])
+      return { rows: r.rows }
+    },
+    exec: async (sql) => { await pg.exec(sql) },
+  })
+  return wrapPgliteDb(pg)
+}
 
 // Phase 4a Task 8 live acceptance — NEVER run in CI, manual only, fully reversible.
 // Run: npx tsx --env-file=.env scripts/live-4a-acceptance.ts [prodOid]   (default prodOid: 34133)
@@ -218,15 +242,64 @@ async function runInventoryPlatformExpectBlocked(
 }
 
 async function main() {
-  // TEMPORARILY DISABLED during the SQLite->PostgreSQL migration (Task 7): this script's db-backed
-  // setup (readOids/changeSets/rateBudget/audit) used to construct these directly against the old
-  // transition SQLite file via openDb(), which Task 7 deletes (src/store/db.ts is gone). This is a
-  // manual-only, never-in-CI live acceptance script (see header comment) — Task 9 restores it
-  // against createPgDb(config.db) + the async store constructors. The helper functions below
-  // (runShelfScheduleRoundTrip, runInventoryPlatformExpectBlocked, etc.) are left intact — they
-  // don't touch the db layer directly (it's threaded in via ctx/confirmDeps) — so Task 9 only needs
-  // to rebuild this db-setup block and the two call sites, not the round-trip logic itself.
-  throw new Error('temporarily disabled during PG migration — Task 9 restores this script')
+  const cfg = loadConfig()
+  const auth = new AuthServiceClient({ baseUrl: cfg.authsvcUrl, serviceKey: cfg.serviceKey })
+  const { authorizationCode } = await auth.login(process.env.AUTH_email!, process.env.AUTH_pwd!)
+  const tokens = await auth.exchangeCode(authorizationCode)
+  const accessToken = tokens.accessToken
+  console.log(`login+exchange OK; businessList entries: ${tokens.businessList.length}`)
+
+  const gateway = new GatewayClient({ baseUrl: cfg.gatewayUrl })
+  // Deliberately isolated in-memory PGlite — NEVER a real PG connection (see createIsolatedDb above).
+  const db = await createIsolatedDb()
+  const readOids = new ReadOidStore(db)
+  const changeSets = new ChangeSetStore(db)
+  const rateBudget = new RateBudget(db)
+  const audit = new AuditLog(db)
+  const sessionId = `live-4a-acceptance-${randomUUID()}`
+  const userLabel = process.env.AUTH_email!
+
+  const ctx: L2ToolContext = {
+    gateway, accessToken, userLabel, sessionId,
+    bearerHash: createHash('sha256').update(accessToken).digest('hex'),
+    businessList: tokens.businessList,
+    readOids, changeSets, rateBudget,
+    baseUrl: `http://127.0.0.1:${cfg.port}`,
+    genId: () => randomUUID(),
+    now: Date.now,
+    // No browser confirm page in this script — approveAndExecute is called directly below (the
+    // exact same shared service the confirm page / wizard panel call), so the confirm_url this
+    // would normally emit out-of-band is unused; just log it for visibility into what a real
+    // caller would have received.
+    emitConfirmUrl: (id, url) => console.log(`  (confirm_url would have been: ${url} — this script approves directly instead)`),
+    scheduleTz: cfg.scheduleTz,
+  }
+  const confirmDeps: ConfirmServiceDeps = { changeSets, gateway, audit, now: Date.now, modifyUserFrom: modifyUserFromToken }
+
+  console.log(`\n=== Part A: shelf_schedule — full live round trip (prod_oid=${PROD_OID}) ===`)
+  let shelfScheduleOk = false
+  try {
+    shelfScheduleOk = await runShelfScheduleRoundTrip(ctx, confirmDeps, gateway, accessToken, PROD_OID)
+  } catch (e) {
+    console.log(`  round trip threw: ${shortErr(e)}`)
+  }
+
+  console.log(`\n=== Part B: inventory_platform — expect fail-closed DiffError at creation (prod_oid=${PROD_OID}) ===`)
+  try {
+    await runInventoryPlatformExpectBlocked(ctx, gateway, accessToken, PROD_OID)
+  } catch (e) {
+    console.log(`  probe threw unexpectedly (not the documented DiffError path): ${shortErr(e)}`)
+  }
+
+  console.log('\n=== audit_log summary (sanitized: ts/tool/status/user only — no tokens) ===')
+  for (const e of (await audit.recent(30)).reverse()) {
+    console.log(`  ${new Date(e.ts).toISOString()}  ${e.tool.padEnd(24)} status=${e.status}  user=${e.userLabel}`)
+  }
+
+  console.log(`\nRESULT=${shelfScheduleOk ? 'SHELF_SCHEDULE_LIVE_OK' : 'SHELF_SCHEDULE_LIVE_FAILED'}`)
+  console.log('RESULT=INVENTORY_PLATFORM_DIFF_BLOCKED_AS_EXPECTED (see docs/be2-mcp/sit-write-contracts.md)')
+
+  await db.close()
 }
 
 main().catch(e => { console.error('live-4a-acceptance failed:', shortErr(e)); process.exit(1) })

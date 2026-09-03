@@ -1,4 +1,6 @@
 import type { Db } from '../src/store/dbTypes.js'
+import { createPgDb } from '../src/store/pgDb.js'
+import { resolveDbConnection } from '../src/config.js'
 
 // Task 11：OAuth token 生命週期治理 —— 仿 dev-tools 的 `oauth:purge` CronJob（見
 // docs/be2-mcp/reference-dev-tools-architecture.md）。硬刪三類「過期/孤兒」資料，
@@ -53,12 +55,17 @@ export async function runOAuthPurge(db: Db, now: number): Promise<OAuthPurgeResu
 
 // 薄殼：只在直接執行本檔時跑（`npm run oauth-purge`），被 import 測試時不會誤觸發。
 // 用 argv[1] 比對而非 import.meta.main（此 TS 版本/Node 目標尚未穩定支援後者）。
-//
-// TEMPORARILY DISABLED during the SQLite->PostgreSQL migration (Task 7): the CLI entrypoint used
-// to open the old transition SQLite file directly via openDb(), which Task 7 deletes
-// (src/store/db.ts is gone). Task 9 restores this against createPgDb(config.db). runOAuthPurge
-// itself (above) is already fully converted and independently testable in the meantime.
+async function main(): Promise<void> {
+  const db = createPgDb(resolveDbConnection(process.env))
+  try {
+    const result = await runOAuthPurge(db, Date.now())
+    console.log(`oauth-purge done: expiredAuthCodes=${result.expiredAuthCodes} expiredRefresh=${result.expiredRefresh} ghostIdentities=${result.ghostIdentities}`)
+  } finally {
+    await db.close()
+  }
+}
+
 const isMainModule = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
 if (isMainModule) {
-  throw new Error('temporarily disabled during PG migration — Task 9 restores this script')
+  main().catch(e => { console.error('oauth-purge FAILED:', (e as Error).message); process.exit(1) })
 }
