@@ -19,7 +19,7 @@ const announcementUpdateItemShape = z.object({
   end_time: z.string().nullable().optional(),
   langs: z.array(z.string().min(1)).min(1),
   contents: z.array(langContentShape),
-})
+}).strict()   // parity with the create schema: reject unknown extra fields so the create/update union can't silently swallow a mis-shaped item
 
 function isAnnouncementUpdateItem(i: unknown): i is AnnouncementUpdateItem {
   const a = i as AnnouncementUpdateItem

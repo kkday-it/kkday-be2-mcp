@@ -1,4 +1,5 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
+import { dirname } from 'node:path'
 
 export type Interaction = { method: string; url: string; reqBody: unknown; status: number; resBody: unknown }
 export type Cassette = { interactions: Interaction[] }
@@ -92,6 +93,8 @@ export function makeCassetteFetch(mode: 'record' | 'replay', cassettePath: strin
     if (/eyJ[A-Za-z0-9_-]{20,}/.test(json)) throw new Error('cassette appears to contain a JWT — refusing to write')
     // headers 不存入 Interaction（method/url/reqBody/status/resBody 而已）
     // → Authorization / x-api-key 天然不落盤；上面的 JWT 偵測是 body 內夾 token 的最後防線
+    // __fixtures__ 是 gitignored 的 test-generated scratch，fresh clone / CI 無此目錄 → 寫檔前先建。
+    mkdirSync(dirname(cassettePath), { recursive: true })
     writeFileSync(cassettePath, JSON.stringify(cassette, null, 2))
   }
   return f

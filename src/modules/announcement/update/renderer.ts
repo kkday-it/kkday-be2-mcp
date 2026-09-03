@@ -24,7 +24,13 @@ export function renderConfirm(_rec: ChangeSetRecord, diff: AnnouncementUpdateDif
     ? `<p style="color:#b35900">提醒：未含 <code>en-default</code> 語系（en-xx 各語系的 fallback 文案來源）；缺它前台其他 en 語系可能無 fallback 文案。此為提醒、不阻擋批准。</p>`
     : ''
   // full-REPLACE 高風險提醒：PATCH 是整份文件覆蓋（§6.2），非部分合併——被省略的語系等同被清空。
-  const intro = `\n<p><strong style="color:#b00">商品公告「更新」會即時對前台顯示，且採整份文件覆蓋（非部分合併）</strong>；請確認新內容與生效時間，未列出的語系將被上面的新內容取代。</p>${enDefaultNote}${banner}`
+  // 現況讀取失敗（current=null）時，人工批准者看不到 before → 無法預覽哪些既有語系/欄位會被此次
+  // 整份覆蓋清掉；把這個「盲目 full-replace」風險明確標到 intro，讓批准是知情的（RBAC 仍另外把關授權）。
+  const anyCurrentUnknown = diff.some(d => d.current === null)
+  const blindReplaceNote = anyCurrentUnknown
+    ? `<p style="color:#b00"><strong>⚠ 有商品現況讀取失敗</strong>：無法預覽將被此次整份覆蓋清除的既有內容（含既有語系）——這是盲目 full-replace，請格外謹慎確認後再批准。</p>`
+    : ''
+  const intro = `\n<p><strong style="color:#b00">商品公告「更新」會即時對前台顯示，且採整份文件覆蓋（非部分合併）</strong>；請確認新內容與生效時間，未列出的語系將被上面的新內容取代。</p>${blindReplaceNote}${enDefaultNote}${banner}`
 
   const rows = diff.map(d => {
     const prods = d.product_names.length
