@@ -15,6 +15,7 @@
     "probe-sit-write": "tsx scripts/probe-sit-write.ts",
     "probe-sit-inventory": "tsx scripts/probe-sit-inventory.ts",
     "oauth-purge": "tsx scripts/oauth-purge.ts",
+    "db:migrate": "tsx scripts/db-migrate.ts",
     "build:ui": "node scripts/build-ui.mjs",
     "build": "tsc -p tsconfig.build.json && npm run build:ui",
     "start": "node dist/src/index.js",
