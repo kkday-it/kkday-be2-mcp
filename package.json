@@ -19,42 +19,14 @@
     "build:ui": "node scripts/build-ui.mjs",
     "build": "tsc -p tsconfig.build.json && npm run build:ui",
     "start": "node dist/src/index.js",
-    "lint:async": "eslint src scripts",
+    "lint:async": "node tools/lint/node_modules/eslint/bin/eslint.js --config tools/lint/eslint.config.mjs src scripts",
+    "postinstall": "npm ci --prefix tools/lint --no-audit --no-fund",
     "ci": "npm run build && npm run typecheck && npm run lint:async && npm run test"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
-  "overrides": {
-    "typescript-eslint": {
-      "typescript": "npm:typescript@~5.9.0"
-    },
-    "@typescript-eslint/typescript-estree": {
-      "typescript": "npm:typescript@~5.9.0"
-    },
-    "@typescript-eslint/parser": {
-      "typescript": "npm:typescript@~5.9.0"
-    },
-    "@typescript-eslint/eslint-plugin": {
-      "typescript": "npm:typescript@~5.9.0"
-    },
-    "@typescript-eslint/utils": {
-      "typescript": "npm:typescript@~5.9.0"
-    },
-    "@typescript-eslint/type-utils": {
-      "typescript": "npm:typescript@~5.9.0"
-    },
-    "@typescript-eslint/project-service": {
-      "typescript": "npm:typescript@~5.9.0"
-    },
-    "@typescript-eslint/tsconfig-utils": {
-      "typescript": "npm:typescript@~5.9.0"
-    },
-    "ts-api-utils": {
-      "typescript": "npm:typescript@~5.9.0"
-    }
-  },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.7.5",
     "@modelcontextprotocol/sdk": "^1.30.0",
@@ -76,11 +48,8 @@
     "@types/node": "^26.2.0",
     "@types/pg": "^8.23.1",
     "esbuild": "^0.28.2",
-    "eslint": "^10.9.1",
     "tsx": "^4.23.11",
     "typescript": "^7.0.2",
-    "typescript-eslint": "^8.69.0",
-    "typescript-eslint-ts-compat": "npm:typescript@~5.9.0",
     "vitest": "^4.1.10"
   }
 }
