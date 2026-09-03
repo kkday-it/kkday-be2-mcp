@@ -5,6 +5,10 @@
 >
 > 追溯補記（2026-08-19 起才有本規則，先前的 spec 異動追溯登記於下）。
 
+## 2026-09-04
+
+- `2026-09-03-audit-events-agent-attribution-design.md` §3.1/§3.3/§3.4/§3.2/§3.5/§4（agy peer review rounds=4 修訂，APPROVED）/ 8 個 review 發現全採納：(1) audit 呼叫點實為 16 個非 6 個——§3.1 改為 grep 全盤 + 逐點標 eventType，防非 tool call 事件被誤分類；(2) `req.ip` 無 trust proxy 在 EKS 退化成全 cluster 一個 throttle bucket，且 `trust proxy true` 盲信 XFF——改 env `APP_TRUST_PROXY`（跳數/CIDR）；(3) 偽造 XFF 灌滿 Map + fail-open 清空 = throttle 繞過——改雙層（L1 per-IP Map 滿停收 + L2 全域每分鐘天花板）；(4) 先 DB 後 stdout 讓 DB 故障時 SIEM 軌跡同滅——改 stdout 先行；(5) `ToolContext`/`ExecCtx` 無 traceId 欄位——明定新增必填欄位與注入點；(6) `confirmService` approve 事件 hardcode `traceId:'n/a'` 斷關聯鏈——明定與 ExecCtx 同值三方 join；(7) `onReauthRequired` 只收 identityId——放寬 reauth 事件不記 credential hash；(8) audit throw 跳過 `span.end()` 洩漏 span——span.end 移內層 finally / 為什麼：agy（gemini-3.1-pro-high）逐檔實讀 repo 驗證 spec 宣稱，抓出作者盲點；全數為會出貨成 bug 的真缺陷，無 pushback。
+
 ## 2026-09-03
 
 - `2026-09-03-audit-events-agent-attribution-design.md`（全檔，新建）/ 稽核事件模型 + agent 可識別性設計：落地 `audit-logging-gap-analysis.md` 的 P0 四項（G6 `event_type`/`severity` 欄位 via migration 0003、G9 stdout JSON lines 雙寫（ECS 對映、`APP_AUDIT_STDOUT`）、G2 撤銷事件 `security.*`、G3 401 嘗試 `authn.unauthorized_attempt` + per-IP throttle 防灌爆）+ #3 agent 可識別性（trace_id 恆有值（OTel off 自產 UUID）+ `GatewayClient` 帶 `request-uuid: <trace_id>`，be2 端 Kibana 可 join 回 MCP audit）。G1/G4/G5/G7/G8 與 OTel Logs 列 follow-up；資料離境政策 skip（使用者拍板）/ 為什麼：對照 iThome〈AI 協作不是發帳號〉四條責任邊界，邊界二（身分可倒查）是 be2-mcp 最大實作缺口；`request-uuid` 貫穿已由 `sit-write-contracts.md` 的 Kibana 重放實測證實可行。
