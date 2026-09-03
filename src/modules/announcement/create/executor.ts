@@ -44,7 +44,7 @@ export async function executeAnnouncementWith(
 }
 
 export async function executeAnnouncement(ctx: ExecCtx, rec: ChangeSetRecord): Promise<ItemResult[]> {
-  // 安全建構：無 SIT_ANNOUNCE_API_KEY 時 makeAnnouncementClient() 會 throw。同步拋出會讓整個執行段
+  // 安全建構：無 API_ANNOUNCE_KEY 時 makeAnnouncementClient() 會 throw。同步拋出會讓整個執行段
   // 崩潰（而非把每筆標 failed）——改為 catch 後把每筆 item 記為 failed，change-set 得到明確 per-item
   // 結果而非整批 crash。（正常 live 執行時金鑰存在，走 executeAnnouncementWith 正常路徑。）
   let client: AnnouncementClient

@@ -8,30 +8,30 @@
 
 ### 必設（擇一模式）
 
-#### 推薦：用 `BE2_ENV` 快捷選環境
+#### 推薦：用 `APP_ENV` 快捷選環境
 
 ```bash
-export BE2_ENV=stage
+export APP_ENV=stage
 ```
 
-設 `BE2_ENV=stage` 後，config 自動帶入：
+設 `APP_ENV=stage` 後，config 自動帶入：
 - `AUTHSVC_URL=https://auth.stage.kkday.com`
 - `GATEWAY_URL=https://api-gateway.stage.kkday.com`
-- `SIT_AUTHSVC_SERVICE_KEY` 改讀 `STAGE_AUTHSVC_SERVICE_KEY` 環境變數
+- `API_AUTH_SERVICE_KEY` 改讀 `API_AUTH_SERVICE_KEY` 環境變數
 
-| `BE2_ENV` 值 | authsvc host | gateway host | 讀取 service key 變數 | 預設 DB 路徑 |
+| `APP_ENV` 值 | authsvc host | gateway host | 讀取 service key 變數 | 預設 DB 路徑 |
 |---|---|---|---|---|
-| `sit` | `auth-220.sit.kkday.com` | `api-gateway-220.sit.kkday.com` | `SIT_AUTHSVC_SERVICE_KEY` | `./data/be2-mcp-sit.sqlite` |
-| `sit-220` | `auth-220.sit.kkday.com` | `api-gateway-220.sit.kkday.com` | `SIT_AUTHSVC_SERVICE_KEY` | `./data/be2-mcp-sit-220.sqlite` |
-| `stage` | `auth.stage.kkday.com` | `api-gateway.stage.kkday.com` | `STAGE_AUTHSVC_SERVICE_KEY` | `./data/be2-mcp-stage.sqlite` |
-| `prod` | `auth.kkday.com` | `api-gateway.kkday.com` | `PRODUCTION_AUTHSVC_SERVICE_KEY` | `./data/be2-mcp-prod.sqlite` |
+| `sit` | `auth-220.sit.kkday.com` | `api-gateway-220.sit.kkday.com` | `API_AUTH_SERVICE_KEY` | `./data/be2-mcp-sit.sqlite` |
+| `sit-220` | `auth-220.sit.kkday.com` | `api-gateway-220.sit.kkday.com` | `API_AUTH_SERVICE_KEY` | `./data/be2-mcp-sit-220.sqlite` |
+| `stage` | `auth.stage.kkday.com` | `api-gateway.stage.kkday.com` | `API_AUTH_SERVICE_KEY` | `./data/be2-mcp-stage.sqlite` |
+| `prod` | `auth.kkday.com` | `api-gateway.kkday.com` | `API_AUTH_SERVICE_KEY` | `./data/be2-mcp-prod.sqlite` |
 
 #### 或手動指定 host + key（legacy）
 
 ```bash
 export AUTHSVC_URL=https://auth.stage.kkday.com
 export GATEWAY_URL=https://api-gateway.stage.kkday.com
-export SIT_AUTHSVC_SERVICE_KEY=<service-key-from-vault-or-secret>
+export API_AUTH_SERVICE_KEY=<service-key-from-vault-or-secret>
 ```
 
 ### 機密：Service Key
@@ -40,7 +40,7 @@ export SIT_AUTHSVC_SERVICE_KEY=<service-key-from-vault-or-secret>
 
 ```bash
 # 示例（實際走 Secret Manager）
-export STAGE_AUTHSVC_SERVICE_KEY=<從 k8s Secret 或 Vault 注入>
+export API_AUTH_SERVICE_KEY=<從 k8s Secret 或 Vault 注入>
 ```
 
 ### 部署必設
@@ -49,15 +49,15 @@ export STAGE_AUTHSVC_SERVICE_KEY=<從 k8s Secret 或 Vault 注入>
 
 ```bash
 # 內網部署：綁可達的介面（不能再用 127.0.0.1）
-export BE2_MCP_BIND_HOST=0.0.0.0
+export APP_BIND_HOST=0.0.0.0
 
 # 對外域名（用於 OAuth redirect_uri 確認、Host header guard 等）
 # 通常由 ingress 或反代提供的域名
-export BE2_MCP_PUBLIC_BASE_URL=https://be2-mcp.stage.kkday.com
+export APP_BASE_URL=https://be2-mcp.stage.kkday.com
 
 # Host header 白名單（防 Host 注入）
 # 填 ingress/反代對外的域名，多個用英文逗號分隔
-export BE2_MCP_ALLOWED_HOSTS=be2-mcp.stage.kkday.com
+export APP_ALLOWED_HOSTS=be2-mcp.stage.kkday.com
 ```
 
 #### 持久化存儲路徑
@@ -65,7 +65,7 @@ export BE2_MCP_ALLOWED_HOSTS=be2-mcp.stage.kkday.com
 ```bash
 # SQLite 檔案路徑（單實例階段）
 # 生產應掛 PVC；多實例或 prod 應改 Postgres 連線字串
-export BE2_MCP_DB_PATH=/data/be2-mcp.sqlite
+export APP_DB_PATH=/data/be2-mcp.sqlite
 ```
 
 ### 可選但建議
@@ -85,7 +85,7 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector.monitoring:4318
 
 ```bash
 # 禁止在生產設此項！dev panel 有未授權查看稽核 / 手動執行危險操作的風險
-unset BE2_MCP_DEV_PANEL
+unset APP_DEV_PANEL
 ```
 
 ---
@@ -137,10 +137,10 @@ Dockerfile 採雙層構建（builder + runtime），使用 `node:22-bookworm-sli
 # 啟動容器
 docker run -d \
   --name be2-mcp-test \
-  -e BE2_ENV=sit \
-  -e SIT_AUTHSVC_SERVICE_KEY=<test-key> \
-  -e BE2_MCP_BIND_HOST=0.0.0.0 \
-  -e BE2_MCP_PUBLIC_BASE_URL=http://localhost:8787 \
+  -e APP_ENV=sit \
+  -e API_AUTH_SERVICE_KEY=<test-key> \
+  -e APP_BIND_HOST=0.0.0.0 \
+  -e APP_BASE_URL=http://localhost:8787 \
   -p 8787:8787 \
   be2-mcp:latest
 
@@ -154,7 +154,7 @@ curl -f http://localhost:8787/readyz
 
 # 檢驗 discovery 含 public base URL
 curl http://localhost:8787/.well-known/oauth-protected-resource | jq '.issuer'
-# 預期包含設定的 BE2_MCP_PUBLIC_BASE_URL
+# 預期包含設定的 APP_BASE_URL
 
 # 驗證 Host header guard（非白名單應 403）
 curl -H "Host: evil.attacker.com" http://localhost:8787/healthz
@@ -205,26 +205,26 @@ spec:
           protocol: TCP
         env:
         # 環境選擇
-        - name: BE2_ENV
+        - name: APP_ENV
           value: "stage"
         
         # 機密（從 Secret 注入）
-        - name: STAGE_AUTHSVC_SERVICE_KEY
+        - name: API_AUTH_SERVICE_KEY
           valueFrom:
             secretKeyRef:
               name: be2-mcp-secrets
               key: authsvc-service-key
         
         # 部署位置（綁非 loopback）
-        - name: BE2_MCP_BIND_HOST
+        - name: APP_BIND_HOST
           value: "0.0.0.0"
-        - name: BE2_MCP_PUBLIC_BASE_URL
+        - name: APP_BASE_URL
           value: "https://be2-mcp.stage.kkday.com"
-        - name: BE2_MCP_ALLOWED_HOSTS
+        - name: APP_ALLOWED_HOSTS
           value: "be2-mcp.stage.kkday.com"
         
         # 持久化
-        - name: BE2_MCP_DB_PATH
+        - name: APP_DB_PATH
           value: "/data/be2-mcp.sqlite"
         
         # 可觀測（可選）
@@ -234,7 +234,7 @@ spec:
           value: "http://otel-collector.monitoring:4318"
         
         # 禁用開發工具
-        # BE2_MCP_DEV_PANEL 不設（unset）
+        # APP_DEV_PANEL 不設（unset）
         
         # 探針
         livenessProbe:
@@ -382,14 +382,14 @@ spec:
             - node
             - dist/scripts/oauth-purge.js
             env:
-            - name: BE2_ENV
+            - name: APP_ENV
               value: "stage"
-            - name: STAGE_AUTHSVC_SERVICE_KEY
+            - name: API_AUTH_SERVICE_KEY
               valueFrom:
                 secretKeyRef:
                   name: be2-mcp-secrets
                   key: authsvc-service-key
-            - name: BE2_MCP_DB_PATH
+            - name: APP_DB_PATH
               value: "/data/be2-mcp.sqlite"
             volumeMounts:
             - name: data
@@ -448,7 +448,7 @@ kubectl -n be2 delete pod be2-mcp-<pod-suffix>
 
 - **Live stage e2e 驗證 = PENDING**：依下列外部條件：
   - DevOps 完成 stage EKS 部署 + 內網 DNS 配置
-  - auth-service team 提供 `STAGE_AUTHSVC_SERVICE_KEY`
+  - auth-service team 提供 `API_AUTH_SERVICE_KEY`
   - 測試帳號在 stage 環境具有目標商品的寫入權限
   
   一旦上述具備，執行 `npm run eval` 與手動 pilot 才能確認端對端寫入合約正確。
@@ -471,15 +471,15 @@ kubectl -n be2 delete pod be2-mcp-<pod-suffix>
 - [ ] `npm run build` 產出 `dist/src/index.js` 與 `dist/scripts/oauth-purge.js`
 - [ ] `npm run ci` 全綠（無新測試失敗）
 - [ ] `docker build` 成功，image 能啟動（若有 Docker 環境）
-- [ ] 環境變數正確設定（特別是 `BE2_MCP_BIND_HOST=0.0.0.0` 與 `BE2_MCP_PUBLIC_BASE_URL`）
-- [ ] `STAGE_AUTHSVC_SERVICE_KEY` 已從 Secret Manager 注入
+- [ ] 環境變數正確設定（特別是 `APP_BIND_HOST=0.0.0.0` 與 `APP_BASE_URL`）
+- [ ] `API_AUTH_SERVICE_KEY` 已從 Secret Manager 注入
 - [ ] k8s Deployment / PVC / Ingress / CronJob 配置無誤
 - [ ] 防火牆規則允許 pod → auth-service + gateway 的 443 egress
 - [ ] PV storage class 啟用加密
 - [ ] `terminationGracePeriodSeconds ≥ 30`
 - [ ] Liveness/Readiness probe 端點 (`/healthz`, `/readyz`) 可達
 - [ ] be2-auth POPUP 登入已在 auth-service 驗證通過
-- [ ] `BE2_MCP_DEV_PANEL` **未設**（生產風險隔離）
+- [ ] `APP_DEV_PANEL` **未設**（生產風險隔離）
 
 ---
 

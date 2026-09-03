@@ -10,7 +10,7 @@ Phase 1a 的接入方式是 `npm run bootstrap-user` 印出一次性 static bear
 
 ## 前置需求
 
-- 公司網路或 VPN（能連 be2-auth `auth-220.sit.kkday.com` 開登入彈窗、能連 be2-mcp 本機 `127.0.0.1:$BE2_MCP_PORT`）。
+- 公司網路或 VPN（能連 be2-auth `auth-220.sit.kkday.com` 開登入彈窗、能連 be2-mcp 本機 `127.0.0.1:$APP_PORT`）。
 - `npm run dev` 已啟動 be2-mcp server（`/mcp` + OAuth 端點 `/.well-known/*`、`/oauth/*` + 確認頁 `/confirm/*`，同一個 process）。
 - 瀏覽器允許彈出視窗（登入走 **POPUP**，見下）。
 

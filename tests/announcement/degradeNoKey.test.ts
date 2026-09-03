@@ -3,7 +3,7 @@ import { computeAnnouncementDiff } from '../../src/modules/announcement/create/d
 import { executeAnnouncement } from '../../src/modules/announcement/create/executor.js'
 import type { AnnouncementCreateItem, ChangeSetRecord } from '../../src/core/changeset/types.js'
 
-// Regression for the final-review Critical: makeAnnouncementClient() throws when SIT_ANNOUNCE_API_KEY
+// Regression for the final-review Critical: makeAnnouncementClient() throws when API_ANNOUNCE_KEY
 // is absent (dev/test). That must NOT block staging (computeDiff) nor crash execution (executor) —
 // it must degrade: existing_count = null for the diff, and per-item `failed` results for execution.
 
@@ -23,8 +23,8 @@ describe('announcement degrades when svc-b2c client unavailable (no api key)', (
 
   it('executeAnnouncement returns per-item failed (not a thrown crash) when the client cannot be built', async () => {
     // Ensure the key is absent so makeAnnouncementClient() throws inside executeAnnouncement.
-    const prev = process.env.SIT_ANNOUNCE_API_KEY
-    delete process.env.SIT_ANNOUNCE_API_KEY
+    const prev = process.env.API_ANNOUNCE_KEY
+    delete process.env.API_ANNOUNCE_KEY
     try {
       const rec = { id: 'cs1', actionType: 'announcement', items: [item] } as unknown as ChangeSetRecord
       const ctx = { accessToken: 'tok', modifyUser: 'uuid-1', span: async (_n: string, fn: (t: string) => Promise<unknown>) => fn('t') } as any
@@ -33,7 +33,7 @@ describe('announcement degrades when svc-b2c client unavailable (no api key)', (
       expect(results[0].status).toBe('failed')
       expect(results[0].item_key.startsWith('announce:')).toBe(true)
     } finally {
-      if (prev !== undefined) process.env.SIT_ANNOUNCE_API_KEY = prev
+      if (prev !== undefined) process.env.API_ANNOUNCE_KEY = prev
     }
   })
 })

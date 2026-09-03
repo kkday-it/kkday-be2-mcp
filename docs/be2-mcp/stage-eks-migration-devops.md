@@ -38,7 +38,7 @@ be2 MCP 是一支 **Node.js / Express Streamable-HTTP** 服務，讓 KKday 員�
 | `POST /oauth/token` | 換 token（`tokenRoutes.ts:70`） |
 | `GET /confirm/login`、`POST /confirm/session`、`POST /confirm/logout` | 確認頁 SSO 登入（`ssoRoutes.ts:52,91,111`） |
 | `GET /confirm/:id`、`POST /confirm/:id/{approve,cancel,reject}` | 確認頁：人工批准/拒絕/取消 change-set（`confirmRoutes.ts:109,140,184,202`） |
-| `/dev/*` | dev 測試面板，**prod/stage 禁用**（`BE2_MCP_DEV_PANEL=1` 才掛，`app.ts:283-286`） |
+| `/dev/*` | dev 測試面板，**prod/stage 禁用**（`APP_DEV_PANEL=1` 才掛，`app.ts:283-286`） |
 
 ---
 
@@ -55,7 +55,7 @@ be2 MCP 是一支 **Node.js / Express Streamable-HTTP** 服務，讓 KKday 員�
 ## 3. 狀態儲存（重點：需要 persistent volume）
 
 - **單一 SQLite 檔**（`better-sqlite3`，**in-process、同步、單機**，`src/store/db.ts`）。
-- **路徑**：env `BE2_MCP_DB_PATH`，預設 `./data/be2-mcp.sqlite`（相對 cwd）；若設 `BE2_ENV` 未顯式給路徑會變 `./data/be2-mcp-stage.sqlite`（`config.ts:34,73-76`）。
+- **路徑**：env `APP_DB_PATH`，預設 `./data/be2-mcp.sqlite`（相對 cwd）；若設 `APP_ENV` 未顯式給路徑會變 `./data/be2-mcp-stage.sqlite`（`config.ts:34,73-76`）。
 - **WAL 模式**：會另外產生 `-wal` / `-shm` 檔，需與主檔同一 volume（`db.ts:124-127`）。
 - **存了什麼**（`db.ts` schema）：be2 使用者 token（`be2_identities` 含 access/refresh，**明文**）、OAuth client/authcode/refresh、change-set 狀態機、web session、append-only 稽核日誌（`audit_log`，有禁改禁刪 trigger）、rate 計數。
 - **含義**：
@@ -67,20 +67,20 @@ be2 MCP 是一支 **Node.js / Express Streamable-HTTP** 服務，讓 KKday 員�
 
 ## 4. 設定與 secrets
 
-設定集中在 `src/config.ts`（Zod 驗證）。上 stage 只要設 `BE2_ENV=stage`，auth/gateway host 會自動帶入 stage preset（`config.ts:16-20`）。
+設定集中在 `src/config.ts`（Zod 驗證）。上 stage 只要設 `APP_ENV=stage`，auth/gateway host 會自動帶入 stage preset（`config.ts:16-20`）。
 
 | Env | 用途 | Secret? | 上 stage 要設 |
 |---|---|:---:|:---:|
-| `BE2_ENV=stage` | 環境 preset（帶入下面 URL + 選 stage key） | 否 | ✅ |
-| `STAGE_AUTHSVC_SERVICE_KEY` | stage 的 S2S service key | **是** | ✅（**目前 repo 尚無此 key，需向 auth-service team 申請**） |
-| `BE2_MCP_ALLOWED_HOSTS` | Host header 白名單（逗號分隔） | 否 | ✅（不設 ingress Host 一律 403，見 §7） |
-| `BE2_MCP_PORT` | listen port（預設 8787） | 否 | 選用 |
-| `BE2_MCP_DB_PATH` | SQLite 檔路徑（指到 PVC 掛載點） | 否 | ✅ 建議顯式指定到 volume |
+| `APP_ENV=stage` | 環境 preset（帶入下面 URL + 選 stage key） | 否 | ✅ |
+| `API_AUTH_SERVICE_KEY` | stage 的 S2S service key | **是** | ✅（**目前 repo 尚無此 key，需向 auth-service team 申請**） |
+| `APP_ALLOWED_HOSTS` | Host header 白名單（逗號分隔） | 否 | ✅（不設 ingress Host 一律 403，見 §7） |
+| `APP_PORT` | listen port（預設 8787） | 否 | 選用 |
+| `APP_DB_PATH` | SQLite 檔路徑（指到 PVC 掛載點） | 否 | ✅ 建議顯式指定到 volume |
 | `OTEL_MODE=otlp` | 開 OTel trace 匯出 | 否 | 建議 ✅ |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector（標準 OTel env） | 否 | 視 §6 |
-| `SIT_ANNOUNCE_API_KEY` | 公告功能 svc-b2c api key | **是** | 視是否啟用公告功能 |
-| `BE2_TZ` | 排程時區（預設 `Asia/Taipei`） | 否 | 選用 |
-| `BE2_MCP_DEV_PANEL` | `=1` 開 dev 面板 | 否 | ❌ **務必不要設** |
+| `API_ANNOUNCE_KEY` | 公告功能 svc-b2c api key | **是** | 視是否啟用公告功能 |
+| `APP_TZ` | 排程時區（預設 `Asia/Taipei`） | 否 | 選用 |
+| `APP_DEV_PANEL` | `=1` 開 dev 面板 | 否 | ❌ **務必不要設** |
 
 - `AUTHSVC_URL` / `GATEWAY_URL` 可不設（stage preset 會帶）；若要覆蓋才設。
 - Secret 注入用 **k8s Secret**（規範：憑證永不 commit、永不印出；config 錯誤只印 key 名不印值，`config.ts:62-63`）。
@@ -90,7 +90,7 @@ be2 MCP 是一支 **Node.js / Express Streamable-HTTP** 服務，讓 KKday 員�
 
 ## 5. 對外連線（egress allowlist）
 
-server 會主動打的外部服務（host 由 `BE2_ENV=stage` preset 決定）：
+server 會主動打的外部服務（host 由 `APP_ENV=stage` preset 決定）：
 
 | 目標 | 用途 | Port |
 |---|---|---|
@@ -119,14 +119,14 @@ server 會主動打的外部服務（host 由 `BE2_ENV=stage` preset 決定）�
 | # | 項目 | 現況 | 為什麼是阻斷 / 要改成 | 位置 |
 |---|---|---|---|---|
 | 1 🔴 | **listen 綁 loopback** | `app.listen(port, '127.0.0.1')` 硬編 | Pod 內外都連不進來。要改成 `0.0.0.0`（目前無 env 可覆蓋，需改 code） | `index.ts:9` |
-| 2 🔴 | **Host header 白名單** | 只放行 `127.0.0.1/localhost/::1`，其餘 403（DNS-rebinding 防護） | ingress/LB 帶的 Host 會被擋。要設 `BE2_MCP_ALLOWED_HOSTS`=部署域名 | `hostGuard.ts:27-71` |
+| 2 🔴 | **Host header 白名單** | 只放行 `127.0.0.1/localhost/::1`，其餘 403（DNS-rebinding 防護） | ingress/LB 帶的 Host 會被擋。要設 `APP_ALLOWED_HOSTS`=部署域名 | `hostGuard.ts:27-71` |
 | 3 🔴 | **OAuth/discovery URL 硬編 `127.0.0.1`** | issuer / authorize / token / register / resource-metadata 全寫死 `http://127.0.0.1:${port}` | OAuth client 會被導回 127.0.0.1，登入流程斷。需引入「public base URL」env 並套用到所有 discovery 輸出（目前不存在，需改 code） | `app.ts:141,254-267,303`；`discoveryRoutes.ts:12-15,23` |
-| 4 | **SQLite 需 PVC** | 單檔 + WAL，相對路徑 | 需掛 persistent volume，`BE2_MCP_DB_PATH` 指到掛載點 | `db.ts:124`；`config.ts:34` |
+| 4 | **SQLite 需 PVC** | 單檔 + WAL，相對路徑 | 需掛 persistent volume，`APP_DB_PATH` 指到掛載點 | `db.ts:124`；`config.ts:34` |
 | 5 | **replicas 固定 1** | 多處 in-process 單機假設 | 多副本會壞（見 §8）。本次先 `replicas: 1` | 見 §8 |
 | 6 | **build/run 缺口** | 只有 `tsx` dev、無 production build、無 `start` | 需補 build 或容器內 tsx 直跑；處理 `better-sqlite3` native build | `package.json:5-16` |
-| 7 | **Secret 注入** | 從 `.env` 讀 | k8s Secret 注入 `STAGE_AUTHSVC_SERVICE_KEY`（+ 視需 `SIT_ANNOUNCE_API_KEY`） + `BE2_ENV=stage` | `config.ts:67` |
+| 7 | **Secret 注入** | 從 `.env` 讀 | k8s Secret 注入 `API_AUTH_SERVICE_KEY`（+ 視需 `API_ANNOUNCE_KEY`） + `APP_ENV=stage` | `config.ts:67` |
 | 8 | **OTel** | 預設 off | 設 `OTEL_MODE=otlp` + `OTEL_EXPORTER_OTLP_ENDPOINT` | `otel.ts` |
-| 9 | **dev panel 關閉** | `BE2_MCP_DEV_PANEL=1` 才開 | 確保 stage/prod 不為 1 | `app.ts:283` |
+| 9 | **dev panel 關閉** | `APP_DEV_PANEL=1` 才開 | 確保 stage/prod 不為 1 | `app.ts:283` |
 
 - **HTTP vs HTTPS**：OAuth 2.1 規範要求 authorization server 走 HTTPS。若 ingress 做 TLS termination（HTTPS 對外、HTTP 到 Pod），第 3 點的 public base URL 要輸出 `https://` scheme。
 
@@ -154,7 +154,7 @@ server 會主動打的外部服務（host 由 `BE2_ENV=stage` preset 決定）�
 2. **域名 + TLS**：要一個 stage 域名（例如 `be2-mcp.stage.kkday.com`）+ 憑證。TLS 在 ingress termination 還是到 Pod？
 3. **build 策略**：容器內補 `tsc` build 跑 `node dist/index.js`，還是 `tsx` 直跑？base image 選型（要能裝 `better-sqlite3` native）。
 4. **持久化**：PVC 的 storage class / 大小 / 是否加密。備份策略（SQLite 檔）。
-5. **Secret 管理**：用 k8s Secret 直接放，還是接既有的 secret manager？`STAGE_AUTHSVC_SERVICE_KEY` 由誰申請（需向 auth-service team）。
+5. **Secret 管理**：用 k8s Secret 直接放，還是接既有的 secret manager？`API_AUTH_SERVICE_KEY` 由誰申請（需向 auth-service team）。
 6. **egress policy**：NetworkPolicy 放行到 stage auth-service / api-gateway / OTLP collector。
 7. **可觀測性接點**：stage 的 OTLP collector endpoint。
 8. **CI/CD**：用哪條 pipeline（Woodpecker？既有 EKS app 慣例）+ image registry（ECR？）。
@@ -165,7 +165,7 @@ server 會主動打的外部服務（host 由 `BE2_ENV=stage` preset 決定）�
 ## 10. 建議的分階段路線
 
 1. **Phase A — 讓它在 stage EKS 單副本跑起來**（本次目標）
-   - 改 §7 的 3 個硬阻斷（bind `0.0.0.0`、`BE2_MCP_ALLOWED_HOSTS`、public base URL 參數化）。
+   - 改 §7 的 3 個硬阻斷（bind `0.0.0.0`、`APP_ALLOWED_HOSTS`、public base URL 參數化）。
    - 補 build/容器化、掛 PVC、注入 Secret、`replicas: 1`、OTel otlp、healthz liveness。
    - 驗收：員工用 Claude Code 對 stage MCP 完成一次 OAuth 登入 + 一次 read + 一次 change-set 批准的 e2e。
 2. **Phase B — 觀測穩定性**：跑一段時間，看 token refresh、排程、稽核在 stage 的真實行為。
@@ -181,7 +181,7 @@ npm ci
 npm run build:ui          # 產出 dist/ui/*.html 面板
 
 # 啟動（開發）
-BE2_ENV=stage STAGE_AUTHSVC_SERVICE_KEY=xxx npm run dev
+APP_ENV=stage API_AUTH_SERVICE_KEY=xxx npm run dev
 # → 監聽 127.0.0.1:8787，/mcp + /healthz
 
 # 健康檢查
@@ -215,4 +215,4 @@ client 接入（本機）：`claude mcp add be2-mcp --transport http http://127.
 
 **遷移核心槓桿**：store SQLite→PostgreSQL 一動，連帶解 #4/#5/#6/#7 + 多副本（#3 的鎖改 PG/Redis）。scheduler #8 另一條。→ 詳見遷移 spec（待產，`docs/superpowers/specs/`）。
 
-**命名對齊**：平台用 `APP_ENV`/`APP_PORT`/`APP_NAME`；be2-mcp 用 `BE2_ENV`/`BE2_MCP_PORT`。`config.ts` 加 compat（同時吃 `APP_ENV`）或部署時對映。auth-service key 平台命名 `API_AUTH_SERVICE_*`，我方 `*_AUTHSVC_SERVICE_KEY`，需對映 + 確認 scope。
+**命名對齊**：平台用 `APP_ENV`/`APP_PORT`/`APP_NAME`；be2-mcp 用 `APP_ENV`/`APP_PORT`。`config.ts` 加 compat（同時吃 `APP_ENV`）或部署時對映。auth-service key 平台命名 `API_AUTH_SERVICE_*`，我方 `*_AUTHSVC_SERVICE_KEY`，需對映 + 確認 scope。

@@ -43,7 +43,7 @@ export const announcementUpdateModule: ActionModule<AnnouncementUpdateItem, Anno
   scopeErrorKey: (item) => item.prod_oids.join(','),
   validate: (items) => validateAnnouncementUpdateItems(items),
   computeDiff: (ctx: DiffCtx, items) => {
-    // 安全建構：dev/test 無 SIT_ANNOUNCE_API_KEY 時 makeAnnouncementClient() 會 throw；若在此同步拋出
+    // 安全建構：dev/test 無 API_ANNOUNCE_KEY 時 makeAnnouncementClient() 會 throw；若在此同步拋出
     // 會擋掉整個 change-set 建立（staging）。改為 try/catch → 傳 undefined，computeAnnouncementUpdateDiff
     // 內 current 降級為 null（未知），draft-only 開發不被金鑰/授權擋住。
     let client: ReturnType<typeof makeAnnouncementClient> | undefined

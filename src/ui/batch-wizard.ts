@@ -388,7 +388,7 @@ export function initWizard(app: WizardApp): void {
 
     let schedToggle: HTMLInputElement | undefined
     let schedInput: HTMLInputElement | undefined
-    let schedTzLabel: HTMLElement | undefined   // §9：載入後填入實際 BE2_TZ（app_get_batch_view.schedule_tz）
+    let schedTzLabel: HTMLElement | undefined   // §9：載入後填入實際 APP_TZ（app_get_batch_view.schedule_tz）
     if (WIZARDS[actionType].schedulable) {
       const schedWrap = document.createElement('label')
       schedWrap.className = 'bw-row-inline'
@@ -429,7 +429,7 @@ export function initWizard(app: WizardApp): void {
         const structuredContent = r.structuredContent as { items?: unknown[], errors?: Array<{code?: string, message?: string}> } | undefined
         const item0 = structuredContent?.items?.[0] as { products?: unknown[]; schedule_tz?: string } | undefined
         const products = item0?.products ?? []
-        // §9：把排程時區標籤從通用「伺服器時區」換成實際 BE2_TZ 值（若後端有帶）。
+        // §9：把排程時區標籤從通用「伺服器時區」換成實際 APP_TZ 值（若後端有帶）。
         if (item0?.schedule_tz && schedTzLabel) renderText(schedTzLabel, `時區：${item0.schedule_tz}`)
         
         const nfErrors = (structuredContent?.errors ?? []).filter(e => e.code === 'PRODUCT_NOT_FOUND')

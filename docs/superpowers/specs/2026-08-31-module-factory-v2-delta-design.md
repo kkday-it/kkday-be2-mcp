@@ -65,11 +65,11 @@ v1 §5 否決背景 Workflow，理由「三段要停下來問人、背景執行�
 
 段① endpoint-prober 撞 4xx/5xx 時，**不立即判授權 gate**，先自動換環境重試：
 
-1. 預設 SIT；撞 403/502 → 自動改打 `be2.stage.kkday.com` / gateway `api-gateway.stage.kkday.com` 重試（config `BE2_ENV=stage`）。
+1. 預設 SIT；撞 403/502 → 自動改打 `be2.stage.kkday.com` / gateway `api-gateway.stage.kkday.com` 重試（config `APP_ENV=stage`）。
 2. stage 過 → 授權 gate 解除、契約以 stage 流量為準（實證：announcement_update SIT 一直 403、stage 直接 200/`0000`）。
 3. stage 仍卡 → 才判真授權 gate（executor-only PENDING，v1 邏輯不變）。
 4. 契約報告新增「探索環境」欄，註明契約攔自哪個環境（避免把 stage 契約誤當 SIT/prod 保證）。
-5. **★ 憑證環境感知（修 agy issue #4）**：D3 只轉流量還不夠。`src/modules/announcement/create/svcB2cClient.ts` 目前硬編 `process.env.SIT_ANNOUNCE_API_KEY`，無視 `BE2_ENV`——update module 若沿用此 client、部到 stage/prod 仍會抓 SIT key。故 D3 附帶一項**必做重構**：把 announce 的 `x-api-key` 載入改為**依 `BE2_ENV` 從 `config.ts` preset 取**（新增 `STAGE_ANNOUNCE_API_KEY`/`PROD_ANNOUNCE_API_KEY` 到 preset，與既有 `*_AUTHSVC_SERVICE_KEY` 同形狀）。凡 factory 產出「繼承既有 client 但該 client 有硬編環境憑證」的 module，都要一併把憑證載入改成 env-aware，避免跨環境 key 洩漏。此重構列入該 module 的實作計畫（不改 core）。
+5. **★ 憑證環境感知（修 agy issue #4）**：D3 只轉流量還不夠。`src/modules/announcement/create/svcB2cClient.ts` 目前硬編 `process.env.API_ANNOUNCE_KEY`，無視 `APP_ENV`——update module 若沿用此 client、部到 stage/prod 仍會抓 SIT key。故 D3 附帶一項**必做重構**：把 announce 的 `x-api-key` 載入改為**依 `APP_ENV` 從 `config.ts` preset 取**（新增 `API_ANNOUNCE_KEY`/`API_ANNOUNCE_KEY` 到 preset，與既有 `*_AUTHSVC_SERVICE_KEY` 同形狀）。凡 factory 產出「繼承既有 client 但該 client 有硬編環境憑證」的 module，都要一併把憑證載入改成 env-aware，避免跨環境 key 洩漏。此重構列入該 module 的實作計畫（不改 core）。
 
 ### 3.4 D4 — 姊妹契約繼承（discovery 加速模式）
 
@@ -114,7 +114,7 @@ Gate 重整（§4）                                        ← D1 載體到位�
 
 - **新增**：`tests/support/cassette.ts`（D0）、`tests/cassettes/*.json`（種子含 announcement-update）、Workflow 腳本（D1，落點待 writing-plans 定）。
 - **改**：`.claude/skills/module-factory/SKILL.md`（Gate 重整 §4、D3/D4/D5/D6）、`references/stage1-explore.md`（D3 退避、D4 繼承、D5 page.route）、`references/stage2-produce.md`（D2 cassette-backed 測試）、`references/stage3-verify.md`（D2 replay/live 分離）。
-- **改（D3 憑證 env-aware，隨 announcement_update module 一起）**：`src/config.ts`（preset 加 `STAGE_ANNOUNCE_API_KEY`/`PROD_ANNOUNCE_API_KEY`）、`src/modules/announcement/create/svcB2cClient.ts`（`makeAnnouncementClient` 依 `BE2_ENV` 取 key 而非硬編 `SIT_ANNOUNCE_API_KEY`）。此為既有洩漏隱患的順帶修正，不碰 core。
+- **改（D3 憑證 env-aware，隨 announcement_update module 一起）**：`src/config.ts`（preset 加 `API_ANNOUNCE_KEY`/`API_ANNOUNCE_KEY`）、`src/modules/announcement/create/svcB2cClient.ts`（`makeAnnouncementClient` 依 `APP_ENV` 取 key 而非硬編 `API_ANNOUNCE_KEY`）。此為既有洩漏隱患的順帶修正，不碰 core。
 - **不改**：`src/core/`、已上線 7 個 module 的行為（svcB2cClient 的 key 載入重構屬安全修正、不改對外行為）。
 
 ## 7. 測試與驗收

@@ -12,7 +12,7 @@
 
 Copied from spec `docs/superpowers/specs/2026-08-07-be2-mcp-design.md` + `CLAUDE.md`. Every task's requirements implicitly include these.
 
-- **Secrets**: all credentials come from `.env` at repo root (`SIT_AUTHSVC_SERVICE_KEY`, `AUTH_email`, `AUTH_pwd`, `AUTHSVC_URL`, `GATEWAY_URL`). Never print, log, commit, or hard-code any key/password/token value. Tests use obviously fake tokens (`"fake-jwt"`). Audit log stores NO tokens.
+- **Secrets**: all credentials come from `.env` at repo root (`API_AUTH_SERVICE_KEY`, `AUTH_email`, `AUTH_pwd`, `AUTHSVC_URL`, `GATEWAY_URL`). Never print, log, commit, or hard-code any key/password/token value. Tests use obviously fake tokens (`"fake-jwt"`). Audit log stores NO tokens.
 - **Environment anchor**: SIT `be2-220` — auth-service `https://auth-220.sit.kkday.com`, gateway `https://api-gateway-220.sit.kkday.com` (values read from `.env`, not hard-coded).
 - **Identity from token only** (spec §3): tool inputs never accept user identity or scope. The operator is whoever owns the bearer.
 - **No local JWT signature verification, no self-built RBAC** (spec §3). Decoding the JWT payload `exp` claim *without verifying* is allowed solely to schedule refresh — it grants nothing.
@@ -151,11 +151,11 @@ export default defineConfig({ test: { include: ['tests/**/*.test.ts'] } })
 ```
 AUTHSVC_URL=https://auth-220.sit.kkday.com
 GATEWAY_URL=https://api-gateway-220.sit.kkday.com
-SIT_AUTHSVC_SERVICE_KEY=replace-me
+API_AUTH_SERVICE_KEY=replace-me
 AUTH_email=replace-me
 AUTH_pwd=replace-me
-BE2_MCP_PORT=8787
-BE2_MCP_DB_PATH=./data/be2-mcp.sqlite
+APP_PORT=8787
+APP_DB_PATH=./data/be2-mcp.sqlite
 OTEL_MODE=off
 ```
 
@@ -175,7 +175,7 @@ import { loadConfig } from '../src/config.js'
 const base = {
   AUTHSVC_URL: 'https://auth-220.sit.kkday.com',
   GATEWAY_URL: 'https://api-gateway-220.sit.kkday.com',
-  SIT_AUTHSVC_SERVICE_KEY: 'k',
+  API_AUTH_SERVICE_KEY: 'k',
 }
 
 describe('loadConfig', () => {
@@ -189,8 +189,8 @@ describe('loadConfig', () => {
     expect(cfg.otelMode).toBe('off')
   })
   it('throws a message naming the missing var, without echoing values', () => {
-    expect(() => loadConfig({ ...base, SIT_AUTHSVC_SERVICE_KEY: '' } as NodeJS.ProcessEnv))
-      .toThrowError(/SIT_AUTHSVC_SERVICE_KEY/)
+    expect(() => loadConfig({ ...base, API_AUTH_SERVICE_KEY: '' } as NodeJS.ProcessEnv))
+      .toThrowError(/API_AUTH_SERVICE_KEY/)
   })
 })
 ```
@@ -220,9 +220,9 @@ import 'dotenv/config'
 const EnvSchema = z.object({
   AUTHSVC_URL: z.string().url(),
   GATEWAY_URL: z.string().url(),
-  SIT_AUTHSVC_SERVICE_KEY: z.string().min(1),
-  BE2_MCP_PORT: z.coerce.number().int().positive().default(8787),
-  BE2_MCP_DB_PATH: z.string().default('./data/be2-mcp.sqlite'),
+  API_AUTH_SERVICE_KEY: z.string().min(1),
+  APP_PORT: z.coerce.number().int().positive().default(8787),
+  APP_DB_PATH: z.string().default('./data/be2-mcp.sqlite'),
   OTEL_MODE: z.enum(['console', 'otlp', 'off']).default('off'),
 })
 
@@ -246,9 +246,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     authsvcUrl: e.AUTHSVC_URL.replace(/\/$/, ''),
     gatewayUrl: e.GATEWAY_URL.replace(/\/$/, ''),
-    serviceKey: e.SIT_AUTHSVC_SERVICE_KEY,
-    port: e.BE2_MCP_PORT,
-    dbPath: e.BE2_MCP_DB_PATH,
+    serviceKey: e.API_AUTH_SERVICE_KEY,
+    port: e.APP_PORT,
+    dbPath: e.APP_DB_PATH,
     otelMode: e.OTEL_MODE,
   }
 }

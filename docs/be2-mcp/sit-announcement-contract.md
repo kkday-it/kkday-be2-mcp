@@ -24,7 +24,7 @@
 | header | 值 / 來源 | 實證 |
 |---|---|---|
 | `authorization` | `Bearer <be2 JWT>`（我方 token store 已有） | — |
-| `x-api-key` | `<存於 .env SIT_ANNOUNCE_API_KEY，值不落文件>`——前端固定 key | playwright 攔自 `/v3/b2cbe/product-announcement/browse` 的真實請求 header |
+| `x-api-key` | `<存於 .env API_ANNOUNCE_KEY，值不落文件>`——前端固定 key | playwright 攔自 `/v3/b2cbe/product-announcement/browse` 的真實請求 header |
 | `user-uuid` | **= JWT 的 `platformId` claim**（實測攔到的值與該使用者 JWT platformId 完全一致，`f7965b8d-…`）——我方 token 解碼即得，無需另存 | playwright 攔截 + JWT 解碼交叉比對 |
 
 gateway ACL 允許的 header 白名單（response header `access-control-allow-headers` 揭露）：`Content-Type, Authorization, request-uuid, x-deputy-oid, x-auth-id, x-api-key, user-uuid`。

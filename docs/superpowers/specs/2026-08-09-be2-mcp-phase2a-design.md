@@ -49,7 +49,7 @@ Phase 2 拆兩段:
                 Promise.allSettled 隔離、no-op 略過、per-item trace + before/after snapshot
 ```
 
-- **change-set service**:與 Phase 1a 同 process、同 SQLite db(`BE2_MCP_DB_PATH`)。POC 用 SQLite,production 化換 Postgres(介面隔離,見 §5)。
+- **change-set service**:與 Phase 1a 同 process、同 SQLite db(`APP_DB_PATH`)。POC 用 SQLite,production 化換 Postgres(介面隔離,見 §5)。
 - **確認頁(2a 極簡版)**:be2-mcp server 內的一組 HTTP route(**非 MCP tool**),用 **capability URL(一次性批准 token)** 認證 —— **不可**用 Phase 1a 的 static bearer:瀏覽器一般 `GET` 導覽無法自帶 `Authorization: Bearer` header,且該 bearer 只存在 Claude client 端、不在瀏覽器。改為:`be2_create_changeset` 回傳的 `confirm_url` 內含一枚**高熵、一次性、短命(隨 change-set 24h 過期)**的 approval token,只授權「檢視+批准該一筆 change-set」。員工點 URL 即可看 diff、批准,免 header、免登入(完整登入是 2b)。token-in-URL 洩漏風險以三點壓低:單次使用、短 TTL、爆炸半徑僅該一筆 change-set;頁面加 `Referrer-Policy: no-referrer`。此 token 與 approval 綁 `creator_label`(見 §3 IDOR 防護)。
 - **身分/授權**:沿用 Phase 1a —— tool 面 bearer → server 端 token store 撈員工 be2 token。**寫入的授權由 gateway 代打 `/verify` 自動完成**(執行寫入走 `PUT {GATEWAY_URL}/product/api/v1/...`,與 Phase 1a read 同經 gateway;低權員工在執行時得 be2 原生 403、fail-closed)。be2-mcp **不**自行帶內部 uri 打 `/verify`(見 §3 更正)。
 

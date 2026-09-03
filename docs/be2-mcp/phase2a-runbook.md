@@ -55,7 +55,7 @@ Both `shelf_toggle_product` and `shelf_toggle_plan` writes work by reading the *
 
 ## Where change-sets, results, and audit live
 
-- **Change-sets**: SQLite `change_sets` table (same DB as Phase 1a, `BE2_MCP_DB_PATH`, default `./data/be2-mcp.sqlite`) — id, creator, action_type, items, diff, diff_version, status, hashed approval token, timestamps. 24h TTL on `pending_approval` (lazily flipped to `expired` on read).
+- **Change-sets**: SQLite `change_sets` table (same DB as Phase 1a, `APP_DB_PATH`, default `./data/be2-mcp.sqlite`) — id, creator, action_type, items, diff, diff_version, status, hashed approval token, timestamps. 24h TTL on `pending_approval` (lazily flipped to `expired` on read).
 - **Execution results**: recorded alongside the change-set (per-item `status`/`before`/`after`/`error_code`/`trace_id`), returned by `be2_get_changeset_status` and by the confirm-page's post-approve response.
 - **Audit log**: same `audit_log` table as Phase 1a, one row per executed item with `tool = "changeset.execute"`:
   ```bash

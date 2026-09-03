@@ -49,7 +49,7 @@
 
 ### 3.2 近程架構設計 (Stdout Sink 雙寫)
 - **擴展抽象層**：目前核心層已有 audit 抽象，設計 `AuditSink` 的第二實作 `StdoutAuditSink`，保留現有 SQLite 作為「本地真相」與 append-only 保全，並行寫入 stdout。
-- **環境變數控管**：藉由 flag `BE2_MCP_AUDIT_STDOUT` 啟用（預設 Production 開啟）。
+- **環境變數控管**：藉由 flag `APP_AUDIT_STDOUT` 啟用（預設 Production 開啟）。
 - **輸出格式**：一行一個 JSON event (JSON lines)，包含所有 Schema 欄位與新增的分類屬性，便於 Filebeat/Fluent-bit 無痛吞吐。
 
 ### 3.3 欄位對映與 ECS 對齊建議
@@ -94,7 +94,7 @@
   - 修復 **G2**：在 `tokenManager.ts` (憑證撤銷) 觸發點補上記錄。
   - 修復 **G3**：在 MCP 路由進入點前攔截未知的 Bearer 嘗試並記錄。
   - 修復 **G6**：擴充 `AuditEntry` Schema，寫入 `event_type` (如 `security`, `approval`) 與 `severity`。
-  - 實作 **G9 (近程)**：完成 Stdout JSON Lines 雙寫 Sink，配合 `BE2_MCP_AUDIT_STDOUT`，打通 Kibana 通道。
+  - 實作 **G9 (近程)**：完成 Stdout JSON Lines 雙寫 Sink，配合 `APP_AUDIT_STDOUT`，打通 Kibana 通道。
 
 - **P1 階段 (維運管控與細粒度鑑別)**
   - 修復 **G1**：補齊 OAuth flows 與 SSO 的生命週期稽核。

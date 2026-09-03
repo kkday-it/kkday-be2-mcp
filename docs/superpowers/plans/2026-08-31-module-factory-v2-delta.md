@@ -467,12 +467,12 @@ git commit -m "feat(cassette): seed announcement-update cassette + real-client i
 
 **Files:**
 - Modify: `src/config.ts`（preset 加 announce key var）
-- Modify: `src/modules/announcement/create/svcB2cClient.ts`（`makeAnnouncementClient` 依 `BE2_ENV` 取 key）
+- Modify: `src/modules/announcement/create/svcB2cClient.ts`（`makeAnnouncementClient` 依 `APP_ENV` 取 key）
 - Test: `tests/announcement/svcB2cClientEnv.test.ts`
 
 **Interfaces:**
 - Consumes: 既有 `loadConfig()`（`src/config.ts`）、`makeAnnouncementClient()`。
-- Produces: `makeAnnouncementClient()` 依 `BE2_ENV` 從 config preset 取 `x-api-key`（`SIT_ANNOUNCE_API_KEY` / `STAGE_ANNOUNCE_API_KEY` / `PROD_ANNOUNCE_API_KEY`），非硬編 SIT。
+- Produces: `makeAnnouncementClient()` 依 `APP_ENV` 從 config preset 取 `x-api-key`（`API_ANNOUNCE_KEY` / `API_ANNOUNCE_KEY` / `API_ANNOUNCE_KEY`），非硬編 SIT。
 
 - [ ] **Step 1: 寫失敗測試**
 
@@ -485,26 +485,26 @@ import { announceKeyVarFor } from '../../src/config.js'
 afterEach(() => vi.unstubAllEnvs())
 
 describe('announceKeyVarFor (mapping centralized in config presets)', () => {
-  it('maps each BE2_ENV to its announce key var name', () => {
-    expect(announceKeyVarFor('stage')).toBe('STAGE_ANNOUNCE_API_KEY')
-    expect(announceKeyVarFor('prod')).toBe('PROD_ANNOUNCE_API_KEY')
-    expect(announceKeyVarFor('sit')).toBe('SIT_ANNOUNCE_API_KEY')
-    expect(announceKeyVarFor('sit-220')).toBe('SIT_ANNOUNCE_API_KEY')
+  it('maps each APP_ENV to its announce key var name', () => {
+    expect(announceKeyVarFor('stage')).toBe('API_ANNOUNCE_KEY')
+    expect(announceKeyVarFor('prod')).toBe('API_ANNOUNCE_KEY')
+    expect(announceKeyVarFor('sit')).toBe('API_ANNOUNCE_KEY')
+    expect(announceKeyVarFor('sit-220')).toBe('API_ANNOUNCE_KEY')
   })
 })
 
 describe('resolveAnnounceApiKey (env-aware, consumes config mapping)', () => {
-  it('picks the STAGE key when BE2_ENV=stage', () => {
-    vi.stubEnv('BE2_ENV', 'stage'); vi.stubEnv('STAGE_ANNOUNCE_API_KEY', 'stage-key')
+  it('picks the STAGE key when APP_ENV=stage', () => {
+    vi.stubEnv('APP_ENV', 'stage'); vi.stubEnv('API_ANNOUNCE_KEY', 'stage-key')
     expect(resolveAnnounceApiKey()).toBe('stage-key')
   })
-  it('picks the SIT key when BE2_ENV=sit (or unset default)', () => {
-    vi.stubEnv('BE2_ENV', 'sit'); vi.stubEnv('SIT_ANNOUNCE_API_KEY', 'sit-key')
+  it('picks the SIT key when APP_ENV=sit (or unset default)', () => {
+    vi.stubEnv('APP_ENV', 'sit'); vi.stubEnv('API_ANNOUNCE_KEY', 'sit-key')
     expect(resolveAnnounceApiKey()).toBe('sit-key')
   })
   it('throws GatewayError naming the missing env-specific var', () => {
-    vi.stubEnv('BE2_ENV', 'stage')
-    expect(() => resolveAnnounceApiKey()).toThrow(/STAGE_ANNOUNCE_API_KEY/)
+    vi.stubEnv('APP_ENV', 'stage')
+    expect(() => resolveAnnounceApiKey()).toThrow(/API_ANNOUNCE_KEY/)
   })
 })
 ```
@@ -520,12 +520,12 @@ Expected: FAIL（`resolveAnnounceApiKey` 未匯出）
 
 ```typescript
 // src/config.ts —— 每個 preset 加 announceKeyVar；sit-220 與 sit 同用 SIT key
-// PRESETS['sit-220'].announceKeyVar = 'SIT_ANNOUNCE_API_KEY'
-// PRESETS['sit'].announceKeyVar     = 'SIT_ANNOUNCE_API_KEY'
-// PRESETS['stage'].announceKeyVar   = 'STAGE_ANNOUNCE_API_KEY'
-// PRESETS['prod'].announceKeyVar    = 'PROD_ANNOUNCE_API_KEY'
+// PRESETS['sit-220'].announceKeyVar = 'API_ANNOUNCE_KEY'
+// PRESETS['sit'].announceKeyVar     = 'API_ANNOUNCE_KEY'
+// PRESETS['stage'].announceKeyVar   = 'API_ANNOUNCE_KEY'
+// PRESETS['prod'].announceKeyVar    = 'API_ANNOUNCE_KEY'
 export function announceKeyVarFor(env: string): string {
-  return (PRESETS as Record<string, { announceKeyVar?: string }>)[env]?.announceKeyVar ?? 'SIT_ANNOUNCE_API_KEY'
+  return (PRESETS as Record<string, { announceKeyVar?: string }>)[env]?.announceKeyVar ?? 'API_ANNOUNCE_KEY'
 }
 ```
 
@@ -535,16 +535,16 @@ export function announceKeyVarFor(env: string): string {
 import { announceKeyVarFor } from '../../../config.js'
 // GatewayError 已在本檔 import（makeAnnouncementClient 現用它拋 ANNOUNCE_KEY_MISSING）
 export function resolveAnnounceApiKey(): string {
-  const env = process.env.BE2_ENV ?? 'sit'
+  const env = process.env.APP_ENV ?? 'sit'
   const varName = announceKeyVarFor(env)
   const key = process.env[varName]
-  if (!key) throw new GatewayError('ANNOUNCE_KEY_MISSING', `${varName} not set for BE2_ENV=${env}`, 500)
+  if (!key) throw new GatewayError('ANNOUNCE_KEY_MISSING', `${varName} not set for APP_ENV=${env}`, 500)
   return key
 }
-// makeAnnouncementClient() 內：const apiKey = resolveAnnounceApiKey()（取代硬編 process.env.SIT_ANNOUNCE_API_KEY，保留原 GatewayError('ANNOUNCE_KEY_MISSING') 契約）
+// makeAnnouncementClient() 內：const apiKey = resolveAnnounceApiKey()（取代硬編 process.env.API_ANNOUNCE_KEY，保留原 GatewayError('ANNOUNCE_KEY_MISSING') 契約）
 ```
 
-在 `.env.example` 補 `STAGE_ANNOUNCE_API_KEY=` / `PROD_ANNOUNCE_API_KEY=`（空值佔位）。
+在 `.env.example` 補 `API_ANNOUNCE_KEY=` / `API_ANNOUNCE_KEY=`（空值佔位）。
 
 - [ ] **Step 4: 跑測試 + 全套確認無回歸**
 
@@ -604,7 +604,7 @@ git commit -m "docs(factory): Workflow carrier script + resume (D1)"
 
 - [ ] **Step 2: 改 stage1-explore.md**
 
-(a) D3 環境退避：撞 403/502 先自動改 `BE2_ENV=stage` 重試，stage 過才判 GREEN、stage 仍卡才判授權 gate；契約報告加「探索環境」欄。(b) D4 姊妹繼承：同 domain 標的繼承 host/envelope/header/授權碼/row，**但仍 sniff executor 需要的所有 read endpoint（含 GET 詳情），不是只 sniff 寫 verb**。(c) D5：sniff request body 用 server 端 `page.route` + `request.postData()`，不用 `browser_network_requests`。
+(a) D3 環境退避：撞 403/502 先自動改 `APP_ENV=stage` 重試，stage 過才判 GREEN、stage 仍卡才判授權 gate；契約報告加「探索環境」欄。(b) D4 姊妹繼承：同 domain 標的繼承 host/envelope/header/授權碼/row，**但仍 sniff executor 需要的所有 read endpoint（含 GET 詳情），不是只 sniff 寫 verb**。(c) D5：sniff request body 用 server 端 `page.route` + `request.postData()`，不用 `browser_network_requests`。
 
 - [ ] **Step 3: 改 stage2-produce.md + stage3-verify.md**
 

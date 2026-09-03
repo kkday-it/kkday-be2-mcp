@@ -4,7 +4,7 @@
 
 **Goal:** 為 change-set 加上 core 泛用「到點派送」排程能力(`scheduled/cancelled/missed` 狀態 + server 內建 poller + 延遲執行身分),並只對 `inventory_setting` 開放(`schedulable` opt-in)。
 
-**Architecture:** spec `docs/superpowers/specs/2026-08-20-be2-mcp-inventory-schedule-design.md`(agy APPROVED rounds=4)。排程歸 core(change-set 生命週期治理);到期認領/keep-alive 皆用既有 DB CAS 原語(免 Redis/leader);延遲執行身分靠 Option 1 token store(`executor_identity_id` + `getFreshByIdentityId`);時區規則=牆鐘+`BE2_TZ` 換算 UTC 一次、呈現回放原文。
+**Architecture:** spec `docs/superpowers/specs/2026-08-20-be2-mcp-inventory-schedule-design.md`(agy APPROVED rounds=4)。排程歸 core(change-set 生命週期治理);到期認領/keep-alive 皆用既有 DB CAS 原語(免 Redis/leader);延遲執行身分靠 Option 1 token store(`executor_identity_id` + `getFreshByIdentityId`);時區規則=牆鐘+`APP_TZ` 換算 UTC 一次、呈現回放原文。
 
 **Tech Stack:** TypeScript(strict)、Express 5、better-sqlite3、zod、vitest。無新依賴(時區用 `Intl.DateTimeFormat`)。
 
@@ -542,7 +542,7 @@ it('keepAlive force-refreshes inside windowMs even beyond tokenManager skew (no 
 **Interfaces:**
 - Produces: `createChangesetInputShape` 加 `schedule: z.object({ wall: z.string() }).optional()`;建立時驗證+換算+persist。
 - Consumes: Task 1 `wallToUtcEpoch`/`SCHEDULE_POLICY`,Task 2 `ScheduleInfo`。
-- 依賴注入:`L2ToolContext` 需能取得 `BE2_TZ`——在 `src/server/l2Context.ts` 的 context 介面加 `scheduleTz: string`。**同步必改(agy plan-review round 1)**:`src/server/appPipeline.ts` 的 `AppToolContext` 介面、`AppPipelineDeps` 與 `wrapAppTool` 的 ctx 組裝(`appPipeline.ts:113-119` 附近)也要各加/傳 `scheduleTz`——`app_create_changeset` 走 `createChangesetCore(args, ctx)` 時傳的是 `AppToolContext`,漏接會 typecheck 失敗(或 runtime `wallToUtcEpoch(wall, undefined)` 炸面板排程)。由 `app.ts` 組裝時從 config 傳入(Task 7 接 config;本 task 先加介面欄位並在測試 ctx 直給 `'Asia/Taipei'`,`app.ts` 兩處 deps(L2 toolPipeline 與 appPipeline)暫以字面值 `'Asia/Taipei'` 傳入,Task 7 換成 config)。Task 5 測試需加一條:走 `appCreateChangesetTool.handler`(fake AppToolContext 含 scheduleTz)建排程成功——證面板路徑接通。
+- 依賴注入:`L2ToolContext` 需能取得 `APP_TZ`——在 `src/server/l2Context.ts` 的 context 介面加 `scheduleTz: string`。**同步必改(agy plan-review round 1)**:`src/server/appPipeline.ts` 的 `AppToolContext` 介面、`AppPipelineDeps` 與 `wrapAppTool` 的 ctx 組裝(`appPipeline.ts:113-119` 附近)也要各加/傳 `scheduleTz`——`app_create_changeset` 走 `createChangesetCore(args, ctx)` 時傳的是 `AppToolContext`,漏接會 typecheck 失敗(或 runtime `wallToUtcEpoch(wall, undefined)` 炸面板排程)。由 `app.ts` 組裝時從 config 傳入(Task 7 接 config;本 task 先加介面欄位並在測試 ctx 直給 `'Asia/Taipei'`,`app.ts` 兩處 deps(L2 toolPipeline 與 appPipeline)暫以字面值 `'Asia/Taipei'` 傳入,Task 7 換成 config)。Task 5 測試需加一條:走 `appCreateChangesetTool.handler`(fake AppToolContext 含 scheduleTz)建排程成功——證面板路徑接通。
 
 - [ ] **Step 1: Write the failing test**
 
@@ -705,11 +705,11 @@ appTools.ts `app_confirm_changeset`:inputShape 加 `expected_execute_at_utc: z.n
 
 ---
 
-### Task 7: Scheduler 元件 + 組裝(config BE2_TZ)
+### Task 7: Scheduler 元件 + 組裝(config APP_TZ)
 
 **Files:**
 - Create: `src/core/schedule/scheduler.ts`
-- Modify: `src/config.ts`(EnvSchema/Config 加 `BE2_TZ` → `scheduleTz`,default `'Asia/Taipei'`)
+- Modify: `src/config.ts`(EnvSchema/Config 加 `APP_TZ` → `scheduleTz`,default `'Asia/Taipei'`)
 - Modify: `src/server/app.ts`(建 scheduler、`app.locals.startScheduler`;ctx 的 `scheduleTz` 換 config 值)
 - Modify: `src/index.ts`(listen 後 `app.locals.startScheduler()`)
 - Test: `tests/core/scheduler.test.ts`
@@ -869,10 +869,10 @@ export function makeScheduler(deps: SchedulerDeps, opts: Partial<typeof SCHEDULE
 }
 ```
 
-config.ts:`BE2_TZ: z.string().default('Asia/Taipei')` → `Config.scheduleTz`。app.ts:兩處 ctx 的 `scheduleTz` 改 `config.scheduleTz`;組裝 `const scheduler = makeScheduler({ changeSets, gateway, audit, now, tokenManager })`;`app.locals.startScheduler = scheduler.start`(buildApp **不**自動 start——測試/`buildApp` 使用者不被迫背景輪詢)。index.ts:`app.listen(...)` callback 內 `(app.locals.startScheduler as () => () => void)()`。
+config.ts:`APP_TZ: z.string().default('Asia/Taipei')` → `Config.scheduleTz`。app.ts:兩處 ctx 的 `scheduleTz` 改 `config.scheduleTz`;組裝 `const scheduler = makeScheduler({ changeSets, gateway, audit, now, tokenManager })`;`app.locals.startScheduler = scheduler.start`(buildApp **不**自動 start——測試/`buildApp` 使用者不被迫背景輪詢)。index.ts:`app.listen(...)` callback 內 `(app.locals.startScheduler as () => () => void)()`。
 
 - [ ] **Step 4: Run** — 新測試 PASS + `npm run ci` 全綠
-- [ ] **Step 5: Commit** — `git commit -m "feat(schedule): scheduler tick(認領/grace/分流/回收/keep-alive)+ BE2_TZ config + 啟動接線"`
+- [ ] **Step 5: Commit** — `git commit -m "feat(schedule): scheduler tick(認領/grace/分流/回收/keep-alive)+ APP_TZ config + 啟動接線"`
 
 ---
 

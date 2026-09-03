@@ -133,7 +133,7 @@ RESULT=INVENTORY_PLATFORM_DIFF_BLOCKED_AS_EXPECTED (see docs/be2-mcp/sit-write-c
 
 可以透過真實的 Chrome 開發面板，而非必須使用 Claude Desktop 進行開發迭代。
 
-1. 設定環境變數啟動專案：`BE2_MCP_DEV_PANEL=1 npm run dev`
+1. 設定環境變數啟動專案：`APP_DEV_PANEL=1 npm run dev`
 2. 使用瀏覽器打開：`http://127.0.0.1:8787/dev/panel/batch-wizard?action_type=shelf_schedule&prod_oids=34133`
 3. 迭代流程：修改 `src/ui/` 下的檔案後，執行 `npm run build:ui` 並重整網頁即可生效。
 

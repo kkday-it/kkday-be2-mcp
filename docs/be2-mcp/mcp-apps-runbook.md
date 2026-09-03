@@ -15,7 +15,7 @@ Phase 2b 起，change-set 的批准有**兩條通道**：
 
 - **`npm run build:ui` 必須先跑過一次**，才會有 `dist/ui/*.html`（面板的打包產物，esbuild 把 `src/ui/*.ts` inline 進對應 `src/ui/*.html` 模板）。`npm run dev` **不會**自動重建面板——改了 `src/ui/*.ts` 後要重新 `npm run build:ui` 再重啟/重連 server 才會生效。`npm run ci` 已內含這一步（見 `package.json` 的 `ci` script），CI 不會漏掉；但本機手動起 server 測面板時要記得手動跑。
 - **Claude Desktop**（目前唯一驗證過會渲染面板的 host；spike T1/T6 皆針對它）。
-- Desktop 走 **HTTP + mcp-remote stdio shim**——Desktop 官方文件化的 connector 路徑是本機 stdio server；be2-mcp 是 Streamable HTTP（`127.0.0.1:$BE2_MCP_PORT`），兩者接不上，中間需要一層 shim 把 stdio 轉打本機 HTTP（`mcp-ui-spike-checklist.md` 已驗證：直連 loopback HTTP 的自訂 connector無法渲染，shim 才行）。
+- Desktop 走 **HTTP + mcp-remote stdio shim**——Desktop 官方文件化的 connector 路徑是本機 stdio server；be2-mcp 是 Streamable HTTP（`127.0.0.1:$APP_PORT`），兩者接不上，中間需要一層 shim 把 stdio 轉打本機 HTTP（`mcp-ui-spike-checklist.md` 已驗證：直連 loopback HTTP 的自訂 connector無法渲染，shim 才行）。
 
 ## `claude_desktop_config.json` 範例
 
@@ -31,15 +31,15 @@ Phase 2b 起，change-set 的批准有**兩條通道**：
         "--transport",
         "http-only",
         "--header",
-        "Authorization: Bearer ${BE2_MCP_BEARER}"
+        "Authorization: Bearer ${APP_BEARER}"
       ]
     }
   }
 }
 ```
 
-- `http://127.0.0.1:8787` 依你的 `BE2_MCP_PORT` 調整（預設 8787）。
-- `--header "Authorization: Bearer <bearer>"`：`<bearer>` 就是 `npm run bootstrap-user` 印出的那顆一次性 static bearer（見 `phase1a-runbook.md` 「2. Enroll」），**跟 Claude Code 用的是同一顆**——be2-mcp 對 Desktop/Code 兩種 host 一視同仁，身分一律由這顆 bearer 推導，不因 host 而異。上例用 `${BE2_MCP_BEARER}` 環境變數占位，實務上請直接把明文 bearer 貼進這個 JSON 檔（`claude_desktop_config.json` 是你本機的設定檔，不會被 commit）——**切勿把這顆 bearer 貼進任何會進版控/聊天記錄/文件的地方**。
+- `http://127.0.0.1:8787` 依你的 `APP_PORT` 調整（預設 8787）。
+- `--header "Authorization: Bearer <bearer>"`：`<bearer>` 就是 `npm run bootstrap-user` 印出的那顆一次性 static bearer（見 `phase1a-runbook.md` 「2. Enroll」），**跟 Claude Code 用的是同一顆**——be2-mcp 對 Desktop/Code 兩種 host 一視同仁，身分一律由這顆 bearer 推導，不因 host 而異。上例用 `${APP_BEARER}` 環境變數占位，實務上請直接把明文 bearer 貼進這個 JSON 檔（`claude_desktop_config.json` 是你本機的設定檔，不會被 commit）——**切勿把這顆 bearer 貼進任何會進版控/聊天記錄/文件的地方**。
 - `mcp-remote` 用 `npx -y` 拉，不需要另外全域安裝；版本見 `spike-t6-findings.md`（spike 當時測的是 `0.1.37`）。
 
 改完設定檔後重啟 Claude Desktop 才會生效。
@@ -69,7 +69,7 @@ Claude Code 是終端機 host，沒有 MCP Apps 渲染能力（`hostSupportsApps
 | 症狀 | 原因 | 處理 |
 |---|---|---|
 | Desktop 沒有跳出面板，只有純文字 | 忘了 `npm run build:ui`（`dist/ui/*.html` 不存在或是舊的） | 跑 `npm run build:ui`，重啟 be2-mcp server，重新連線（必要時重啟 Desktop） |
-| Desktop 連不上 be2-mcp | `claude_desktop_config.json` 的 URL/port 跟目前 `BE2_MCP_PORT` 不一致，或 server 沒在跑 | 確認 `npm run dev` 正在跑、port 與設定檔一致；`curl http://127.0.0.1:8787/healthz` 應回 `ok` |
+| Desktop 連不上 be2-mcp | `claude_desktop_config.json` 的 URL/port 跟目前 `APP_PORT` 不一致，或 server 沒在跑 | 確認 `npm run dev` 正在跑、port 與設定檔一致；`curl http://127.0.0.1:8787/healthz` 應回 `ok` |
 | 面板顯示但沒有勾選框/確認執行按鈕 | change-set 已離開 `pending_approval`（已被批准/拒絕/過期），或這個 host 沒通過 spike T6 等價驗證（本文件只驗證過 Claude Desktop，換 host 需重驗，見 `spike-t6-findings.md`「對計畫的影響」段） | 用 `be2_get_changeset_status` 查目前狀態；換 host 前先重跑 T6 等價 spike |
 | 按「確認執行」回 `CONFIRMED_KEYS_MISMATCH` | 取消勾選了某個 item（見上「面板批准怎麼用」步驟 3：目前是全有全無語意） | 全部勾選後重按，或改請 agent 建一個範圍縮小後的新 change-set |
 | 按「確認執行」回 `NONCE_INVALID` | nonce 過期或已被消耗（單次使用） | 重新整理面板（觸發 `app_get_changeset_view`）取得新 nonce |

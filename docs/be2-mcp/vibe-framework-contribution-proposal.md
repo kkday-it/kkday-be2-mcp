@@ -67,7 +67,7 @@ schedules: {}                    # 現況為 in-process scheduler，未符合「
 
 ```yaml
 runtime:
-  port: 8787                     # BE2_MCP_PORT
+  port: 8787                     # APP_PORT
   health_endpoint: /healthz
   job_endpoint_prefix: /api/jobs # 現況不存在（scheduler 是 in-process），遷移後才有意義
 ```

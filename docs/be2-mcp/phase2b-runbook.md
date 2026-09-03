@@ -16,14 +16,14 @@ Phase 2a 的確認頁用**一次性 capability token**（URL 裡的 `?token=`）
 
 - 公司網路或 VPN（能連 be2-auth `auth-220.sit.kkday.com` 開登入彈窗）。
 - Node 22（與 Phase 1a/2a 相同）。
-- 專案根目錄的 `.env` 已設好 `AUTHSVC_URL` / `GATEWAY_URL` / `SIT_AUTHSVC_SERVICE_KEY` / `BE2_MCP_PORT`（預設 8787）。
+- 專案根目錄的 `.env` 已設好 `AUTHSVC_URL` / `GATEWAY_URL` / `API_AUTH_SERVICE_KEY` / `APP_PORT`（預設 8787）。
 - `npm run dev` 已啟動 be2-mcp server（Streamable HTTP `/mcp` + 確認頁 `/confirm/*`），且 Claude Code 已用 Phase 1a 的 `bootstrap-user` 流程 enroll 過。
 - 瀏覽器需允許彈出視窗（登入用 POPUP，見下）。
 
 ## 批准流程（SSO 版）
 
 1. **Agent 端不變**：如 Phase 2a，跟 agent 說「把商品 `<prodOid>` 下架」之類的請求，agent 呼叫 `be2_create_changeset`，聊天視窗只會收到 `changeset_id` + `status` + `diff` —— **不含**任何確認頁連結或 token（鐵則 #4，draft-only）。
-2. **操作者自行開啟確認頁**：`http://127.0.0.1:8787/confirm/<changeset_id>`（`changeset_id` 由 agent 回報，可直接複製；port 依 `BE2_MCP_PORT`）。
+2. **操作者自行開啟確認頁**：`http://127.0.0.1:8787/confirm/<changeset_id>`（`changeset_id` 由 agent 回報，可直接複製；port 依 `APP_PORT`）。
 3. **若尚未登入**（沒有有效的 `be2mcp_sid` cookie，或 session 已死），確認頁會 302 導向 `/confirm/login?next=/confirm/<id>`，顯示一個「登入 be2」按鈕。
    - 點擊按鈕會**在使用者手勢內**（瀏覽器會擋非使用者手勢觸發的彈窗）開一個 POPUP，導向 be2-auth 的登入頁（`loginFlow=POPUP`）。
    - 若瀏覽器已有有效的 be2-auth cookie（例如剛登入過 be2-web），這一步是**靜默**的（跟 be2-web 自己的行為一致）；否則要求帳密+2FA。
@@ -64,7 +64,7 @@ Phase 2b 關閉這個洞：確認頁的 `/confirm/:id`、`/confirm/:id/approve`�
 
 ## Session、audit 存放位置
 
-- **Web session**：SQLite `web_sessions` 表（同一顆 DB，`BE2_MCP_DB_PATH`）— `session_id`（即 cookie 值,高熵隨機）、`user_label`、`created_at`、`last_seen_at`。idle TTL 預設 8 小時（超過未操作即視為過期,下次讀取時刪除該列）。
+- **Web session**：SQLite `web_sessions` 表（同一顆 DB，`APP_DB_PATH`）— `session_id`（即 cookie 值,高熵隨機）、`user_label`、`created_at`、`last_seen_at`。idle TTL 預設 8 小時（超過未操作即視為過期,下次讀取時刪除該列）。
 - **be2 token（access/refresh/businessList）**：沿用既有 `user_tokens` 表,以 `hashBearer(sessionId)` 為 key 存放 —— 跟 Phase 1a/2a 的 MCP bearer token 是**同一張表、同一套雜湊 key 機制**,只是 key 換成 web session id 而非 MCP bearer。
 - **Change-set / 執行結果**：同 Phase 2a 的 `change_sets` / `change_set_results` 表,未變動。
 - **Audit log**：同一張 `audit_log` 表。批准/拒絕的「人類決策」事件（`tool = changeset.approve` / `changeset.reject`）現在 attribute 到**批准當下的 web session**（`session_id` + `userLabel`）,而不是 change-set 原始建立者 —— 這正是關閉自我批准漏洞後,審計欄位也要跟著誠實反映「誰按的」而非「誰建立的」：
@@ -75,7 +75,7 @@ Phase 2b 關閉這個洞：確認頁的 `/confirm/:id`、`/confirm/:id/approve`�
 
 ## Phase 2b 已知限制
 
-- **Loopback、單機**。確認頁只在 `127.0.0.1:$BE2_MCP_PORT` 服務,跟 Phase 1a/2a 一樣是單一 server 實例,`web_sessions` 表是 in-process/SQLite-single-writer。
+- **Loopback、單機**。確認頁只在 `127.0.0.1:$APP_PORT` 服務,跟 Phase 1a/2a 一樣是單一 server 實例,`web_sessions` 表是 in-process/SQLite-single-writer。
 - **be2-auth POPUP 訊息契約：✅ 已對真實 be2-auth live 驗證（2026-08-14，carry-forward 收案）**：真實序列 = popup 先發 `{event:'AUTH_LOGIN_READY'}`（opener **必須 500ms 內回 `{event:'CONFIRM_LOGIN_DOMAIN'}`**，否則 popup client-route 到 /404——這個握手一度是 live 404 的根因，已修，commit `850ab96`）；登入成功後 popup 發 `{event:'UPDATE_AUTH_TOKEN', data:{authorizationCode, device}}`（code 在巢狀 `data.data`，`ssoRoutes.ts`/`authorizeRoutes.ts` 已依真實契約解析，commit `705850c`）。`redirectPath`：be2-web 實測**不帶**，帶了反而 /404，登入 URL 已移除該參數。guard 原始碼解析與 SIT/prod 白名單行為見 `mcp-oauth-upstream-idp-pattern.md`。
 - **寫入仍被 403 卡住**（per 環境/per 帳號,非 mechanism 問題）：見下方 PENDING 區塊與 `docs/be2-mcp/sit-write-contracts.md`。
 - **`modify_user` 自動解析**：執行器會自動解譯 access token 取出 `platformId` 做為 `modify_user` 欄位（已驗證為真實寫入所需的正確值）。若 token 無效或缺此欄位，會直接拋出 `MODIFY_USER_UNRESOLVED`。

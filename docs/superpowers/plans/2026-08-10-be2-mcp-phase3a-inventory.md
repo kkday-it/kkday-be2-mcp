@@ -46,7 +46,7 @@ Copied from the Phase 3a spec + parent spec. Every task's requirements implicitl
 | Open #2: PUT contract — required fields, merge vs replace, date batching, cross-month, sync vs async (`is_processing` behavior) | Task 1 |
 | Open #3: businessList action code for inventory | Task 1 (grep the account's real businessList) |
 | Open #4: dates-per-item cap (provisional 62) | Task 1 |
-| Blocker path: needs an item this account can write (be2-220 grant, or fill `STAGE_AUTHSVC_SERVICE_KEY` + `STAGE_pwd` and probe stage) | spec §0.4 — if both blocked, record in `sit-write-contracts.md`, downstream tasks stay defensive/fixture-gated, live e2e goes PENDING (Phase 2a pattern) |
+| Blocker path: needs an item this account can write (be2-220 grant, or fill `API_AUTH_SERVICE_KEY` + `STAGE_pwd` and probe stage) | spec §0.4 — if both blocked, record in `sit-write-contracts.md`, downstream tasks stay defensive/fixture-gated, live e2e goes PENDING (Phase 2a pattern) |
 
 ## File Structure
 
@@ -173,7 +173,7 @@ In `package.json` `"scripts"`, next to `"probe-sit-write"`:
 - [ ] **Step 3: Typecheck + run the read-only pass**
 
 Run: `npx tsc --noEmit` — Expected: clean.
-Run: `npm run probe-sit-inventory -- <itemOid> <supplierOid>` with a writable item (be2-220 grant path) OR against stage after filling `STAGE_AUTHSVC_SERVICE_KEY`/`STAGE_pwd` in `.env` (spec §0.4). Expected: either a 200 quantities read + fixture, or `BLOCKED` printed.
+Run: `npm run probe-sit-inventory -- <itemOid> <supplierOid>` with a writable item (be2-220 grant path) OR against stage after filling `API_AUTH_SERVICE_KEY`/`STAGE_pwd` in `.env` (spec §0.4). Expected: either a 200 quantities read + fixture, or `BLOCKED` printed.
 
 - [ ] **Step 4: Record findings (or the blocker) in `docs/be2-mcp/sit-write-contracts.md`**
 

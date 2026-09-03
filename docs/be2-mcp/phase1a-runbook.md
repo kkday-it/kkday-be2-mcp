@@ -10,9 +10,9 @@
 - **`.env`** at repo root (never commit, never print) with:
   - `AUTHSVC_URL=https://auth-220.sit.kkday.com`
   - `GATEWAY_URL=https://api-gateway-220.sit.kkday.com`
-  - `SIT_AUTHSVC_SERVICE_KEY=<SIT service key>` — ask the be2-mcp owner if you don't have it.
+  - `API_AUTH_SERVICE_KEY=<SIT service key>` — ask the be2-mcp owner if you don't have it.
   - `AUTH_email` / `AUTH_pwd` — your own be2 SIT account credentials (used only locally, at enrollment time, to log in on your behalf; never sent anywhere but auth-service).
-  - Optional: `BE2_MCP_PORT` (default `8787`), `BE2_MCP_DB_PATH` (default `./data/be2-mcp.sqlite`), `OTEL_MODE` (`off`/`console`/`otlp`, default `off`).
+  - Optional: `APP_PORT` (default `8787`), `APP_DB_PATH` (default `./data/be2-mcp.sqlite`), `OTEL_MODE` (`off`/`console`/`otlp`, default `off`).
 - A be2 SIT account with at least read access to some products (ask your be2-mcp owner for a known-good `prod_oid`/`item_oid` to test with).
 
 ## 1. Start the server
@@ -21,7 +21,7 @@
 npm run dev
 ```
 
-Listens on `http://127.0.0.1:8787` (or your `BE2_MCP_PORT`). Health check: `curl http://127.0.0.1:8787/healthz` → `ok`. Leave this running in one terminal.
+Listens on `http://127.0.0.1:8787` (or your `APP_PORT`). Health check: `curl http://127.0.0.1:8787/healthz` → `ok`. Leave this running in one terminal.
 
 ## 2. Enroll (get your static bearer)
 
@@ -100,7 +100,7 @@ Example natural-language prompts (replace with real SIT oids):
 
 ## Where audit/trace data lives
 
-- **Audit log**: SQLite `audit_log` table at `BE2_MCP_DB_PATH` (default `./data/be2-mcp.sqlite`). Append-only (DB-level triggers reject `UPDATE`/`DELETE`). Columns: `id, ts, user_label, session_id, client_info, tool, params_json, status, error_message, trace_id, duration_ms`. No token material is ever written here.
+- **Audit log**: SQLite `audit_log` table at `APP_DB_PATH` (default `./data/be2-mcp.sqlite`). Append-only (DB-level triggers reject `UPDATE`/`DELETE`). Columns: `id, ts, user_label, session_id, client_info, tool, params_json, status, error_message, trace_id, duration_ms`. No token material is ever written here.
   ```bash
   sqlite3 data/be2-mcp.sqlite 'SELECT tool, status, trace_id FROM audit_log ORDER BY id DESC LIMIT 10'
   ```

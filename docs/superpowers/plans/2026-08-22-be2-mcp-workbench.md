@@ -650,7 +650,7 @@ Run: `npx vitest run tests/serverTools.test.ts`　Expected: FAIL（現況相反�
 
 Run: `npx vitest run tests/serverTools.test.ts`　Expected: PASS。
 Run: `npm run ci`　Expected: build-ui + typecheck + 全部 vitest 綠。
-Run（冒煙）: 啟 dev server 後 `curl -s http://127.0.0.1:$BE2_MCP_PORT/healthz`（預設 8787）→ `ok`；確認啟動 log 無面板缺檔 warn。
+Run（冒煙）: 啟 dev server 後 `curl -s http://127.0.0.1:$APP_PORT/healthz`（預設 8787）→ `ok`；確認啟動 log 無面板缺檔 warn。
 
 - [ ] **Step 5: Commit**
 

@@ -11,7 +11,7 @@
 1. **範圍 = 只做 per-date 庫存數量**(候選端點 `PUT /product/api/v1/items/{itemOid}/inventories`,待 probe 證實):庫存批改 power-user(實測 ~11.8k 筆/月手動)的主場、最小切片。**item 級庫存模式(inventory-setting mode)與 supplier-config 設定不進 3a**(留 3a 後續或不做)。
 2. **op 同時支援 `set`(設為 N)與 `adjust`(+N/−N)**:庫存數量會被真實訂單持續消耗,絕對值-only 會讓 stale guard 對忙碌商品無限 409;「每天 +50」類相對編輯是本域核心用例(上位 spec §4 明文要求)。
 3. **change-set item 粒度 = item × supplier × 日期集合 × op**:一個 item 對應一次 read-merge-write PUT(日期批在同一 payload,待 probe 證實端點吃批量);沿用 ≤20 items 上限,另加每 item 日期數上限(暫 ≤62,probe 後定案)。
-4. **probe 卡點雙路徑**:寫入授權沿用 Phase 2a 卡點(SIT `.env` 帳號 per-環境/per-oid 403)。probe 走「be2-220 取得此帳號可寫的 item」或「補 `.env` `STAGE_AUTHSVC_SERVICE_KEY` 走 stage」擇一,不阻擋 spec/plan。
+4. **probe 卡點雙路徑**:寫入授權沿用 Phase 2a 卡點(SIT `.env` 帳號 per-環境/per-oid 403)。probe 走「be2-220 取得此帳號可寫的 item」或「補 `.env` `API_AUTH_SERVICE_KEY` 走 stage」擇一,不阻擋 spec/plan。
 
 ## 1. 範圍與非目標
 

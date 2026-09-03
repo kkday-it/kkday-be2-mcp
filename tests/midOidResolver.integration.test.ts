@@ -7,7 +7,7 @@ import type { ToolContext } from '../src/tools/types.js'
 
 // Live SIT be2-220 integration tests for the mid→oid resolver (Task 7 / spec §8 "整合測試").
 //
-// Gated on BE2_LIVE_BEARER — a real be2 access token, valid on the target gateway (default
+// Gated on APP_LIVE_BEARER — a real be2 access token, valid on the target gateway (default
 // be2-220), for an account with read access to the fixture product below. This var is NEVER set
 // in CI, so this whole describe block SKIPS (0 run, not failed) in every automated run — same
 // convention as this repo's other live-only verification, which runs as a manual, documented,
@@ -19,19 +19,19 @@ import type { ToolContext } from '../src/tools/types.js'
 // also flags this pair as UNVERIFIED live as of this task — running this file with a real bearer
 // is exactly how a human closes that PENDING item. Do NOT swap in a coincidental-equality product
 // (mid == oid, e.g. 2358) — the resolver not being wired up would pass unnoticed against those.
-const KNOWN_MID = process.env.BE2_LIVE_MID_FIXTURE ?? '10759'
-const KNOWN_OID = process.env.BE2_LIVE_OID_FIXTURE ?? '38352'
+const KNOWN_MID = process.env.APP_LIVE_MID_FIXTURE ?? '10759'
+const KNOWN_OID = process.env.APP_LIVE_OID_FIXTURE ?? '38352'
 
 function liveCtx(): ToolContext {
   const cfg = loadConfig()
   return {
-    accessToken: process.env.BE2_LIVE_BEARER!,
-    userLabel: process.env.BE2_LIVE_USER_LABEL ?? 'live-integration-test',
+    accessToken: process.env.APP_LIVE_BEARER!,
+    userLabel: process.env.APP_LIVE_USER_LABEL ?? 'live-integration-test',
     gateway: new GatewayClient({ baseUrl: cfg.gatewayUrl }),
   }
 }
 
-describe.skipIf(!process.env.BE2_LIVE_BEARER)('live SIT: mid→oid resolver integration', () => {
+describe.skipIf(!process.env.APP_LIVE_BEARER)('live SIT: mid→oid resolver integration', () => {
   // 整合 11:用 prod_mid 呼叫 get_product_plans,底層確實查 canonical oid。
   it('live: prod_mid 解析後查到 canonical oid 的方案資料', async () => {
     const env = await productPlansTool.handler({ prod_mid: KNOWN_MID } as never, liveCtx())

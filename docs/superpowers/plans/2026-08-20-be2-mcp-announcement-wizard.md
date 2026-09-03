@@ -236,7 +236,7 @@ git commit -m "feat(announcement): decodePlatformId for user-uuid header"
 - Consumes: `decodePlatformId` (Task 2), `GatewayError` (`src/errors.js`).
 - Produces:
   - `class AnnouncementClient { constructor(opts: { baseUrl: string; apiKey: string; fetchImpl?: typeof fetch; timeoutMs?: number }); listByProdOids(accessToken: string, prodOids: string[]): Promise<unknown[]>; create(accessToken: string, body: Record<string, unknown>): Promise<unknown> }`
-  - `makeAnnouncementClient(): AnnouncementClient`（從 `process.env.GATEWAY_URL` 推 `${GATEWAY_URL}/svc-b2c/api/v1`、`process.env.SIT_ANNOUNCE_API_KEY` 取 key；缺 key 時 throw `GatewayError('ANNOUNCE_KEY_MISSING', ...)`）。
+  - `makeAnnouncementClient(): AnnouncementClient`（從 `process.env.GATEWAY_URL` 推 `${GATEWAY_URL}/svc-b2c/api/v1`、`process.env.API_ANNOUNCE_KEY` 取 key；缺 key 時 throw `GatewayError('ANNOUNCE_KEY_MISSING', ...)`）。
 
 - [ ] **Step 1: Write the failing test**
 
@@ -384,9 +384,9 @@ export class AnnouncementClient {
 // live 寫入卡 S2S 403 前，key 可能未設 → 缺 key 時明確報錯（build/單元測試不經此路徑）。
 export function makeAnnouncementClient(): AnnouncementClient {
   const gw = process.env.GATEWAY_URL
-  const apiKey = process.env.SIT_ANNOUNCE_API_KEY
+  const apiKey = process.env.API_ANNOUNCE_KEY
   if (!gw) throw new GatewayError('GATEWAY_URL_MISSING', 'GATEWAY_URL not set', 500)
-  if (!apiKey) throw new GatewayError('ANNOUNCE_KEY_MISSING', 'SIT_ANNOUNCE_API_KEY not set (announcement live-write blocked)', 500)
+  if (!apiKey) throw new GatewayError('ANNOUNCE_KEY_MISSING', 'API_ANNOUNCE_KEY not set (announcement live-write blocked)', 500)
   return new AnnouncementClient({ baseUrl: `${gw.replace(/\/$/, '')}/svc-b2c/api/v1`, apiKey })
 }
 ```

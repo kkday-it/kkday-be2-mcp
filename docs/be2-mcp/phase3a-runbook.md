@@ -67,7 +67,7 @@ GET /product/api/v1/items/1713281/inventories/2?year_month=2026-08       -> 403
 
 **解卡路徑(兩條,任一即可,與 Phase 2a/2b 的解卡路徑同形)**:
 1. 在 be2-220 把 `.env` 帳號對映為某個測試 item 的 supplier(找有 supplier 指派權限的人)。
-2. 補齊 `.env` 的 `STAGE_pwd` + `STAGE_AUTHSVC_SERVICE_KEY`(Phase 2a 起就是空的),改對 stage 跑同一支 probe——Phase 2a 的 stage shelf-toggle 已證實該帳號在 stage 的授權與 SIT 不同,庫存域可能同樣如此。
+2. 補齊 `.env` 的 `STAGE_pwd` + `API_AUTH_SERVICE_KEY`(Phase 2a 起就是空的),改對 stage 跑同一支 probe——Phase 2a 的 stage shelf-toggle 已證實該帳號在 stage 的授權與 SIT 不同,庫存域可能同樣如此。
 
 **下游影響**:Task 2–9(types/parser/diff/executor/確認頁/eval)全部依計畫用**容錯解析**完成(見上方「Known Phase 3a 限制」),不是等 Q1–Q6 解答後才動工——這與 Phase 2a Task 10 對 shelf-toggle 寫入的 PENDING 處理方式一致:mechanism 已經照設計完成、測試綠燈,只是「對真實 be2-220 資料跑出一次真 200」這個最後一步卡在帳號授權範圍,不是程式或路徑問題。
 

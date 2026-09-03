@@ -1194,7 +1194,7 @@ git commit -m "feat(apps): approvalNonce 發放/驗證/消耗 + view 於 pending
   - `params: { rec: ChangeSetRecord; who: { accessToken: string; userLabel: string; sessionId: string }; expectedDiffVersion: string; confirmedKeys?: string[]; channel: 'panel' | 'confirm_page'; audit?: { ip?: string; clientInfo?: string } }`
   - `ApproveResult = { stale?: true; casFailed?: true; status?: 'done' | 'partial' | 'failed'; results?: ItemResult[] }`（三個失敗旗標互斥於成功；成功時填 status+results）。
   - 驗證鏈（順序固定）：**confirmed_keys 校驗**（若提供，須與 change-set items 的 key 集合完全一致，否則回 `{ casFailed: false }`... 不，回專用 → 見下 Step 說明，用 throw `AppError('CONFIRMED_KEYS_MISMATCH')`）→ liveDiff → `diff_version` 比對（不符回 `{ stale: true }`）→ `casStatus(pending_approval→approved)`（失敗回 `{ casFailed: true }`）→ `executeChangeSet` → audit（channel + 選填 ip/clientInfo）。
-  - **modifyUser 一律在 approveAndExecute 內部 lazy 解析**（`modifyUserFromPlaceholder(who.accessToken)`）——絕不在 AppToolContext 建立時 eager 呼叫（該函式在未設 `BE2_MCP_ALLOW_PLACEHOLDER_MODIFY_USER=1` 時會 throw，eager 呼叫會讓連 `app_get_changeset_view` 這種唯讀工具都爆）。
+  - **modifyUser 一律在 approveAndExecute 內部 lazy 解析**（`modifyUserFromPlaceholder(who.accessToken)`）——絕不在 AppToolContext 建立時 eager 呼叫（該函式在未設 `APP_ALLOW_PLACEHOLDER_MODIFY_USER=1` 時會 throw，eager 呼叫會讓連 `app_get_changeset_view` 這種唯讀工具都爆）。
 - `appConfirmChangesetTool: AppToolDef` — input `{ changeset_id, decision: 'approve'|'reject', nonce, diff_version, confirmed_keys: string[] }`。
 
 - [ ] **Step 1: 抽共用 confirmService（重構既有 confirmRoutes approve，行為不變）**

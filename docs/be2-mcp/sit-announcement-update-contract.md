@@ -17,7 +17,7 @@
 | Envelope | `metadata.status '0000'` | 繼承 |
 
 ## 3. 必要 header 與來源
-繼承 create 契約 §3，完全相同：`Authorization` / `x-api-key`（`.env SIT_ANNOUNCE_API_KEY`）/ `user-uuid`（= JWT `platformId` claim）。
+繼承 create 契約 §3，完全相同：`Authorization` / `x-api-key`（`.env API_ANNOUNCE_KEY`）/ `user-uuid`（= JWT `platformId` claim）。
 
 ## 4. businessList 授權碼
 `product.announcement.update`（繼承 create §4；寫入共用此碼）。

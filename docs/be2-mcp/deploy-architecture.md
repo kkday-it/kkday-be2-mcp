@@ -83,11 +83,11 @@ be2-mcp 是一支 **內網 Node.js 服務**，講 MCP（Model Context Protocol�
 |---|---|---|
 | Runtime | Node.js（LTS，建議 20+） | `tsx`/編譯後 JS 皆可；deps 有 `better-sqlite3`（native），需能編 native module 的 base image |
 | 框架 | Express + `@modelcontextprotocol/sdk` | Streamable HTTP，非 stdio |
-| 監聽 | **目前 `127.0.0.1:8787`（loopback-only，見 `src/index.ts`）** | ⚠️ 部署要改成綁可達介面（`0.0.0.0`）並置於 ingress/反代之後；port 由 `BE2_MCP_PORT` 控 |
+| 監聽 | **目前 `127.0.0.1:8787`（loopback-only，見 `src/index.ts`）** | ⚠️ 部署要改成綁可達介面（`0.0.0.0`）並置於 ingress/反代之後；port 由 `APP_PORT` 控 |
 | health check | `GET /healthz` → `200 ok`（免認證，見 `hostGuard`） | 給 LB/k8s liveness/readiness |
 | 對外協定 | HTTPS（內網 TLS 由 ingress/反代終結） | app 本身跑 HTTP，TLS 交給前面那層 |
 | CPU/RAM | 小（PoC 級）；正式估 0.5 vCPU / 512MB 起 | 無重運算，瓶頸在下游 API 延遲 |
-| 磁碟 | SQLite 檔需 persistent volume（PoC）；改 Postgres 後不需要 | `BE2_MCP_DB_PATH` |
+| 磁碟 | SQLite 檔需 persistent volume（PoC）；改 Postgres 後不需要 | `APP_DB_PATH` |
 
 ---
 
@@ -108,7 +108,7 @@ be2-mcp 需要能連到（依環境換 host）：
 
 - **來源**：員工筆電的 Claude Code / Claude Desktop + 瀏覽器（確認頁），全在公司網／VPN。
 - **不需公網**。內網 DNS + 內網 TLS ingress 即可。
-- **host allowlist**：app 內建 `hostGuard`，靠 `BE2_MCP_ALLOWED_HOSTS` 擋非白名單 Host header（`/healthz` 豁免）。部署時把對外域名列進去。
+- **host allowlist**：app 內建 `hostGuard`，靠 `APP_ALLOWED_HOSTS` 擋非白名單 Host header（`/healthz` 豁免）。部署時把對外域名列進去。
 - **OAuth redirect_uri allowlist**（DCR 用）：`https://claude.ai/api/mcp/auth_callback` + RFC 8252 loopback（`http://localhost:<port>/callback`、`127.0.0.1`）。
 - **be2-auth POPUP origin allowlist**：`BE2_DOMAIN`——auth-service 端會檢查開 POPUP 的 opener origin 是否在 `login.be2.domain` 白名單。**stage/prod 上線前需請 auth-service team 把 be2-mcp 部署 origin 納入**（SIT/local 因 `ALLOW_LOCAL_LOGIN=true` 跳過此檢查，故 SIT 零外部依賴）。
 
@@ -120,7 +120,7 @@ be2-mcp 需要能連到（依環境換 host）：
 
 | 狀態 | PoC 實作 | 正式部署需求 |
 |---|---|---|
-| OAuth（authz code / refresh / DCR client）、be2 身分+token store、change-sets、web sessions、audit log、session_read_oids | SQLite（`better-sqlite3`，單檔 `BE2_MCP_DB_PATH`） | **Postgres**（多實例共享、備份、稽核保存） |
+| OAuth（authz code / refresh / DCR client）、be2 身分+token store、change-sets、web sessions、audit log、session_read_oids | SQLite（`better-sqlite3`，單檔 `APP_DB_PATH`） | **Postgres**（多實例共享、備份、稽核保存） |
 | 並發防護：CAS（防重複執行）、L2 refresh single-flight、per-user rate budget、inventory per-key mutex | **in-process（單機記憶體）** | **Redis / 分散式鎖**——多實例下 in-process 鎖失效，會有 lost-update / 並發 refresh 撞 rotation |
 
 → **結論給 DevOps**：若 stage 只跑**單一實例**，可暫用 SQLite（掛 persistent volume）先動起來；一旦要 >1 實例或上 prod，需 provision **Postgres + Redis**。
@@ -131,39 +131,39 @@ be2-mcp 需要能連到（依環境換 host）：
 
 app 的權威設定在 `src/config.ts`（zod 驗證，缺就啟動失敗且**只印變數名、不印值**）。
 
-### 環境選擇 = `BE2_ENV`（一個實例綁一個環境）
+### 環境選擇 = `APP_ENV`（一個實例綁一個環境）
 
-**推薦：設 `BE2_ENV=sit|stage|prod`**，config 自動選好該環境的 host + service key + DB path：
+**推薦：設 `APP_ENV=sit|stage|prod`**，config 自動選好該環境的 host + service key + DB path：
 
-| `BE2_ENV` | authsvc host | gateway host | 讀哪把 key | 預設 DB |
+| `APP_ENV` | authsvc host | gateway host | 讀哪把 key | 預設 DB |
 |---|---|---|---|---|
-| `sit` | `auth-220.sit.kkday.com` | `api-gateway-220.sit.kkday.com` | `SIT_AUTHSVC_SERVICE_KEY` | `./data/be2-mcp-sit.sqlite` |
-| `stage` | `auth.stage.kkday.com` | `api-gateway.stage.kkday.com` | `STAGE_AUTHSVC_SERVICE_KEY` | `./data/be2-mcp-stage.sqlite` |
-| `prod` | `auth.kkday.com` ⚠️待確認 | `api-gateway.kkday.com` | `PRODUCTION_AUTHSVC_SERVICE_KEY` | `./data/be2-mcp-prod.sqlite` |
+| `sit` | `auth-220.sit.kkday.com` | `api-gateway-220.sit.kkday.com` | `API_AUTH_SERVICE_KEY` | `./data/be2-mcp-sit.sqlite` |
+| `stage` | `auth.stage.kkday.com` | `api-gateway.stage.kkday.com` | `API_AUTH_SERVICE_KEY` | `./data/be2-mcp-stage.sqlite` |
+| `prod` | `auth.kkday.com` ⚠️待確認 | `api-gateway.kkday.com` | `API_AUTH_SERVICE_KEY` | `./data/be2-mcp-prod.sqlite` |
 
-- **一個 server 實例 = 一個環境**；切環境 = 改 `BE2_ENV` + 重啟。要同時服務多環境 → 跑多個實例（不同 port + 不同 DB）。
+- **一個 server 實例 = 一個環境**；切環境 = 改 `APP_ENV` + 重啟。要同時服務多環境 → 跑多個實例（不同 port + 不同 DB）。
 - **store 隔離**：per-env DB path 自動不同 → SIT/stage/prod 的 token store 不互相汙染（重要正確性保證）。
-- **不設 `BE2_ENV`（legacy）**：需自行提供 `AUTHSVC_URL` + `GATEWAY_URL` + `SIT_AUTHSVC_SERVICE_KEY`（向後相容）。
-- **override**：即使設了 `BE2_ENV`，明確的 `AUTHSVC_URL`/`GATEWAY_URL`/`BE2_MCP_DB_PATH` 仍優先。
+- **不設 `APP_ENV`（legacy）**：需自行提供 `AUTHSVC_URL` + `GATEWAY_URL` + `API_AUTH_SERVICE_KEY`（向後相容）。
+- **override**：即使設了 `APP_ENV`，明確的 `AUTHSVC_URL`/`GATEWAY_URL`/`APP_DB_PATH` 仍優先。
 
 **必填（擇一模式）**：
 
 | 變數 | 說明 | 機密? |
 |---|---|---|
-| `BE2_ENV` | `sit`/`stage`/`prod`（**推薦**；自動帶 host+key+DB） | 否 |
+| `APP_ENV` | `sit`/`stage`/`prod`（**推薦**；自動帶 host+key+DB） | 否 |
 | `{SIT\|STAGE\|PRODUCTION}_AUTHSVC_SERVICE_KEY` | 對應環境的 auth-service S2S service key（**每環境一把**） | **是** |
-| `AUTHSVC_URL` / `GATEWAY_URL` | 僅 legacy（未設 BE2_ENV）時必填；或用來 override preset | 否 |
+| `AUTHSVC_URL` / `GATEWAY_URL` | 僅 legacy（未設 APP_ENV）時必填；或用來 override preset | 否 |
 
 **選填 / 有預設**：
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
-| `BE2_MCP_PORT` | `8787` | 監聽 port |
-| `BE2_MCP_DB_PATH` | `./data/be2-mcp.sqlite`（設 `BE2_ENV` 時自動變 `-{env}.sqlite`） | SQLite 路徑（改 Postgres 後由連線字串取代）；明確設此值會 override per-env 預設 |
+| `APP_PORT` | `8787` | 監聽 port |
+| `APP_DB_PATH` | `./data/be2-mcp.sqlite`（設 `APP_ENV` 時自動變 `-{env}.sqlite`） | SQLite 路徑（改 Postgres 後由連線字串取代）；明確設此值會 override per-env 預設 |
 | `OTEL_MODE` | `off` | `off`/`console`/`otlp`；設 `otlp` 才輸出 trace 到 collector |
-| `BE2_MCP_ALLOWED_HOSTS` | — | Host header 白名單（部署域名） |
-| `BE2_MCP_DEV_PANEL` | — | dev 面板開關（prod 應關） |
-| `SIT_ANNOUNCE_API_KEY` | — | 商品公告 domain 的 `x-api-key`（若啟用 announcement module） |
+| `APP_ALLOWED_HOSTS` | — | Host header 白名單（部署域名） |
+| `APP_DEV_PANEL` | — | dev 面板開關（prod 應關） |
+| `API_ANNOUNCE_KEY` | — | 商品公告 domain 的 `x-api-key`（若啟用 announcement module） |
 
 **機密管理**：service key / api key 一律走 secret manager（k8s Secret / Vault），**不進 image、不進 git、log 不得出現明文**（app 已保證錯誤訊息不回顯值）。
 
@@ -201,7 +201,7 @@ app 的權威設定在 `src/config.ts`（zod 驗證，缺就啟動失敗且**只
 
 | 面向 | SIT（現況） | Stage（本次申請） | Prod（後續） |
 |---|---|---|---|
-| service key | 已有（`.env` `SIT_AUTHSVC_SERVICE_KEY`） | **需 stage 一把**（目前 `.env` `STAGE_AUTHSVC_SERVICE_KEY` 為空 → 卡 S2S） | 需 prod 一把 |
+| service key | 已有（`.env` `API_AUTH_SERVICE_KEY`） | **需 stage 一把**（目前 `.env` `API_AUTH_SERVICE_KEY` 為空 → 卡 S2S） | 需 prod 一把 |
 | POPUP origin | `ALLOW_LOCAL_LOGIN=true` 跳過檢查 | 確認 stage 是否 dev env；若否需納 `BE2_DOMAIN` | **必須**納 `BE2_DOMAIN` 白名單 |
 | 狀態 store | 單機 SQLite | 單實例可續用 SQLite；多實例則 Postgres+Redis | Postgres + Redis |
 | ingress | 本機 loopback | 內網 TLS ingress | 內網 TLS ingress |

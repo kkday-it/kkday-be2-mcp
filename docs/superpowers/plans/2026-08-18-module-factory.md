@@ -242,8 +242,8 @@ git commit -m "feat(factory): run-agy-batch.sh 機械編排（keys先跑/有界�
   3. **manifest 組法** + `run-agy-batch.sh` 呼叫 + EMPTY 格 fallback 流程（重派→Claude 接手）。
   4. **對抗驗證**：conformance-verifier subagent 的檢查清單（= 模組化歷次 review 抓的：hash 恆定、itemKey server/ui 同源、diff fall-through、per-type 判別一致），跑 `npm run ci` + 逐格挑「會不會騙過測試」。
   5. **授權 gate 的 executor 處理**：若 GATE 1 是授權 gate，executor 格產出骨架 + 標 `PENDING`（不對 SIT 跑真 200，同 3a）。
-- [ ] **Step 2: 寫 stage3-verify.md**——驗收步驟（Claude 執行）：`npm run ci` 全綠 → `node scripts/build-ui.mjs` → registry exhaustive（moduleConformance 自動涵蓋）→ dev panel e2e（`BE2_MCP_DEV_PANEL=1` + playwright 驅動非寫入面，同本 session 彩排法）→ error-handling agent 補 403/500/stale/併發 executor 測試 → 開 draft PR（含契約報告、六格產物、e2e 紀錄）→ GATE 3。
-- [ ] **Step 3: 結構檢查**：兩檔存在；`grep -q '連兩次零產出' stage2-produce.md`、`grep -q 'BE2_MCP_DEV_PANEL' stage3-verify.md`。
+- [ ] **Step 2: 寫 stage3-verify.md**——驗收步驟（Claude 執行）：`npm run ci` 全綠 → `node scripts/build-ui.mjs` → registry exhaustive（moduleConformance 自動涵蓋）→ dev panel e2e（`APP_DEV_PANEL=1` + playwright 驅動非寫入面，同本 session 彩排法）→ error-handling agent 補 403/500/stale/併發 executor 測試 → 開 draft PR（含契約報告、六格產物、e2e 紀錄）→ GATE 3。
+- [ ] **Step 3: 結構檢查**：兩檔存在；`grep -q '連兩次零產出' stage2-produce.md`、`grep -q 'APP_DEV_PANEL' stage3-verify.md`。
 - [ ] **Step 4: Commit** `docs(factory): stage2 六格模板（禁令+參考格+對抗驗證）+ stage3 驗收模板`
 
 ---
@@ -277,7 +277,7 @@ git commit -m "feat(factory): run-agy-batch.sh 機械編排（keys先跑/有界�
 - [ ] **Step 9: Commit** `feat(factory): 段② bundle module 六格產出（factory 首發真實產物）`
 
 **段③（驗收）：**
-- [ ] **Step 10:** `npm run ci` 全綠（新增 shelf_toggle_bundle 測試 + conformance）→ `node scripts/build-ui.mjs` → dev panel e2e：`BE2_MCP_DEV_PANEL=1` 起 server + playwright 對 34133 驗 bundle 讀取面（同本 session 彩排法；bundle 寫入若要 live 則同 shelfToggle 的 403 前例、可標 PENDING）。error-handling：補 bundle executor 的 403/500 測試。
+- [ ] **Step 10:** `npm run ci` 全綠（新增 shelf_toggle_bundle 測試 + conformance）→ `node scripts/build-ui.mjs` → dev panel e2e：`APP_DEV_PANEL=1` 起 server + playwright 對 34133 驗 bundle 讀取面（同本 session 彩排法；bundle 寫入若要 live 則同 shelfToggle 的 403 前例、可標 PENDING）。error-handling：補 bundle executor 的 403/500 測試。
 - [ ] **Step 11:** 更新 `module-catalog.md` 加 `shelf_toggle_bundle` 條目（key 形狀、authz、executor 形狀、factory 首發標記）。
 - [ ] **Step 12: GATE 3（AskUserQuestion）**：Claude 報告三段完成 + e2e 結果，人決定 merge。
 - [ ] **Step 13: Commit** `feat(factory): 段③ bundle 驗收（ci/e2e 綠）+ catalog 登記；factory 端到端驗證完成`

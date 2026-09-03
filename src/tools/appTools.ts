@@ -164,7 +164,7 @@ export const appGetBatchViewTool: AppToolDef = {
     const { products, errors, read_oids } = await buildBatchView(
       ctx.gateway, ctx.accessToken, args.action_type as BatchViewActionType, resolved,
     )
-    // schedule_tz（spec §9：面板須標示實際 BE2_TZ 而非通用「伺服器時區」）——由 ctx 帶出給面板 step-1
+    // schedule_tz（spec §9：面板須標示實際 APP_TZ 而非通用「伺服器時區」）——由 ctx 帶出給面板 step-1
     // 顯示。排程輸入的 wall-clock 即以此 tz 於 server 端換算 UTC。
     return makeEnvelope([{ products, schedule_tz: ctx.scheduleTz }], [...resolveErrors, ...errors], read_oids, resolutions)
   },
@@ -226,7 +226,7 @@ export const appGetAnnouncementViewTool: AppToolDef = {
     const errors: EnvelopeError[] = [...resolveErrors]
     const products: Array<{ prod_oid: string; name?: string; existing_count: number | null }> = []
     // existing_count 是 best-effort context（live 讀取卡 svc-b2c S2S 403、且 dev/test 可能無
-    // SIT_ANNOUNCE_API_KEY）。client 建不起來或 list 失敗一律靜默降級（existing_count = null 未知），
+    // API_ANNOUNCE_KEY）。client 建不起來或 list 失敗一律靜默降級（existing_count = null 未知），
     // 不 push error——scope-gate 只需 read_oids + 商品名；既有公告數讀不到不該讓整個 view 報錯。
     let client: ReturnType<typeof makeAnnouncementClient> | undefined
     try { client = makeAnnouncementClient() } catch { /* announcement client unavailable → existing_count 留 null */ }

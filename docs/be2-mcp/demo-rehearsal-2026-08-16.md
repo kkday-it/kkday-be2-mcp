@@ -26,7 +26,7 @@
 
 ## 發現 2：備案通道需要 flag
 
-`demo-guide.md` 備案表的 dev panel harness 需要 server 以 `BE2_MCP_DEV_PANEL=1 npm run dev` 啟動——沒帶 flag 路由是 404。**建議 demo 當天就帶著 flag 起 server**（local-only、勿用於 prod），臨場切備案零等待。（guide 已更新。）
+`demo-guide.md` 備案表的 dev panel harness 需要 server 以 `APP_DEV_PANEL=1 npm run dev` 啟動——沒帶 flag 路由是 404。**建議 demo 當天就帶著 flag 起 server**（local-only、勿用於 prod），臨場切備案零等待。（guide 已更新。）
 
 ## 附註
 

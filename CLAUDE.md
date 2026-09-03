@@ -21,9 +21,9 @@
 ## 憑證：一律從 `.env` 讀，**永不 commit、永不印出**
 
 `.env`（專案根、已 gitignore）現有：
-- `SIT_AUTHSVC_SERVICE_KEY` — **B1 的 SIT service key（已取得）**，be2-mcp 打 auth-service S2S 用。
+- `API_AUTH_SERVICE_KEY` — **B1 的 SIT service key（已取得）**，be2-mcp 打 auth-service S2S 用。
 - `AUTH_email` / `AUTH_pwd` — SIT 測試帳號（跑登入 flow 用）。
-- `GATEWAY_URL` / `AUTHSVC_URL` / `BE2_ENV`、及 `STAGE_*` 對應 stage 環境。
+- `GATEWAY_URL` / `AUTHSVC_URL` / `APP_ENV`、及 `STAGE_*` 對應 stage 環境。
 
 規範：程式從 `.env` 載入；任何輸出、log、文件、commit 都不得出現 key/password 明文。
 
@@ -41,7 +41,7 @@
 
 ## 開發指令（Phase 1a，`npm run <script>`）
 
-- `dev` — 啟動 MCP server（Streamable HTTP，`/mcp` + `/healthz`），監聽 `127.0.0.1:$BE2_MCP_PORT`（預設 8787）。
+- `dev` — 啟動 MCP server（Streamable HTTP，`/mcp` + `/healthz`），監聽 `$APP_BIND_HOST:$APP_PORT`（本地預設 `127.0.0.1:8787`）。
 - `test` — 跑 vitest 單元/整合測試。
 - `ci` — `typecheck` + `test`，本地重現 CI gate。
 - `eval` — 跑 agent-eval 案例（需 `ANTHROPIC_API_KEY`；沒設會 SKIP，不算失敗）。
