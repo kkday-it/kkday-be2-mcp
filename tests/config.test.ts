@@ -86,4 +86,15 @@ describe('DB config', () => {
     const b = loadConfig({ ...base, DATABASE_URL: 'postgres://u:p@h/d', SCHEDULER_MODE: 'http', CRON_SECRET: 's' } as NodeJS.ProcessEnv)
     expect(b.schedulerMode).toBe('http'); expect(b.cronSecret).toBe('s')
   })
+
+  it('SCHEDULER_MODE=http 且未設 CRON_SECRET → loadConfig throw', () => {
+    expect(() => loadConfig({ ...base, DATABASE_URL: 'postgres://u:p@h/d', SCHEDULER_MODE: 'http' } as NodeJS.ProcessEnv))
+      .toThrowError(/CRON_SECRET/)
+  })
+
+  it('SCHEDULER_MODE=http 且設 CRON_SECRET → 正常載入', () => {
+    const cfg = loadConfig({ ...base, DATABASE_URL: 'postgres://u:p@h/d', SCHEDULER_MODE: 'http', CRON_SECRET: 'test-secret' } as NodeJS.ProcessEnv)
+    expect(cfg.schedulerMode).toBe('http')
+    expect(cfg.cronSecret).toBe('test-secret')
+  })
 })

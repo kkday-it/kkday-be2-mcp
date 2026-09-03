@@ -67,6 +67,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const e = parsed.data
 
+  // Fail fast: SCHEDULER_MODE=http requires CRON_SECRET for external cron authentication
+  if (e.SCHEDULER_MODE === 'http' && !e.CRON_SECRET) {
+    throw new Error('SCHEDULER_MODE=http requires CRON_SECRET (external cron must authenticate)')
+  }
+
   const db = resolveDbConnection(env)
 
   const publicBaseUrl = (e.APP_BASE_URL ?? `http://127.0.0.1:${e.APP_PORT}`).replace(/\/$/, '')
