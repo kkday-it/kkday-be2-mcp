@@ -66,7 +66,9 @@ export interface Db {
 - 不做「同步實作包 Promise」過渡——避免雙態期掩蓋交錯問題。
 - 漏 await 的防護：`tsc --noEmit`（Promise 型別不符）+ 既有 470 tests。repo 無 ESLint，
   不為本案引入；review 時專掃「呼叫 store 方法但未 await」pattern。
-- `src/server/shutdown.ts` 的 `db.close(): void` 假設一併 async 化（Codex D5 指出）。
+- `src/server/shutdown.ts` 的 `db.close(): void` 假設一併 async 化（Codex D5 指出）：
+  現行在 `finally` 內同步呼叫後隨即 `process.exit()`——改 async 後**必須 `await deps.db.close()`**
+  再 exit，否則 promise 被 fire-and-forget、pool 來不及 drain（TCP terminate 未送出）。
 
 ### 3.3 async 化的唯一語義差異（同步性原子帶）
 
@@ -108,7 +110,7 @@ better-sqlite3 同步呼叫期間不可能插入其他請求；async 後每個 a
 
 ## 6. CAS 語義等價（驗收硬項）
 
-7 個 CAS 原語全是「單條條件式 UPDATE + affected-rows===1 判贏」，PG 直翻（`rowCount === 1`）：
+6 個 CAS 原語全是「單條條件式 UPDATE + affected-rows===1 判贏」，PG 直翻（`rowCount === 1`）：
 
 | 原語 | 保護的不變式 |
 |---|---|
@@ -118,7 +120,10 @@ better-sqlite3 同步呼叫期間不可能插入其他請求；async 後每個 a
 | `releaseClaim` | stranded 回收不覆寫已推進狀態 |
 | `updateDiff` | 只在 pending_approval 期間回寫 live diff |
 | `claimKeepalive`（identityStore） | keep-alive 認領防重複 refresh |
-| `runOAuthPurge` 的 ghost 清理 | 不刪被 scheduled change-set 引用的 identity |
+
+（附註：`runOAuthPurge` 的 ghost 清理**不是 CAS**——它是條件式 bulk DELETE（`NOT IN` scheduled
+引用子查詢）、天然冪等，不適用「恰一個贏」測試。它的不變式「不刪被 scheduled change-set 引用的
+identity」以功能測試驗證，不入下方併發測試矩陣。）
 
 **測試策略（兩層，D2 定案）**：
 
@@ -126,7 +131,7 @@ better-sqlite3 同步呼叫期間不可能插入其他請求；async 後每個 a
    條件不符→rowCount 0、連呼兩次只有第一次贏」。PGlite 是真 Postgres，方言層完全保真。
 2. **真 PG 併發層**（`npm run test:pg`，需 `TEST_PG_URL`）：PGlite 是 single-connection
    （官方文件；multi-connection multiplexer 不保證所有情境），**不足以證明多連線併發正確性**。
-   故 7 個原語各寫一個「兩個真連線同時搶、恰一個贏」的測試，打真 PostgreSQL
+   故 6 個原語各寫一個「兩個真連線同時搶、恰一個贏」的測試，打真 PostgreSQL
    （本地 `docker compose -f docker/pg-test.yml up`；CI 掛 PG service container）。
    `TEST_PG_URL` 未設 → 文件化 SKIP（沿用 eval 先例，不算失敗）；**驗收要求 CI 必須實跑**
    （Woodpecker PG service 可用性在 plan 階段第一個 task 驗證，不可用則 CI 起 docker PG 為退路）。
@@ -212,6 +217,9 @@ cloud spec §2.5 已把需求寫死，自製 runner 逐條滿足：
 
 - 移除 `APP_DB_PATH`/`dbPath`；新增 `DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME`（或
   `DATABASE_URL` 短路）、`CRON_SECRET`、`SCHEDULER_MODE`。
+- **所有實例化 DB 的 CLI scripts 一併改接 `Db`**：`scripts/oauth-purge.ts`、
+  `scripts/bootstrap-user.ts`、`scripts/live-4a-acceptance.ts` 現皆 `openDb(cfg.dbPath)`，
+  改為從 env 建 `PgDb`（同 config 驗證、缺 env fail fast）。`probe-sit*` 不碰 DB、不受影響。
 - `.env.example` 更新並照 cloud spec 三分類逐個註明（build-time / runtime secret / runtime 非機密）：
   `DB_PASSWORD`、`CRON_SECRET`、`API_AUTH_SERVICE_KEY` 標 **APP SECRET**；其餘標非機密。
 - 鐵則不變：任何輸出/LOG/錯誤訊息不得出現 secret 值（config.ts 既有慣例沿用）。
@@ -234,7 +242,7 @@ cloud spec §2.5 已把需求寫死，自製 runner 逐條滿足：
 2. 約束 **#4/#5/#6/#7/#8 關閉**：無 better-sqlite3 依賴、無本機 DB 檔、PG+TLS、
    runtime 路徑零 DDL（grep `CREATE TABLE|ALTER TABLE|DROP TABLE` 只出現在 `db/migrations/` 與
    runner）、兩支 job endpoint 可 `curl -H "Authorization: Bearer $CRON_SECRET"` 觸發且重複安全。
-3. **CAS 等價**：§6 兩層測試全過；真 PG 併發層在 CI 實跑（7 原語 × 併發搶測試）。
+3. **CAS 等價**：§6 兩層測試全過；真 PG 併發層在 CI 實跑（6 原語 × 併發搶測試）。
 4. **migration 可重跑**：空 PG 跑 `db:migrate` 建出完整 schema；再跑一次不失敗（CI 驗證）。
 5. **per-env 隔離**：不同 `DB_NAME` 互不可見（測試以兩個 PGlite/兩個 database 驗語義）。
 6. **audit append-only 不退化**：PG trigger 擋 UPDATE/DELETE 的測試 + REVOKE 語句在 baseline 內。
@@ -257,3 +265,5 @@ cloud spec §2.5 已把需求寫死，自製 runner 逐條滿足：
   cron 需求補 scheduler-tick、env 表更新。
 - `docs/be2-mcp/stage-eks-migration-devops.md` §8 差距表：#4-#8 標關閉。
 - `docs/be2-mcp/pg-migration-handoff.md`：標記已由本 spec 接手。
+
+<!-- agy-peer-reviewed: 2026-09-03T09:25:16Z rounds=2 verdict=approved -->
