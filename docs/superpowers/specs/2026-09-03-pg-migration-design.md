@@ -64,8 +64,11 @@ export interface Db {
   `rateBudget`、`core/changeset/store`、`auditLog`、`webSessionStore`、`devPanelRoutes` 內 upsert、
   `app.ts` 組裝）方法全改 `async`；call site 一次 await 化。
 - 不做「同步實作包 Promise」過渡——避免雙態期掩蓋交錯問題。
-- 漏 await 的防護：`tsc --noEmit`（Promise 型別不符）+ 既有 470 tests。repo 無 ESLint，
-  不為本案引入；review 時專掃「呼叫 store 方法但未 await」pattern。
+- 漏 await 的防護：`tsc --noEmit` + 既有 470 tests，**再加型別感知 lint 閘門**——tsc 對
+  「語句位置未 await 的 Promise\<void\>」與「`if (!promiseBool)` 條件位置的 Promise」都不報錯，
+  後者會讓 CAS 判贏恆為 false 而重複執行（plan review 抓到，2026-09-03 修訂：引入最小 ESLint
+  flat config，僅 `@typescript-eslint/no-floating-promises` + `no-misused-promises` 兩條規則、
+  範圍 src/+scripts/，掛進 `npm run ci`）。
 - `src/server/shutdown.ts` 的 `db.close(): void` 假設一併 async 化（Codex D5 指出）：
   現行在 `finally` 內同步呼叫後隨即 `process.exit()`——改 async 後**必須 `await deps.db.close()`**
   再 exit，否則 promise 被 fire-and-forget、pool 來不及 drain（TCP terminate 未送出）。

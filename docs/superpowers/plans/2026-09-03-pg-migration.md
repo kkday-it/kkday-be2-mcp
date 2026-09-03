@@ -418,14 +418,17 @@ export async function runMigrations(db: MigrationTarget, dir = 'db/migrations'):
         await db.query('INSERT INTO schema_migrations (filename, applied_at) VALUES ($1, $2)', [f, Date.now()])
         await db.exec('COMMIT')
       } catch (e) {
-        await db.exec('ROLLBACK')
+        // ROLLBACK 自身可能 throw（連線已死）——吞掉，確保拋出的是原始 migration 錯誤
+        try { await db.exec('ROLLBACK') } catch { /* ignore secondary error */ }
         throw new Error(`migration ${f} failed: ${(e as Error).message}`)
       }
       applied.push(f)
     }
     return applied
   } finally {
-    await db.query('SELECT pg_advisory_unlock($1)', [LOCK_KEY])
+    // finally 內 throw 會覆蓋主錯誤——unlock 失敗只 log 不拋（連線死掉時鎖也隨 session 消失）
+    try { await db.query('SELECT pg_advisory_unlock($1)', [LOCK_KEY]) }
+    catch (e) { console.error('pg_advisory_unlock failed:', (e as Error).message) }
   }
 }
 ```
@@ -569,20 +572,22 @@ Expected: FAIL（模組不存在）。
 import { PGlite, type Transaction } from '@electric-sql/pglite'
 import type { Db } from './dbTypes.js'
 
-// int8 正規化：PGlite 對 BIGINT 的原生回傳型別以 Task 1 spike 觀察為準；
-// 統一在這裡把 bigint/string 轉 number（值域 = ms timestamp/count，<< 2^53，spec §5）。
-function normalizeRow(row: Record<string, unknown>): Record<string, unknown> {
-  for (const k of Object.keys(row)) {
-    if (typeof row[k] === 'bigint') row[k] = Number(row[k])
-  }
-  return row
-}
-
+// int8 正規化：**不用 typeof 猜**（PGlite 依版本可能回 bigint 或 string）——用 query 結果的
+// fields metadata（dataTypeID===20 即 int8）確定哪些欄位要轉 Number（值域 = ms timestamp/count，
+// << 2^53，spec §5）。session_id 等真字串欄位不會被誤轉。
 function wrap(q: PGlite | Transaction): Pick<Db, 'query'> {
   return {
     async query<R>(sql: string, params?: unknown[]) {
       const r = await q.query<Record<string, unknown>>(sql, params as never[])
-      return { rows: r.rows.map(normalizeRow) as R[], rowCount: r.affectedRows ?? r.rows.length }
+      const int8Cols = (r.fields ?? []).filter(f => f.dataTypeID === 20).map(f => f.name)
+      if (int8Cols.length > 0) {
+        for (const row of r.rows) {
+          for (const c of int8Cols) {
+            if (row[c] != null) row[c] = Number(row[c])   // 吃 bigint 或 string 都正確
+          }
+        }
+      }
+      return { rows: r.rows as R[], rowCount: r.affectedRows ?? r.rows.length }
     },
   }
 }
@@ -755,6 +760,9 @@ export function createPgDb(conn: DbConnection): Db {
     idleTimeoutMillis: 30_000,
     statement_timeout: 15_000,
   })
+  // 必掛：idle 連線斷線（RDS failover/重啟）時 pool 發 'error' event——沒 listener 的
+  // EventEmitter error 會讓整個 Node process crash。log 後放給 pool 自行汰換即可。
+  pool.on('error', (err) => { console.error('[be2-mcp] pg pool idle client error:', err.message) })
   const wrap = (q: Pick<pg.PoolClient, 'query'>): Pick<Db, 'query'> => ({
     async query<R>(sql: string, params?: unknown[]) {
       const r = await q.query(sql, params)
@@ -775,7 +783,8 @@ export function createPgDb(conn: DbConnection): Db {
         await client.query('COMMIT')
         return result
       } catch (e) {
-        await client.query('ROLLBACK')
+        // ROLLBACK 自身也可能 throw（連線層錯誤）——吞掉它，確保拋出的是原始錯誤
+        try { await client.query('ROLLBACK') } catch { /* connection-level failure; pool 會汰換 */ }
         throw e
       } finally {
         client.release()
@@ -976,6 +985,35 @@ const app = buildApp({ config, db })
 
 規則：只加 `await` 與 async 傳染、不改邏輯。凡「if (store.x(...))」「return store.x(...)」「const v = store.x(...)」都要 await。**Promise.all 只用於原本就平行的呼叫，序列語義（如 executor 逐件）保持序列。**
 
+- [ ] **Step 4b: 漏 await 靜態閘門（關鍵——tsc 抓不到 floating/misused promise）**
+
+**tsc 對「語句位置的未 await Promise\<void\>」與「`if (!promiseBool)` 條件位置的 Promise」都不報錯**——
+而後者正是 CAS 正確性的死穴（`if (!won)` 恆為 false → 排程重複執行）。必須加型別感知 lint 閘門：
+
+```bash
+npm install -D eslint typescript-eslint
+```
+
+```js
+// eslint.config.mjs — 本次遷移專用最小閘門：只開兩條攸關 async 正確性的規則，零風格規則
+import tseslint from 'typescript-eslint'
+export default tseslint.config({
+  files: ['src/**/*.ts', 'scripts/**/*.ts'],
+  languageOptions: { parserOptions: { projectService: true } },
+  plugins: { '@typescript-eslint': tseslint.plugin },
+  rules: {
+    '@typescript-eslint/no-floating-promises': 'error',
+    '@typescript-eslint/no-misused-promises': 'error',
+  },
+})
+```
+
+`package.json` scripts 加 `"lint:async": "eslint src scripts"`，並把 `ci` 改為
+`"ci": "npm run build && npm run typecheck && npm run lint:async && npm run test"`。
+
+Run: `npm run lint:async` → 修到零報錯（每一筆都是真漏 await 或 async handler 誤用）。
+Expected: 0 errors。
+
 - [ ] **Step 5: 全測試現況盤點（預期大量 FAIL——測試檔還在餵 sqlite）**
 
 Run: `npx vitest run tests/pgliteSpike.test.ts tests/migrate.test.ts tests/dbInterface.test.ts tests/config.test.ts`（本 task 只保證這些綠 + tsc clean）
@@ -1028,7 +1066,8 @@ grep -rn "CREATE TABLE\|ALTER TABLE\|DROP TABLE" src/ | grep -v "migrate.ts"   #
 
 **Files:**
 - Modify: `scripts/oauth-purge.ts`（`runOAuthPurge` 改吃 `Db` + async；main 殼改 `createPgDb(resolveDbConnection(process.env))`）
-- Modify: `scripts/bootstrap-user.ts`、`scripts/live-4a-acceptance.ts`（同法：刪 Task 4 暫時硬編、改 PgDb + await）
+- Modify: `scripts/bootstrap-user.ts`（刪 Task 4 暫時硬編、改 `createPgDb(resolveDbConnection(process.env))` + await——它本來就寫真 store，行為不變）
+- Modify: `scripts/live-4a-acceptance.ts`（**注意**：此 script 現用 `openDb(':memory:')`——刻意隔離、不寫真 DB。改用 `createPgliteDb()` + `runMigrations`（src 內模組，不 import tests/）保留 in-memory 隔離語義，**不得**改接真 PG）
 - Test: `tests/oauthPurge.test.ts`（既有測試改 openTestDb；含 ghost 清理不變式 case：「被 scheduled change-set 引用的 identity 不被刪」——功能測試，非 CAS 併發，spec §6 附註）
 
 - [ ] **Step 1: 改 `runOAuthPurge(db: Db, nowMs: number): Promise<{...}>`——三條 DELETE 直翻 `$n`；回傳值 `changes` → `rowCount`**
@@ -1078,6 +1117,7 @@ export function buildJobRoutes(deps: {
   const authed = (header: string | undefined): boolean => {
     if (!deps.cronSecret || !header?.startsWith('Bearer ')) return false
     const got = Buffer.from(header.slice(7)); const want = Buffer.from(deps.cronSecret)
+    // 長度檢查本身非常數時間，但 CRON_SECRET 是高熵隨機值、長度不含資訊——可接受（審視紀錄）
     return got.length === want.length && timingSafeEqual(got, want)
   }
   r.post('/api/jobs/:name', async (req, res) => {
@@ -1154,10 +1194,19 @@ if (!URL) console.log('[test:pg] SKIP — TEST_PG_URL not set (docker compose -f
 d('CAS 併發（真 PG、兩個獨立 pool）', () => {
   let a: ReturnType<typeof createPgDb>, b: ReturnType<typeof createPgDb>
   beforeAll(async () => {
+    // migration 一定要用「單一專用連線」跑（同 scripts/db-migrate.ts）：pg.Pool#query 每句
+    // 換連線，pg_advisory_lock 會鎖在隨機 idle 連線上永久外洩、BEGIN/COMMIT 邊界四散。
+    const pg = await import('pg')
+    const admin = new pg.default.Client({ connectionString: URL!, ssl: false })
+    await admin.connect()
+    await admin.query('DROP SCHEMA public CASCADE'); await admin.query('CREATE SCHEMA public')
+    await runMigrations({
+      query: async (s, p) => ({ rows: (await admin.query(s, p as unknown[])).rows }),
+      exec: async (s) => { await admin.query(s) },
+    })
+    await admin.end()
     a = createPgDb({ connectionString: URL!, ssl: false })
     b = createPgDb({ connectionString: URL!, ssl: false })
-    await a.query('DROP SCHEMA public CASCADE'); await a.query('CREATE SCHEMA public')
-    await runMigrations({ query: async (s, p) => ({ rows: (await a.query(s, p)).rows }), exec: async (s) => { await a.query(s) } })
   })
   afterAll(async () => { await a.close(); await b.close() })
 
@@ -1251,3 +1300,5 @@ docker compose -f docker/pg-test.yml down
 - Task 5-8 是連續流水（中間 tsc 不全綠是預期狀態，見各 task 註記）；**不可在 Task 8 之前宣稱任何「完成」**。
 - Task 1 spike 任一 FAIL = 停下回報（testcontainers 退路決策屬使用者）。
 - 執行完成後走 `superpowers:verification-before-completion` → `code-review`（雙軸）→ `verify`。
+
+<!-- agy-peer-reviewed: 2026-09-03T09:54:38Z rounds=5 verdict=approved -->
