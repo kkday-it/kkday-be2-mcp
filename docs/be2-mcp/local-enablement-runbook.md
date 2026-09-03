@@ -11,12 +11,12 @@
 一律先打 SIT `be2-220`(免 stage 依賴,`.env` 已有 `API_AUTH_SERVICE_KEY`)。
 
 ```bash
-# 開發模式(tsx 直跑)
-APP_ENV=sit-220 npm run dev
+# 開發模式(tsx 直跑;host 由 .env 的 AUTHSVC_URL/GATEWAY_URL 給,已指 be2-220)
+APP_DB_PATH=./data/be2-mcp-sit-220.sqlite npm run dev
 # → listening on http://127.0.0.1:8787/mcp (bind 127.0.0.1:8787, env: api-gateway-220.sit)
 
 # 或:模擬 production 產物(容器就是這樣跑)
-npm run build && APP_ENV=sit-220 node dist/src/index.js
+npm run build && APP_DB_PATH=./data/be2-mcp-sit-220.sqlite node dist/src/index.js
 ```
 
 冒煙檢查(另開 terminal):
@@ -43,7 +43,7 @@ claude mcp add be2-mcp --transport http http://127.0.0.1:8787/mcp
 成因:Claude Code 把 DCR 註冊的 `client_id` **綁 server URL 快取**;若你以前在**別的目錄**(如舊 `mcp_poc/`)跑過 be2-mcp,那份快取的 client 只存在舊目錄的 db,現在的目錄是**另一個空 db**,authorize 查不到該 client → `invalid_request`。**非程式 bug。**
 **快解**:換一個 port 起 server,用新名字新 URL 加 → 逼它跑全新 DCR:
 ```bash
-APP_ENV=sit-220 APP_PORT=8788 npm run dev
+APP_DB_PATH=./data/be2-mcp-sit-220.sqlite APP_PORT=8788 npm run dev
 claude mcp add be2mcp-demo --transport http http://127.0.0.1:8788/mcp
 ```
 (`claude mcp remove` 不一定清掉綁 URL 的 OAuth 快取,換 port 比 remove/re-add 保險。)
@@ -95,7 +95,9 @@ claude mcp remove be2-mcp             # 移除 Claude Code 設定(demo 用完)
 
 | env | 用途 | 本機值 |
 |---|---|---|
-| `APP_ENV` | 環境 preset | `sit-220` |
+| `APP_ENV` | 環境標籤(只影響預設 db 路徑後綴 `sit\|stage\|prod`,不再選 host/key) | 不設;既有 sit-220 db 用 `APP_DB_PATH` 明指 |
+| `AUTHSVC_URL` / `GATEWAY_URL` | 環境 host(一環境一份,`.env` 直接給) | `auth-220.sit` / `api-gateway-220.sit` |
+| `APP_DB_PATH` | SQLite 路徑 | `./data/be2-mcp-sit-220.sqlite`(沿用既有本機 db) |
 | `APP_PORT` | listen port | 預設 8787;撞快取時換 8788 |
 | `APP_BIND_HOST` | 綁定位址 | 本機留空(=127.0.0.1);容器設 `0.0.0.0` |
 | `APP_BASE_URL` | 對外 base(含 scheme) | 本機留空(fallback loopback);部署設 `https://<域名>` |

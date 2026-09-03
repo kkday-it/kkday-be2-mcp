@@ -19,7 +19,7 @@ node scripts/build-ui.mjs  # 若 domain 有 ui.ts（批次型）→ bundle 成�
 ## 2. dev panel e2e（讀取面，同彩排法）
 
 ```bash
-BE2_MCP_DEV_PANEL=1 npm run dev > /tmp/factory-dev.log 2>&1 &
+APP_DEV_PANEL=1 npm run dev > /tmp/factory-dev.log 2>&1 &
 sleep 3 && curl -s http://127.0.0.1:8787/healthz
 ```
 - playwright 驅動：開 `http://127.0.0.1:8787/dev/panel/<panel>?action_type=<type>&prod_oids=<測試oid>` → 載入 → 檢視 diff。

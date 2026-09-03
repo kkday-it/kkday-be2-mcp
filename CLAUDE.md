@@ -23,7 +23,7 @@
 `.env`（專案根、已 gitignore）現有：
 - `API_AUTH_SERVICE_KEY` — **B1 的 SIT service key（已取得）**，be2-mcp 打 auth-service S2S 用。
 - `AUTH_email` / `AUTH_pwd` — SIT 測試帳號（跑登入 flow 用）。
-- `GATEWAY_URL` / `AUTHSVC_URL` / `APP_ENV`、及 `STAGE_*` 對應 stage 環境。
+- `GATEWAY_URL` / `AUTHSVC_URL` / `APP_ENV`（一環境一份；打 stage 就把兩個 URL 改指 stage 並換該環境的 `API_AUTH_SERVICE_KEY`）。
 
 規範：程式從 `.env` 載入；任何輸出、log、文件、commit 都不得出現 key/password 明文。
 

@@ -95,7 +95,7 @@
 
 ## 環境備忘(demo / 驗收用)
 - 真 prod_oid(非網址 mid):庫存/平台/公告 **38352**、上下架 **35992**。2358 無限量(庫存數量不支援)。
-- `.env APP_ENV=sit-220`。dev 面板:`/dev/panel/batch-wizard?action_type=<X>&prod_oids=<oid>`、`/dev/panel/announcement-wizard`。
+- `.env` 指 be2-220(`AUTHSVC_URL`/`GATEWAY_URL`;db 用 `APP_DB_PATH` 明指 sit-220 檔)。dev 面板:`/dev/panel/batch-wizard?action_type=<X>&prod_oids=<oid>`、`/dev/panel/announcement-wizard`。
 - Desktop 無 F5:換操作按面板「**開始新批次**」(全重置)或請 Claude 重開精靈。
 
 ## 相關文件

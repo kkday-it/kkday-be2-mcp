@@ -14,7 +14,7 @@ cp <外部輸入文件> docs/be2-mcp/factory-input-<domain>.md
 
 ## v2 探索變更（權威——與下方 v1 敘述衝突時以本段為準）
 
-1. **環境退避（D3）**：endpoint-prober 撞 4xx/5xx **先別判「授權天生擋死」**——多半是環境問題（roleOid/businessOid 綁定、gateway token 未 ready）。**自動改打 `be2.stage.kkday.com`（gateway `api-gateway.stage.kkday.com`，`BE2_ENV=stage`）重試**；stage 過 → 授權 gate 解除、契約以 stage 流量為準；stage 仍卡 → 才判真授權 gate（executor-only PENDING）。契約報告加「探索環境」欄註明攔自哪個環境（別把 stage 契約當 SIT/prod 保證）。實證：announcement_update SIT 一直 403、stage 直接 200/`0000`。
+1. **環境退避（D3）**：endpoint-prober 撞 4xx/5xx **先別判「授權天生擋死」**——多半是環境問題（roleOid/businessOid 綁定、gateway token 未 ready）。**自動改打 `be2.stage.kkday.com`（`AUTHSVC_URL=https://auth.stage.kkday.com`、`GATEWAY_URL=https://api-gateway.stage.kkday.com`）重試**；stage 過 → 授權 gate 解除、契約以 stage 流量為準；stage 仍卡 → 才判真授權 gate（executor-only PENDING）。契約報告加「探索環境」欄註明攔自哪個環境（別把 stage 契約當 SIT/prod 保證）。實證：announcement_update SIT 一直 403、stage 直接 200/`0000`。
 
 2. **姊妹契約繼承（D4）**：標的與某既有 action_type **同 domain**（如 announcement_update ↔ announcement）→ host/envelope/header/businessList 授權碼/row 欄位**直接繼承姊妹契約**（`sit-<sibling>-contract.md`，離線不重打 live）。**但 live sniff 範圍 = executor 真正需要的所有 endpoint，不是只 sniff 寫 verb**：read-merge-write 型標的（executor 先 GET 現況再覆蓋）**GET 詳情端點也必須 sniff 並錄成 cassette**，即使姊妹 create 契約沒有它。判定：先看範本格 executor 用哪些 read endpoint，逐一確保 discovery 都攔到。契約報告標明哪些節「繼承」、哪些節「本次補攔」。
 

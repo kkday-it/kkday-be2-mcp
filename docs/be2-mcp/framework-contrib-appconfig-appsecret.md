@@ -31,7 +31,7 @@
 | 鍵 | 用途 | 例 |
 |---|---|---|
 | `APP_NAME` | 服務名 | `api-b2c` |
-| `APP_ENV` | 環境選擇器 | `sit` / `stage` / `prod` |
+| `APP_ENV` | 環境標籤（一環境一份 config，host/key 各自明設） | `sit` / `stage` / `prod` |
 | `APP_PORT` | 監聽埠（綁 `0.0.0.0`） | `8000` |
 | `APP_URL` / `APP_BASE_URL` | 對外 base URL（OAuth callback / 絕對連結由它組） | `https://<app>.sit.kkday.com` |
 | `APP_DEBUG` | debug 開關 | `false` |
@@ -57,7 +57,7 @@
 ```dotenv
 # ============ APP CONFIG（非機密，明碼；貼進平台 APP CONFIG 頁籤）============
 APP_NAME=<service-name>          # runtime 非機密
-APP_ENV=sit                      # runtime 非機密｜環境選擇器 sit|stage|prod
+APP_ENV=sit                      # runtime 非機密｜環境標籤 sit|stage|prod（host/key 由各 *_URL / key 變數明設，一環境一份 config）
 APP_PORT=8000                    # runtime 非機密｜綁 0.0.0.0
 APP_URL=https://<app>.sit.kkday.com   # runtime 非機密｜對外 base URL（OAuth callback/絕對連結由它組）
 APP_DEBUG=false                  # runtime 非機密

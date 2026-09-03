@@ -67,11 +67,13 @@ be2 MCP 是一支 **Node.js / Express Streamable-HTTP** 服務，讓 KKday 員�
 
 ## 4. 設定與 secrets
 
-設定集中在 `src/config.ts`（Zod 驗證）。上 stage 只要設 `APP_ENV=stage`，auth/gateway host 會自動帶入 stage preset（`config.ts:16-20`）。
+設定集中在 `src/config.ts`（Zod 驗證）。**一環境一份 config、無 preset**（2026-09-03 拍平）：上 stage 需明設 `AUTHSVC_URL`/`GATEWAY_URL` 指 stage host；`APP_ENV=stage` 只當標籤（影響預設 DB path 後綴）。
 
 | Env | 用途 | Secret? | 上 stage 要設 |
 |---|---|:---:|:---:|
-| `APP_ENV=stage` | 環境 preset（帶入下面 URL + 選 stage key） | 否 | ✅ |
+| `AUTHSVC_URL=https://auth.stage.kkday.com` | auth-service host（直接明設） | 否 | ✅ |
+| `GATEWAY_URL=https://api-gateway.stage.kkday.com` | gateway host（直接明設） | 否 | ✅ |
+| `APP_ENV=stage` | 環境標籤（只影響預設 DB path 後綴，不選 host/key） | 否 | 建議 ✅ |
 | `API_AUTH_SERVICE_KEY` | stage 的 S2S service key | **是** | ✅（**目前 repo 尚無此 key，需向 auth-service team 申請**） |
 | `APP_ALLOWED_HOSTS` | Host header 白名單（逗號分隔） | 否 | ✅（不設 ingress Host 一律 403，見 §7） |
 | `APP_PORT` | listen port（預設 8787） | 否 | 選用 |
@@ -82,7 +84,6 @@ be2 MCP 是一支 **Node.js / Express Streamable-HTTP** 服務，讓 KKday 員�
 | `APP_TZ` | 排程時區（預設 `Asia/Taipei`） | 否 | 選用 |
 | `APP_DEV_PANEL` | `=1` 開 dev 面板 | 否 | ❌ **務必不要設** |
 
-- `AUTHSVC_URL` / `GATEWAY_URL` 可不設（stage preset 會帶）；若要覆蓋才設。
 - Secret 注入用 **k8s Secret**（規範：憑證永不 commit、永不印出；config 錯誤只印 key 名不印值，`config.ts:62-63`）。
 - `.env` 裡有些其他工具殘留的 key（`AUTOMATION_TOKEN` 等）**程式不讀**，遷移不需帶。
 
@@ -90,7 +91,7 @@ be2 MCP 是一支 **Node.js / Express Streamable-HTTP** 服務，讓 KKday 員�
 
 ## 5. 對外連線（egress allowlist）
 
-server 會主動打的外部服務（host 由 `APP_ENV=stage` preset 決定）：
+server 會主動打的外部服務（host 由 `AUTHSVC_URL`/`GATEWAY_URL` 明設）：
 
 | 目標 | 用途 | Port |
 |---|---|---|

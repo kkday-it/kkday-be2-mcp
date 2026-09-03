@@ -17,7 +17,7 @@ description: 把「新增一個 be2 MCP action_type / 接一個新 domain」從�
 
 1. **載體 = Workflow（D1，可續跑）**：段②/段③預設走 Claude `Workflow` 工具（見 `references/workflow-carrier.md`），中途死一格用 `resumeFromRunId` 只補未完的格，不從頭。agy 六格後端保留為省額度選項。
 2. **cassette 離線測試（D0/D2）**：段②六格測試預設 cassette-backed（`makeCassetteFetch('replay', …)`，`tests/support/cassette.ts`），零 live；error 分支走 `cassette.stubError(...)`。段③ `npm run ci` 在 replay 模式全綠、無憑證。
-3. **discovery 環境退避（D3）**：段① 撞 4xx/5xx **先自動改打 stage**（`BE2_ENV=stage`）再判，不立即判授權 gate（多半是環境問題）。詳見 `references/stage1-explore.md`。
+3. **discovery 環境退避（D3）**：段① 撞 4xx/5xx **先自動改打 stage**（`AUTHSVC_URL`/`GATEWAY_URL` 改指 stage host）再判，不立即判授權 gate（多半是環境問題）。詳見 `references/stage1-explore.md`。
 4. **姊妹契約繼承（D4）**：標的與既有 action_type 同 domain 時，host/envelope/header/授權碼/row 直接繼承姊妹契約（離線），只 sniff executor 真正需要的新增 endpoint（含 read-merge-write 的 GET 詳情，不是只 sniff 寫 verb）。
 5. **sniff 用 page.route（D5）**：攔 request body 用 server 端 `page.route` + `request.postData()`，不用 `browser_network_requests`（BE2 SPA 抓不到 body）。
 6. **可攜性（D6）**：本 skill repo-local。repo 外觸發＝主 Claude 於任意 cwd 用絕對路徑讀本 SKILL.md 手動照跑（不做全域安裝）。
@@ -51,7 +51,7 @@ description: 把「新增一個 be2 MCP action_type / 接一個新 domain」從�
 
 段③ 驗收（Claude 編排）
   照 references/stage3-verify.md：npm run ci 全綠 → node scripts/build-ui.mjs → registry exhaustive
-  → dev panel e2e（BE2_MCP_DEV_PANEL=1 + playwright，同彩排法）→ error-handling agent 補 403/500/stale/併發 測試
+  → dev panel e2e（APP_DEV_PANEL=1 + playwright，同彩排法）→ error-handling agent 補 403/500/stale/併發 測試
   → 開 draft PR（含契約報告、六格產物、e2e 紀錄）
   ┌─ GATE 3 ＝ v2 Gate②（live 寫入 + merge，AskUserQuestion）：live 寫入前攔人核准 + merge 決定（有授權 gate 則標 PENDING）
   └─ 完成 → 產物登記進 docs/be2-mcp/module-catalog.md

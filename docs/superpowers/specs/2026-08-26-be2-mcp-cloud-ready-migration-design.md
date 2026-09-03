@@ -68,7 +68,7 @@ nonce 批准、稽核 append-only）**行為不得改變**。遷移只換「狀�
 
 ### 3.4 綁定與啟動（約束 #1）
 
-- 監聽改綁 `0.0.0.0`、讀 `process.env.PORT`（保留 `APP_PORT` 為 compat，見 3.6）。本機仍可連 loopback。
+- 監聽改綁 `0.0.0.0`、port 讀 `APP_PORT`（2026-09-03 起全 repo 已硬切換為平台命名，原「compat 對映層」決議不做，見 3.6 附註）。本機仍可連 loopback。
 - **Host header 白名單（硬阻斷，勿漏）**：`hostGuard.ts` 現只放行 `127.0.0.1/localhost/::1`（DNS-rebinding 防護），ingress 帶的部署域名 Host 會被 403。**必須設 `APP_ALLOWED_HOSTS`=部署域名**（從 `APP_BASE_URL` 推導以免 drift）。這是 stage-eks doc §7 三個硬阻斷之一。
 - 容器：multi-stage Dockerfile（build 裝全依賴、runtime 只留 prod 產物 + prod 依賴）、非 root、假設 FS 唯讀只 `/tmp` 可寫、鎖 lockfile、base image 釘 major（`node:22-alpine`）、`.dockerignore`、**處理 SIGTERM**（停收新請求、排空、退出）。
 - **補 prod build**（stage-eks doc 已列缺口）：加 `build` script，**須同時產出**：(a) `tsc` 編 server code 到 `dist/`、(b) **`npm run build:ui`** 產面板 HTML（`dist/ui/*.html`）——漏了它 prod image 沒面板資產、MCP Apps 面板永久退化成純文字。加 `start`（`node dist/index.js`）；現在只有 `dev = tsx`。
@@ -83,7 +83,7 @@ nonce 批准、稽核 append-only）**行為不得改變**。遷移只換「狀�
 
 - `.env.example` 進版控，**每個值註明三分類**（build-time 公開 / runtime secret / runtime 非機密）——這是交平台 config-manager 的唯一依據。
 - 對外 base URL 一律來自 env（`APP_BASE_URL`／沿用推導 OAuth callback）。
-- **命名 compat**：`config.ts` 同時吃平台慣例 `APP_ENV`/`APP_PORT`（fallback 到既有 `APP_ENV`/`APP_PORT`）。auth-service key 平台命名 `API_AUTH_SERVICE_*`，我方 `*_AUTHSVC_SERVICE_KEY`——保留對映層並在 `.env.example` 標註，**確認需要的 scope**（read/write/gateway）。
+- **命名 compat（附註 2026-09-03：決議不做 compat 層，已由硬切換取代）**：原設計為 `config.ts` 同時吃平台慣例 `APP_*` 並 fallback 到既有 `BE2_*`/`*_AUTHSVC_SERVICE_KEY`（保留對映層）。實際決議：上 EKS 前直接全 repo 硬切換為 `APP_ENV`/`APP_PORT`/單把 `API_AUTH_SERVICE_KEY`，不留舊名 fallback（PR #14，`refactor/cloud-env-naming`）。**確認需要的 scope**（read/write/gateway）一項不變。
 - 缺必要 env **啟動就 fail fast**（只印 key 名不印值，現況已如此）。
 
 ### 3.7 治理宣告（framework registry）
@@ -100,7 +100,7 @@ nonce 批准、稽核 append-only）**行為不得改變**。遷移只換「狀�
 3. **PostgreSQL 後端實作**（env 選後端；SQLite 續為本機/CI 預設）→ 對 stage PG 實測。
 4. **去 in-process 鎖 → 無鎖併發**（見 §3.2，勿引入跨 I/O 的 DB 鎖）：scheduler 用既有 CAS `claimScheduled`、executor 改樂觀並發（寫入 CAS）、token refresh 維持每 pod single-flight + rotation 容忍。
 5. **scheduler → HTTP endpoint + CronJob**（移除 in-process poller，dev ticker 旗標）。
-6. **容器化**（Dockerfile/prod build/start/SIGTERM/0.0.0.0）+ 結構化 log + `.env.example` 三分類 + `APP_*` compat + `PROJECT.yaml`。
+6. **容器化**（Dockerfile/prod build/start/SIGTERM/0.0.0.0）+ 結構化 log + `.env.example` 三分類 + `APP_*` 命名（已硬切換，無 compat 層，見 3.6 附註）+ `PROJECT.yaml`。
 
 ## 5. 開放決策（需使用者/DevOps 拍板）
 

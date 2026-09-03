@@ -6,33 +6,22 @@
 
 ## 1. 環境變數設定
 
-### 必設（擇一模式）
-
-#### 推薦：用 `APP_ENV` 快捷選環境
-
-```bash
-export APP_ENV=stage
-```
-
-設 `APP_ENV=stage` 後，config 自動帶入：
-- `AUTHSVC_URL=https://auth.stage.kkday.com`
-- `GATEWAY_URL=https://api-gateway.stage.kkday.com`
-- `API_AUTH_SERVICE_KEY` 改讀 `API_AUTH_SERVICE_KEY` 環境變數
-
-| `APP_ENV` 值 | authsvc host | gateway host | 讀取 service key 變數 | 預設 DB 路徑 |
-|---|---|---|---|---|
-| `sit` | `auth-220.sit.kkday.com` | `api-gateway-220.sit.kkday.com` | `API_AUTH_SERVICE_KEY` | `./data/be2-mcp-sit.sqlite` |
-| `sit-220` | `auth-220.sit.kkday.com` | `api-gateway-220.sit.kkday.com` | `API_AUTH_SERVICE_KEY` | `./data/be2-mcp-sit-220.sqlite` |
-| `stage` | `auth.stage.kkday.com` | `api-gateway.stage.kkday.com` | `API_AUTH_SERVICE_KEY` | `./data/be2-mcp-stage.sqlite` |
-| `prod` | `auth.kkday.com` | `api-gateway.kkday.com` | `API_AUTH_SERVICE_KEY` | `./data/be2-mcp-prod.sqlite` |
-
-#### 或手動指定 host + key（legacy）
+### 必設（一環境一份 config，直接明設；無 preset）
 
 ```bash
 export AUTHSVC_URL=https://auth.stage.kkday.com
 export GATEWAY_URL=https://api-gateway.stage.kkday.com
 export API_AUTH_SERVICE_KEY=<service-key-from-vault-or-secret>
+export APP_ENV=stage   # 標籤，只影響預設 DB path 後綴（不選 host/key）
 ```
+
+各環境的 host 對照（供填值參考）：
+
+| 環境 | authsvc host | gateway host | 預設 DB 路徑（`APP_ENV` 標籤決定） |
+|---|---|---|---|
+| sit | `auth-220.sit.kkday.com` | `api-gateway-220.sit.kkday.com` | `./data/be2-mcp-sit.sqlite` |
+| stage | `auth.stage.kkday.com` | `api-gateway.stage.kkday.com` | `./data/be2-mcp-stage.sqlite` |
+| prod | `auth.kkday.com` | `api-gateway.kkday.com` | `./data/be2-mcp-prod.sqlite` |
 
 ### 機密：Service Key
 

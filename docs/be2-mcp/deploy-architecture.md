@@ -131,34 +131,32 @@ be2-mcp 需要能連到（依環境換 host）：
 
 app 的權威設定在 `src/config.ts`（zod 驗證，缺就啟動失敗且**只印變數名、不印值**）。
 
-### 環境選擇 = `APP_ENV`（一個實例綁一個環境）
+### 一環境一份 config（config-manager 模式，2026-09-03 拍平後）
 
-**推薦：設 `APP_ENV=sit|stage|prod`**，config 自動選好該環境的 host + service key + DB path：
+**config 內已無多環境 preset**：host 由 `AUTHSVC_URL`/`GATEWAY_URL` 直接給、key 單把 `API_AUTH_SERVICE_KEY`（無環境前綴），每個環境由 config-manager 各自注入一份。`APP_ENV` 只當標籤（影響預設 DB path 後綴，不選 host/key）。各環境的建議值：
 
-| `APP_ENV` | authsvc host | gateway host | 讀哪把 key | 預設 DB |
-|---|---|---|---|---|
-| `sit` | `auth-220.sit.kkday.com` | `api-gateway-220.sit.kkday.com` | `API_AUTH_SERVICE_KEY` | `./data/be2-mcp-sit.sqlite` |
-| `stage` | `auth.stage.kkday.com` | `api-gateway.stage.kkday.com` | `API_AUTH_SERVICE_KEY` | `./data/be2-mcp-stage.sqlite` |
-| `prod` | `auth.kkday.com` ⚠️待確認 | `api-gateway.kkday.com` | `API_AUTH_SERVICE_KEY` | `./data/be2-mcp-prod.sqlite` |
+| 環境 | `AUTHSVC_URL` | `GATEWAY_URL` | 預設 DB（`APP_ENV` 標籤決定） |
+|---|---|---|---|
+| sit | `https://auth-220.sit.kkday.com` | `https://api-gateway-220.sit.kkday.com` | `./data/be2-mcp-sit.sqlite` |
+| stage | `https://auth.stage.kkday.com` | `https://api-gateway.stage.kkday.com` | `./data/be2-mcp-stage.sqlite` |
+| prod | `https://auth.kkday.com` ⚠️待確認 | `https://api-gateway.kkday.com` | `./data/be2-mcp-prod.sqlite` |
 
-- **一個 server 實例 = 一個環境**；切環境 = 改 `APP_ENV` + 重啟。要同時服務多環境 → 跑多個實例（不同 port + 不同 DB）。
-- **store 隔離**：per-env DB path 自動不同 → SIT/stage/prod 的 token store 不互相汙染（重要正確性保證）。
-- **不設 `APP_ENV`（legacy）**：需自行提供 `AUTHSVC_URL` + `GATEWAY_URL` + `API_AUTH_SERVICE_KEY`（向後相容）。
-- **override**：即使設了 `APP_ENV`，明確的 `AUTHSVC_URL`/`GATEWAY_URL`/`APP_DB_PATH` 仍優先。
+- **一個 server 實例 = 一個環境**；切環境 = 換一份 config（URL + key + `APP_ENV` 標籤）+ 重啟。要同時服務多環境 → 跑多個實例（不同 port + 不同 DB）。
+- **store 隔離**：`APP_ENV` 標籤讓 per-env 預設 DB path 不同 → SIT/stage/prod 的 token store 不互相汙染（重要正確性保證）；明確設 `APP_DB_PATH` 則以其為準。
 
-**必填（擇一模式）**：
+**必填**：
 
 | 變數 | 說明 | 機密? |
 |---|---|---|
-| `APP_ENV` | `sit`/`stage`/`prod`（**推薦**；自動帶 host+key+DB） | 否 |
-| `{SIT\|STAGE\|PRODUCTION}_AUTHSVC_SERVICE_KEY` | 對應環境的 auth-service S2S service key（**每環境一把**） | **是** |
-| `AUTHSVC_URL` / `GATEWAY_URL` | 僅 legacy（未設 APP_ENV）時必填；或用來 override preset | 否 |
+| `AUTHSVC_URL` / `GATEWAY_URL` | 該環境的 auth-service / gateway host（直接給，無 preset） | 否 |
+| `API_AUTH_SERVICE_KEY` | 該環境的 auth-service S2S service key（單把、無環境前綴） | **是** |
 
 **選填 / 有預設**：
 
 | 變數 | 預設 | 說明 |
 |---|---|---|
 | `APP_PORT` | `8787` | 監聽 port |
+| `APP_ENV` | —（不設則預設 DB 無後綴） | 環境標籤 `sit`/`stage`/`prod`；只影響預設 DB path 後綴 |
 | `APP_DB_PATH` | `./data/be2-mcp.sqlite`（設 `APP_ENV` 時自動變 `-{env}.sqlite`） | SQLite 路徑（改 Postgres 後由連線字串取代）；明確設此值會 override per-env 預設 |
 | `OTEL_MODE` | `off` | `off`/`console`/`otlp`；設 `otlp` 才輸出 trace 到 collector |
 | `APP_ALLOWED_HOSTS` | — | Host header 白名單（部署域名） |
