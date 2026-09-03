@@ -1,36 +1,43 @@
 import { describe, it, expect } from 'vitest'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { RateBudget } from '../src/limits/rateBudget.js'
 import { RateError } from '../src/errors.js'
 
 describe('RateBudget', () => {
-  it('allows under the limits', () => {
-    const rb = new RateBudget(openDb(':memory:'), { perSession: 3, perUserDay: 10 })
-    expect(() => { rb.consume('u', 's1'); rb.consume('u', 's1'); rb.consume('u', 's1') }).not.toThrow()
+  it('allows under the limits', async () => {
+    const db = await openTestDb()
+    const rb = new RateBudget(db, { perSession: 3, perUserDay: 10 })
+    await rb.consume('u', 's1'); await rb.consume('u', 's1'); await rb.consume('u', 's1')
+    await db.close()
   })
-  it('throws RATE_SESSION at session limit, other sessions unaffected', () => {
-    const rb = new RateBudget(openDb(':memory:'), { perSession: 2, perUserDay: 100 })
-    rb.consume('u', 's1'); rb.consume('u', 's1')
-    expect(() => rb.consume('u', 's1')).toThrowError(RateError)
-    expect(() => rb.consume('u', 's2')).not.toThrow()
+  it('throws RATE_SESSION at session limit, other sessions unaffected', async () => {
+    const db = await openTestDb()
+    const rb = new RateBudget(db, { perSession: 2, perUserDay: 100 })
+    await rb.consume('u', 's1'); await rb.consume('u', 's1')
+    await expect(rb.consume('u', 's1')).rejects.toThrow(RateError)
+    await rb.consume('u', 's2')
+    await db.close()
   })
-  it('throws RATE_USER_DAY across sessions, resets next UTC day', () => {
+  it('throws RATE_USER_DAY across sessions, resets next UTC day', async () => {
     let day = Date.UTC(2026, 7, 9, 12)
-    const rb = new RateBudget(openDb(':memory:'), { perSession: 100, perUserDay: 2, now: () => day })
-    rb.consume('u', 's1'); rb.consume('u', 's2')
-    expect(() => rb.consume('u', 's3')).toThrowError(/daily/i)
+    const db = await openTestDb()
+    const rb = new RateBudget(db, { perSession: 100, perUserDay: 2, now: () => day })
+    await rb.consume('u', 's1'); await rb.consume('u', 's2')
+    await expect(rb.consume('u', 's3')).rejects.toThrow(/daily/i)
     day += 24 * 3600_000
-    expect(() => rb.consume('u', 's3')).not.toThrow()
+    await rb.consume('u', 's3')
+    await db.close()
   })
-  it('purges counter rows older than 3 days (table stays bounded)', () => {
+  it('purges counter rows older than 3 days (table stays bounded)', async () => {
     let t = Date.UTC(2026, 7, 1, 12)
-    const db = openDb(':memory:')
+    const db = await openTestDb()
     const rb = new RateBudget(db, { now: () => t })
-    rb.consume('u', 'old-session')
+    await rb.consume('u', 'old-session')
     t += 4 * 24 * 3600_000
-    rb.consume('u', 'new-session')
-    const keys = (db.prepare('SELECT counter_key FROM rate_counters').all() as Array<{ counter_key: string }>).map(r => r.counter_key)
+    await rb.consume('u', 'new-session')
+    const keys = (await db.query<{ counter_key: string }>('SELECT counter_key FROM rate_counters')).rows.map(r => r.counter_key)
     expect(keys.some(k => k.includes('old-session'))).toBe(false)
     expect(keys.some(k => k.includes('new-session'))).toBe(true)
+    await db.close()
   })
 })

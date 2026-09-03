@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3'
+import type { Db } from '../store/dbTypes.js'
 import { randomBytes } from 'node:crypto'
 
 // Task 4: this row no longer carries the display userLabel directly — it carries the
@@ -17,30 +17,32 @@ export class WebSessionStore {
   // duplicate that knowledge here, delete() (the single row-removal path — idle-expiry in get()
   // delegates to it too) notifies this optional callback so the caller (app.ts) can wire up the
   // purge without WebSessionStore needing to know about CredentialStore/IdentityStore.
-  private onDelete?: (sessionId: string) => void
-  constructor(private db: Database.Database, opts: { now?: () => number; idleTtlMs?: number; onDelete?: (sessionId: string) => void } = {}) {
+  private onDelete?: (sessionId: string) => void | Promise<void>
+  constructor(private db: Db, opts: { now?: () => number; idleTtlMs?: number; onDelete?: (sessionId: string) => void | Promise<void> } = {}) {
     this.now = opts.now ?? Date.now
     this.idleTtlMs = opts.idleTtlMs ?? 8 * 3600_000
     this.onDelete = opts.onDelete
   }
   static newSessionId(): string { return randomBytes(32).toString('hex') }
 
-  create(sessionId: string, identityId: string): void {
+  async create(sessionId: string, identityId: string): Promise<void> {
     const t = this.now()
-    this.db.prepare('INSERT OR REPLACE INTO web_sessions (session_id, identity_id, created_at, last_seen_at) VALUES (?,?,?,?)')
-      .run(sessionId, identityId, t, t)
+    await this.db.query(
+      `INSERT INTO web_sessions (session_id, identity_id, created_at, last_seen_at) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (session_id) DO UPDATE SET identity_id=EXCLUDED.identity_id, created_at=EXCLUDED.created_at, last_seen_at=EXCLUDED.last_seen_at`,
+      [sessionId, identityId, t, t])
   }
-  get(sessionId: string): WebSession | undefined {
-    const r = this.db.prepare('SELECT * FROM web_sessions WHERE session_id = ?').get(sessionId) as Record<string, unknown> | undefined
+  async get(sessionId: string): Promise<WebSession | undefined> {
+    const r = (await this.db.query('SELECT * FROM web_sessions WHERE session_id = $1', [sessionId])).rows[0] as Record<string, unknown> | undefined
     if (!r) return undefined
-    if ((r.last_seen_at as number) + this.idleTtlMs < this.now()) { this.delete(sessionId); return undefined }
+    if ((r.last_seen_at as number) + this.idleTtlMs < this.now()) { await this.delete(sessionId); return undefined }
     return { sessionId: r.session_id as string, identityId: r.identity_id as string, createdAt: r.created_at as number, lastSeenAt: r.last_seen_at as number }
   }
-  touch(sessionId: string): void {
-    this.db.prepare('UPDATE web_sessions SET last_seen_at = ? WHERE session_id = ?').run(this.now(), sessionId)
+  async touch(sessionId: string): Promise<void> {
+    await this.db.query('UPDATE web_sessions SET last_seen_at = $1 WHERE session_id = $2', [this.now(), sessionId])
   }
-  delete(sessionId: string): void {
-    this.db.prepare('DELETE FROM web_sessions WHERE session_id = ?').run(sessionId)
-    this.onDelete?.(sessionId)
+  async delete(sessionId: string): Promise<void> {
+    await this.db.query('DELETE FROM web_sessions WHERE session_id = $1', [sessionId])
+    await this.onDelete?.(sessionId)
   }
 }
