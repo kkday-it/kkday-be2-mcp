@@ -8,9 +8,9 @@ import { join } from 'node:path'
 import type { Config } from '../src/config.js'
 
 let backupHtml: string | null = null
-describe('Dev Panel Harness (BE2_MCP_DEV_PANEL flag)', () => {
+describe('Dev Panel Harness (APP_DEV_PANEL flag)', () => {
   let server: Server, base: string, db: ReturnType<typeof openDb>
-  const originalEnv = process.env.BE2_MCP_DEV_PANEL
+  const originalEnv = process.env.APP_DEV_PANEL
 
   beforeEach(() => {
     db = openDb(':memory:')
@@ -33,7 +33,7 @@ describe('Dev Panel Harness (BE2_MCP_DEV_PANEL flag)', () => {
     const real = join(process.cwd(), 'dist', 'ui', 'batch-wizard.html')
     if (backupHtml != null) writeFileSync(real, backupHtml)
     else rmSync(real, { force: true })
-    process.env.BE2_MCP_DEV_PANEL = originalEnv
+    process.env.APP_DEV_PANEL = originalEnv
   })
 
   async function startApp() {
@@ -45,14 +45,14 @@ describe('Dev Panel Harness (BE2_MCP_DEV_PANEL flag)', () => {
   }
 
   it('flag off → 404 for dev routes', async () => {
-    delete process.env.BE2_MCP_DEV_PANEL
+    delete process.env.APP_DEV_PANEL
     await startApp()
     const res = await fetch(`${base}/dev/panel/batch-wizard`)
     expect(res.status).toBe(404)
   })
 
   it('flag on → serves dev panel and executes tool', async () => {
-    process.env.BE2_MCP_DEV_PANEL = '1'
+    process.env.APP_DEV_PANEL = '1'
     await startApp()
 
     // Test GET /dev/panel/batch-wizard

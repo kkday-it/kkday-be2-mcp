@@ -78,7 +78,7 @@ export function computeAnnouncementNoop(it: AnnouncementUpdateItem, raw: RawAnno
 }
 
 // UNLIKE create (target-only), update 綁 live current：先讀現況（GET detail）再與 target 比較，
-// 供確認頁顯示 before→after + 判斷 noop。client 可為 undefined（dev/test 無 SIT_ANNOUNCE_API_KEY，
+// 供確認頁顯示 before→after + 判斷 noop。client 可為 undefined（dev/test 無 API_ANNOUNCE_KEY，
 // 或建構失敗）——此時 current = null（未知），不阻擋 staging（同 create 的安全建構模式）。
 export async function computeAnnouncementUpdateDiff(
   items: AnnouncementUpdateItem[], ctx: DiffCtx, client: AnnouncementClient | undefined,

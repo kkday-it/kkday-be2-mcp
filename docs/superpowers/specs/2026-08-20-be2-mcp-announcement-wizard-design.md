@@ -35,7 +35,7 @@
 | 建立 | `POST /admin/product/announcement`（一筆橫跨所有選定 prodOids） |
 | 列表 | `GET /admin/product/announcement?page=&perPage=&prodOids=` |
 | 成功契約 | HTTP 200 **且** `metadata.status == '0000'`；其餘一律失敗、逐字回報、不自動重試 |
-| header | `authorization: Bearer <be2 JWT>` + `x-api-key`（`.env` `SIT_ANNOUNCE_API_KEY`，固定前端 key）+ `user-uuid`（= JWT `platformId` claim）|
+| header | `authorization: Bearer <be2 JWT>` + `x-api-key`（`.env` `API_ANNOUNCE_KEY`，固定前端 key）+ `user-uuid`（= JWT `platformId` claim）|
 | businessList | 寫 `product.announcement.update`；讀 `product.announcement.query` |
 
 list row 欄位（stage 實攔，§6.1）：`productAnnouncementOid:number` / `name:string` / `prodOids:number[]` / `isEnabled:boolean` / `startTime:"YYYY-MM-DD HH:mm:ss"`(UTC+0) / `endTime:string\|null` / `modifyUser:string` / `langs:string`。
@@ -70,7 +70,7 @@ changeset 框架已全動態（`createChangesetInputShape` 的 action_type enum 
 
 core `GatewayClient`（`src/gateway/client.ts`）只支援單一 baseUrl、固定 header（`x-auth-id: be2`）、只有 get/put、成功判定看 `meta`/HTTP。公告需要 svc-b2c 前綴 + `x-api-key`/`user-uuid` header + POST + `metadata.status '0000'` 判定，皆超出 core client。
 
-→ 在 module 內建一支輕量 `announcementClient`（`src/modules/announcement/create/svcB2cClient.ts`），從 `.env` 讀 `SIT_ANNOUNCE_API_KEY` 與 host，判 `metadata.status '0000'`。core 完全不動。
+→ 在 module 內建一支輕量 `announcementClient`（`src/modules/announcement/create/svcB2cClient.ts`），從 `.env` 讀 `API_ANNOUNCE_KEY` 與 host，判 `metadata.status '0000'`。core 完全不動。
 
 **user-uuid header 由 `accessToken` 自解，不預先塞 modifyUser（改自 agy review round 1）**：§3 契約規定**所有** announcement API（含 GET）都需 `user-uuid` header（= JWT `platformId`）。而讀取路徑的 `DiffCtx`(=`ToolContext`) 與 `AppToolContext` **刻意不含 `modifyUser`**（避讀取型 tool 承受解碼負擔），只含 `accessToken`（`src/tools/types.ts:7`、`src/server/appPipeline.ts:21`）。故 svc-b2c client 一律**接 `accessToken`、內部自解 `platformId` 當 user-uuid**（讀 diff、讀 view、寫 executor 三處統一，皆有 accessToken）。解碼邏輯抽成 module-local isomorphic 小工具（`src/modules/announcement/create/userUuid.ts`，`decodePlatformId(accessToken)`；語義同 `src/server/app.ts#modifyUserFromToken` 但不跨 server→module import），fail-closed：無 platformId claim 即 throw。write body 的 `modify_user` 欄位仍用 `ExecCtx.modifyUser`（同為 platformId、值一致）。
 

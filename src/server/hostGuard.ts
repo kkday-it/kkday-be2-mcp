@@ -40,8 +40,8 @@ export function buildHostGuard(options: HostGuardOptions = {}): RequestHandler {
     }
 
     const customAllowed = options.allowedHosts ?? []
-    const envAllowed = process.env.BE2_MCP_ALLOWED_HOSTS
-      ? process.env.BE2_MCP_ALLOWED_HOSTS.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+    const envAllowed = process.env.APP_ALLOWED_HOSTS
+      ? process.env.APP_ALLOWED_HOSTS.split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
       : []
 
     const allowedItems = new Set([

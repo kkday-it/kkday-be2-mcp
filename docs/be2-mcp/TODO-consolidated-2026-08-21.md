@@ -13,7 +13,7 @@
 ### A2. 登出 / 撤銷(logout / revoke)——**✅ DONE:PR #24 已 merge 進 main(`8603a57`,2026-08-22)**
 - 交付:RFC 7009 `POST /oauth/revoke`(grant 級撤銷 `revokeGrant`,保留 web_session/static_bearer)+ discovery `revocation_endpoint` + `/confirm/connections`「斷開所有 Claude 連線」頁(Origin 檢查擋 localhost CSRF + PRG)。spec/plan 皆 agy APPROVED(各 rounds=2);ci 635 綠;雙軸 code-review 收畢;dev server 冒煙通過。
 - **live 驗收 PASS(2026-08-22)**:真人 Desktop 實斷 2 條 → 401 → 自動 re-auth 復原,二輪重測過(證據見 PR #24 comment + oauth-runbook)。
-- (Lance 本機備忘)**環境備忘**::8787 server 改從**釘在 main 的獨立 worktree** `/Users/lance.chien/Documents/Projects/.be2-mcp-server-main` 起(共用主 repo 的 sit-220 sqlite,`BE2_MCP_DB_PATH` 絕對路徑)——與開發工作區脫鉤,並行 session 切 branch 不再波及 server。升級 server 版本:`git -C .be2-mcp-server-main fetch origin main && git -C .be2-mcp-server-main checkout origin/main`,再重啟。
+- (Lance 本機備忘)**環境備忘**::8787 server 改從**釘在 main 的獨立 worktree** `/Users/lance.chien/Documents/Projects/.be2-mcp-server-main` 起(共用主 repo 的 sit-220 sqlite,`APP_DB_PATH` 絕對路徑)——與開發工作區脫鉤,並行 session 切 branch 不再波及 server。升級 server 版本:`git -C .be2-mcp-server-main fetch origin main && git -C .be2-mcp-server-main checkout origin/main`,再重啟。
 - 邊界(已寫進 oauth-runbook「使用者主動撤銷」節):be2-mcp 撤銷 ≠ be2-web SSO 登出(auth-service JWT 在 ~50min TTL 內仍有效);Claude Code 端快取 DCR client/token 不會自己消失,下次 401 自動重走 OAuth。
 
 ### A3. 價格域 3b(next domain)——照 `module-onboarding.md` 上車
@@ -40,10 +40,10 @@
 - shelf_toggle 的 changeset-panel / SSO 確認頁 UI(dev query harness 餵不了 changeset_id,需 Desktop 真 host 或 SSO 頁)。
 
 ## D. 收尾決策 / loose ends
-- **`src/limits/rateBudget.ts` 未 commit**:加了 `BE2_MCP_DISABLE_CHANGESET_BUDGET` env 開關(demo 用,現在 :8787 帶著跑)。決定:commit 成正式 env-gated 功能 / revert / 留本機。**生產勿設此旗標。**
+- **`src/limits/rateBudget.ts` 未 commit**:加了 `APP_DISABLE_CHANGESET_BUDGET` env 開關(demo 用,現在 :8787 帶著跑)。決定:commit 成正式 env-gated 功能 / revert / 留本機。**生產勿設此旗標。**
 - `docs/be2-mcp/demo-runbook-2026-08-21.md`(untracked,保留)。
 - **OAuth authorize 頁 TTL**:optional defense-in-depth(現況 60s auth code 已鎖關鍵窗;登入頁本身無 server TTL,低優先)。
-- **prod service key**:`PRODUCTION_AUTHSVC_SERVICE_KEY` 待正式確認(prod 部署前)。
+- **prod service key**:`API_AUTH_SERVICE_KEY` 待正式確認(prod 部署前)。
 - **prod BE2_DOMAIN 白名單**:OAuth popup 上線前請 auth-service 把 be2-mcp origin 納入(SIT 已 `ALLOW_LOCAL_LOGIN`)。
 - 本機 server::8787(current main、sit-220、dev panel、budget disabled)還開著;sit-220 db 測試交易資料已清、認證保留。
 
@@ -95,7 +95,7 @@
 
 ## 環境備忘(demo / 驗收用)
 - 真 prod_oid(非網址 mid):庫存/平台/公告 **38352**、上下架 **35992**。2358 無限量(庫存數量不支援)。
-- `.env BE2_ENV=sit-220`。dev 面板:`/dev/panel/batch-wizard?action_type=<X>&prod_oids=<oid>`、`/dev/panel/announcement-wizard`。
+- `.env` 指 be2-220(`AUTHSVC_URL`/`GATEWAY_URL`;db 用 `APP_DB_PATH` 明指 sit-220 檔)。dev 面板:`/dev/panel/batch-wizard?action_type=<X>&prod_oids=<oid>`、`/dev/panel/announcement-wizard`。
 - Desktop 無 F5:換操作按面板「**開始新批次**」(全重置)或請 Claude 重開精靈。
 
 ## 相關文件

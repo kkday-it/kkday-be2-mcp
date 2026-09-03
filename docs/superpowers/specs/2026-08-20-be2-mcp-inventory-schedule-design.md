@@ -9,7 +9,7 @@
 | # | 假設 | 依據 |
 |---|---|---|
 | A1 | 排程只對 `inventory_setting`(fullday SET)開放;上下架有原生 reserve_queue、公告有原生 startTime/endTime,不用本層 | handoff §2 原生排程分類 |
-| A2 | be2 營運時區單一,以 env `BE2_TZ`(IANA,預設 `Asia/Taipei`)為準;不做 per-user 時區 | 手冊/截圖 GMT+8/+9 混見 → 用 env 收斂,部署時定案 |
+| A2 | be2 營運時區單一,以 env `APP_TZ`(IANA,預設 `Asia/Taipei`)為準;不做 per-user 時區 | 手冊/截圖 GMT+8/+9 混見 → 用 env 收斂,部署時定案 |
 | A3 | 執行語意 = **declarative SET**:批准的是「時間 T 時庫存應為 X」;批准後至 T 的自然庫存漂移(銷售)**不視為 stale、不擋執行** | SET/fullday 語意;若擋,排程功能形同虛設 |
 | A4 | 排程上限視野(horizon)預設 30 天(env 可調);超過拒建 | 庫存排程屬近期營運操作 |
 | A5 | 執行結果不主動通知(v1);使用者靠 wizard ledger / `be2_get_changeset_status` / 確認頁查 | 通知通道(Slack/mail)另案 |
@@ -47,7 +47,7 @@ approved(排程認領後) ──transient refresh 失敗 / stranded 回收──
 |---|---|---|
 | `execute_at_utc` | INTEGER(epoch ms)| 到點時間,**唯一用來比較/排序的時間欄** |
 | `schedule_wall` | TEXT | 使用者輸入的牆鐘 `YYYY-MM-DDTHH:mm` |
-| `schedule_tz` | TEXT | 建立當下的 IANA 時區(來自 `BE2_TZ`) |
+| `schedule_tz` | TEXT | 建立當下的 IANA 時區(來自 `APP_TZ`) |
 | `executor_identity_id` | TEXT | 批准者的 be2_identities 參考(到點取 token 用) |
 | `executor_label` / `executor_modify_user` | TEXT | 批准當下解析並凍結(audit + PUT body 用) |
 | `executor_session_id` | TEXT | 批准者的 sessionId(`ExecutorIdentity.sessionId` 必填;audit 歸屬批准者,**不得** fallback 到 creator 的 `rec.session_id`) |
@@ -55,7 +55,7 @@ approved(排程認領後) ──transient refresh 失敗 / stranded 回收──
 | `keepalive_claimed_at` | INTEGER | (加在 `be2_identities` 表,非 change_sets)keep-alive 認領章,防多實例重複 refresh(§6) |
 
 **時區規則(一級需求)**:
-1. 輸入 = 牆鐘字串 + server 端 `BE2_TZ`;server 用 `Intl.DateTimeFormat` 換算成 UTC epoch **一次**,之後所有比較只用 `execute_at_utc`。
+1. 輸入 = 牆鐘字串 + server 端 `APP_TZ`;server 用 `Intl.DateTimeFormat` 換算成 UTC epoch **一次**,之後所有比較只用 `execute_at_utc`。
 2. 呈現(確認頁/wizard/稽核)一律回放 `schedule_wall + schedule_tz` 原文,**不從 epoch 反推**(避免 DST/邊界二次換算誤差;`Asia/Taipei` 無 DST,但規則要 DST-safe)。
 3. 驗證:換算後必須 `now + MIN_LEAD(預設 5min) ≤ execute_at_utc ≤ now + HORIZON(預設 30d)`;無效牆鐘(不存在的時刻)拒絕。
 4. 測試必含:跨日邊界(23:59/00:00)、月末、假想 DST 時區(如 `America/New_York` 春季跳時)確認換算函式泛用。
@@ -102,7 +102,7 @@ approved(排程認領後) ──transient refresh 失敗 / stranded 回收──
 
 ## 9. Wizard / 呈現接線(UX 層,最薄)
 
-- 批准步驟(`src/ui/batch-wizard.ts` inventory 分頁):「立即執行 ⇄ 排程到點執行」切換 + `datetime-local` 輸入(標示 `BE2_TZ`);建 change-set 時帶 `schedule.wall`,批准時帶 `expected_execute_at_utc` 回聲。
+- 批准步驟(`src/ui/batch-wizard.ts` inventory 分頁):「立即執行 ⇄ 排程到點執行」切換 + `datetime-local` 輸入(標示 `APP_TZ`);建 change-set 時帶 `schedule.wall`,批准時帶 `expected_execute_at_utc` 回聲。
 - 結果/ledger:`scheduled` 狀態藥丸(顯示到點時間)+ 取消按鈕;`cancelled/missed` 藥丸。
 - 確認頁 renderer(core 層,非 module):有 schedule 時頂部顯著顯示「將於 {wall} ({tz}) 執行;現況為批准當下快照,執行時庫存可能已因銷售變動,將以 SET 目標值覆寫」(A3 語意透明化)。
 - `be2_get_changeset_status` 回傳加 schedule 欄位(model 可答「排程什麼時候跑」)。

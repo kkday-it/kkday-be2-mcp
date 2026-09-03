@@ -56,7 +56,7 @@ be2 gateway /product/api/v1      auth-service /api/v1/          UI 面板 (mcp-u
    ```
 
 2. **環境變數準備**
-   請複製 `.env.example` 為 `.env`。**絕對不可填寫、commit 任何真實生產環境 token 或密碼**。需要一組 SIT `SIT_AUTHSVC_SERVICE_KEY`。
+   請複製 `.env.example` 為 `.env`。**絕對不可填寫、commit 任何真實生產環境 token 或密碼**。需要一組 SIT 的 `API_AUTH_SERVICE_KEY`（auth-service S2S service key）。
 
 3. **啟動 Server & 建置 UI**
    ```bash

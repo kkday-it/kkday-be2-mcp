@@ -64,7 +64,7 @@ describe('computeAnnouncementUpdateDiff', () => {
     expect(d.noop).toBe(false)  // current 未知時一律非 noop（保守）
   })
 
-  it('degrades when client is undefined (no SIT_ANNOUNCE_API_KEY)', async () => {
+  it('degrades when client is undefined (no API_ANNOUNCE_KEY)', async () => {
     const ctx = ctxWith(async () => ({ name: '商品A' }))
     const [d] = await computeAnnouncementUpdateDiff([item], ctx, undefined)
     expect(d.current).toBeNull()

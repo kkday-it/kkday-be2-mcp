@@ -1,6 +1,6 @@
 # be2 MCP 面板 Demo 操作劇本（2026-08-21，給 Tina demo）
 
-> 環境:本機 :8787（**current main 碼**、`BE2_ENV=sit-220`、dev panel 開、fresh token）。對 be2-220。
+> 環境:本機 :8787（**current main 碼**、`.env` 指 be2-220（`AUTHSVC_URL`/`GATEWAY_URL`）、`APP_DB_PATH=./data/be2-mcp-sit-220.sqlite`、dev panel 開、fresh token）。
 
 ## 🔑 黃金規則:每個操作「前」先重載面板
 **每跑一個功能前,先重新整理面板網址（F5 / 重開 `/dev/panel/xxx`）。**
@@ -49,7 +49,7 @@
 
 ## 卡住時的復原
 - 面板沒反應 / DIFF_STALE → **重載面板**（新版 DIFF_STALE 會給「重載」按鈕,非死路）。
-- 呼叫回 `REAUTH_REQUIRED`（token 過期,約 50 分）→ 終端跑 `BE2_ENV=sit-220 npm run bootstrap-user` 重取,再重載面板。
+- 呼叫回 `REAUTH_REQUIRED`（token 過期,約 50 分）→ 終端跑 `APP_DB_PATH=./data/be2-mcp-sit-220.sqlite npm run bootstrap-user` 重取,再重載面板。
 - 商品 not_found → 確認用的是**真 prod_oid**（38352/35992）不是網址 mid。
 
 ## demo 前 30 秒檢查

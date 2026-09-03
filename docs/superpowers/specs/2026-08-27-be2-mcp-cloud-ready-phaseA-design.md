@@ -19,18 +19,18 @@ be2-mcp 目前是**開發原型**：`tsx src/index.ts` 直跑、狀態全存單�
 ## 2. 現況事實（設計依據）
 
 1. **bind loopback 硬編**：`src/index.ts:9` `app.listen(config.port, '127.0.0.1', …)`，**無 env 可覆蓋**。
-2. **Host 白名單已是 env**：`src/server/hostGuard.ts:43-44` 已讀 `process.env.BE2_MCP_ALLOWED_HOSTS`（逗號分隔、大小寫正規化）併入放行集合，`/healthz` 豁免（`hostGuard.ts:30`）。→ **阻斷 #3 純設定、零 code。**
+2. **Host 白名單已是 env**：`src/server/hostGuard.ts:43-44` 已讀 `process.env.APP_ALLOWED_HOSTS`（逗號分隔、大小寫正規化）併入放行集合，`/healthz` 豁免（`hostGuard.ts:30`）。→ **阻斷 #3 純設定、零 code。**
 3. **public base URL 硬編兩處**：`src/server/app.ts:142`（`const baseUrl = 'http://127.0.0.1:${config.port}'`，供 MCP Apps confirm_url / l2Context）與 `src/server/app.ts:255`（`buildDiscoveryRouter({ baseUrl: … })`，供 `.well-known` discovery + authorize/token/register/resource-metadata 輸出）。此 `baseUrl` 往下 thread 到 `l2Context.ts:23`、`appPipeline.ts:45`、`toolPipeline.ts:27`。`src/oauth/discoveryRoutes.ts` 由傳入的 baseUrl 組所有 endpoint URL。
 4. **client loopback allowlist 要保留**：`src/oauth/redirectUri.ts:21` 對 `http://localhost|127.0.0.1` 的 redirect_uri 放行——這是 **Claude Code client 本機 callback**，與 server bind 無關，**不改**。
-5. **config 集中 + Zod**：`src/config.ts` 用 `EnvSchema`（`config.ts:28-37`）驗證，`BE2_ENV=stage` preset 帶入 auth/gateway host + 選 `STAGE_AUTHSVC_SERVICE_KEY`（`config.ts:16-20,67`）。錯誤只印 key 名不印值（`config.ts:62-63`）。`import 'dotenv/config'`（`config.ts:2`）在無 `.env` 時 no-op → **k8s env-var 注入天然可用**。
+5. **config 集中 + Zod**：`src/config.ts` 用 `EnvSchema`（`config.ts:28-37`）驗證，`APP_ENV=stage` preset 帶入 auth/gateway host + 選 `API_AUTH_SERVICE_KEY`（`config.ts:16-20,67`）。錯誤只印 key 名不印值（`config.ts:62-63`）。`import 'dotenv/config'`（`config.ts:2`）在無 `.env` 時 no-op → **k8s env-var 注入天然可用**。
 6. **build 缺口**：`package.json:5-16` 只有 `dev=tsx src/index.ts`、`typecheck=tsc --noEmit`、`build:ui=node scripts/build-ui.mjs`，**無 production build、無 `start`**。`tsconfig.json` `outDir:dist`、`module/moduleResolution:NodeNext`、`include:["src","scripts","eval","tests"]`。
 7. **source 已 NodeNext-ready**：relative import 全帶顯式 `.js`（`src/index.ts:1-4` `./config.js` 等），`typecheck` 在 CI 通過 → **`tsc` 產出的 `dist/*.js` 是可直接 `node` 跑的 ESM**。
 8. **native module**：`better-sqlite3@^13`（`package.json:29`）是 C++ binding，需 base image 能取得對應 Node ABI 的 prebuild（glibc）。
-9. **SQLite 單檔 + WAL**：`src/store/db.ts:124-127` `openDb(path)` → `new Database(path)` + `pragma('journal_mode = WAL')`，另產 `-wal`/`-shm`（需同一 volume）。路徑 env `BE2_MCP_DB_PATH`（`config.ts:34`，`BE2_ENV` 設時預設 `./data/be2-mcp-${env}.sqlite`，`config.ts:73-76`）。存 be2 token（明文 access/refresh，`db.ts:78-87`）、OAuth 外殼、change-set、web session、append-only `audit_log`（禁改禁刪 trigger，`db.ts:23-26`）、rate 計數等 11 張表。
+9. **SQLite 單檔 + WAL**：`src/store/db.ts:124-127` `openDb(path)` → `new Database(path)` + `pragma('journal_mode = WAL')`，另產 `-wal`/`-shm`（需同一 volume）。路徑 env `APP_DB_PATH`（`config.ts:34`，`APP_ENV` 設時預設 `./data/be2-mcp-${env}.sqlite`，`config.ts:73-76`）。存 be2 token（明文 access/refresh，`db.ts:78-87`）、OAuth 外殼、change-set、web session、append-only `audit_log`（禁改禁刪 trigger，`db.ts:23-26`）、rate 計數等 11 張表。
 10. **SIGTERM 只有 OTel**：`src/otel.ts:16` `process.on('SIGTERM', () => void sdk.shutdown())`。HTTP server、scheduler poller（`app.locals.startScheduler`，`index.ts:11`）、DB **皆無 graceful 關閉**。
 11. **健康端點**：`/healthz` 純 liveness、不查 DB/下游（`app.ts:250`）。**無 readiness 端點。**
 12. **OTel 已支援 otlp**：`src/otel.ts:9-17` `initOtel(mode)`，`off`（預設）/`console`/`otlp`；otlp 用標準 `OTEL_EXPORTER_OTLP_ENDPOINT`（預設 `:4318`）。serviceName 硬編 `be2-mcp`。
-13. **dev panel gated**：`app.ts:283-286` 僅 `BE2_MCP_DEV_PANEL=1` 才掛 `/dev/*`。stage 不設即關。
+13. **dev panel gated**：`app.ts:283-286` 僅 `APP_DEV_PANEL=1` 才掛 `/dev/*`。stage 不設即關。
 14. **oauth-purge 是 script**：`package.json:14` `oauth-purge=tsx scripts/oauth-purge.ts`（每日 cron 語義）。`tsconfig include` 已含 `scripts`。
 15. **egress 僅兩個下游**：stage auth-service（`auth.stage.kkday.com`）、api-gateway（`api-gateway.stage.kkday.com`）443；otlp collector（若開）；be2-auth 登入是**使用者瀏覽器 POPUP**，非 server egress（`ssoRoutes.ts:57`、`app.ts:137`）。
 
@@ -47,7 +47,7 @@ config.ts  ── 新增 2 個 config env（bindHost / publicBaseUrl；allowedHo
    ├─ app.ts         : /healthz 後、hostGuard 前 新增 GET /readyz（SELECT 1）
    ├─ scheduler.ts   : start() 回 () => Promise<void>（stopper 等 in-flight tick）  §9
    ├─ otel.ts        : 匯出 async shutdownOtel() + 移除自帶 SIGTERM listener       §9
-   └─ hostGuard      : 已讀 BE2_MCP_ALLOWED_HOSTS（僅設值）        [阻斷#2]
+   └─ hostGuard      : 已讀 APP_ALLOWED_HOSTS（僅設值）        [阻斷#2]
 
 tsconfig.build.json ── 新增（include src+scripts，排除 eval/tests）
 package.json ── build（tsc -p tsconfig.build.json + build:ui）、start（node dist/src/index.js）
@@ -64,17 +64,17 @@ docs ──────── 更新 runbook（容器化怎麼跑、env 契約�
 
 | env | 型別/預設 | 用途 |
 |---|---|---|
-| `BE2_MCP_BIND_HOST` | `z.string().default('127.0.0.1')` | listen 綁定位址。容器設 `0.0.0.0`。**預設留 127.0.0.1**——local dev 不因升級而暴露到 LAN。 |
-| `BE2_MCP_PUBLIC_BASE_URL` | `z.string().url().optional()` | OAuth/discovery/confirm_url 對外輸出的 base（含 scheme，如 `https://be2-mcp.stage.kkday.com`）。**未設時 fallback `http://127.0.0.1:${port}`**（現行行為）。 |
+| `APP_BIND_HOST` | `z.string().default('127.0.0.1')` | listen 綁定位址。容器設 `0.0.0.0`。**預設留 127.0.0.1**——local dev 不因升級而暴露到 LAN。 |
+| `APP_BASE_URL` | `z.string().url().optional()` | OAuth/discovery/confirm_url 對外輸出的 base（含 scheme，如 `https://be2-mcp.stage.kkday.com`）。**未設時 fallback `http://127.0.0.1:${port}`**（現行行為）。 |
 
 `Config` interface 加 `bindHost: string`、`publicBaseUrl: string`。`loadConfig` 尾段計算：
 ```ts
-const publicBaseUrl = e.BE2_MCP_PUBLIC_BASE_URL?.replace(/\/$/, '')
-  ?? `http://127.0.0.1:${e.BE2_MCP_PORT}`
+const publicBaseUrl = e.APP_BASE_URL?.replace(/\/$/, '')
+  ?? `http://127.0.0.1:${e.APP_PORT}`
 ```
-`BE2_MCP_ALLOWED_HOSTS` **不進 EnvSchema**（維持現狀由 `hostGuard.ts` 直接讀 `process.env`），避免動到 config 契約；spec §9 註明部署要設它。
+`APP_ALLOWED_HOSTS` **不進 EnvSchema**（維持現狀由 `hostGuard.ts` 直接讀 `process.env`），避免動到 config 契約；spec §9 註明部署要設它。
 
-**scheme 由 env 決定**：ingress 做 TLS termination（HTTPS 對外、HTTP 到 Pod）時，`BE2_MCP_PUBLIC_BASE_URL` 輸出 `https://`，符合 OAuth 2.1 對 authorization server 走 HTTPS 的要求（DevOps 決定暴露/TLS 拓撲，程式只忠實輸出注入值）。
+**scheme 由 env 決定**：ingress 做 TLS termination（HTTPS 對外、HTTP 到 Pod）時，`APP_BASE_URL` 輸出 `https://`，符合 OAuth 2.1 對 authorization server 走 HTTPS 的要求（DevOps 決定暴露/TLS 拓撲，程式只忠實輸出注入值）。
 
 ## 5. 阻斷 #1 — bind（`src/index.ts`）
 
@@ -85,11 +85,11 @@ const publicBaseUrl = e.BE2_MCP_PUBLIC_BASE_URL?.replace(/\/$/, '')
 - `app.ts:142` `const baseUrl = 'http://127.0.0.1:${config.port}'` → `const baseUrl = config.publicBaseUrl`。
 - `app.ts:255` `buildDiscoveryRouter({ baseUrl: 'http://127.0.0.1:${config.port}' })` → `buildDiscoveryRouter({ baseUrl: config.publicBaseUrl })`。
 
-下游 `l2Context`/`appPipeline`/`toolPipeline`/`discoveryRoutes` 皆已吃傳入的 `baseUrl` 參數，**無需再改**。回歸測試驗：注入 `BE2_MCP_PUBLIC_BASE_URL` 時，`GET /.well-known/oauth-authorization-server` 的 `issuer/authorization_endpoint/token_endpoint/registration_endpoint` 與 `/.well-known/oauth-protected-resource` 的 resource 全部帶該 base；未注入時維持 loopback。
+下游 `l2Context`/`appPipeline`/`toolPipeline`/`discoveryRoutes` 皆已吃傳入的 `baseUrl` 參數，**無需再改**。回歸測試驗：注入 `APP_BASE_URL` 時，`GET /.well-known/oauth-authorization-server` 的 `issuer/authorization_endpoint/token_endpoint/registration_endpoint` 與 `/.well-known/oauth-protected-resource` 的 resource 全部帶該 base；未注入時維持 loopback。
 
 ## 7. 阻斷 #2 — Host 白名單
 
-**零 code**。部署設 `BE2_MCP_ALLOWED_HOSTS=be2-mcp.stage.kkday.com`（DevOps 給定域名）。已由 `hostGuard.ts:43-44` 生效。spec §9 列為必設 env。
+**零 code**。部署設 `APP_ALLOWED_HOSTS=be2-mcp.stage.kkday.com`（DevOps 給定域名）。已由 `hostGuard.ts:43-44` 生效。spec §9 列為必設 env。
 
 ## 8. readiness 探針（`src/server/app.ts`）
 
@@ -149,7 +149,7 @@ process.on('SIGINT', shutdown)
 - 新增 `start`: `node dist/src/index.js`。
 - `ci` 不動（`build:ui && typecheck && test`；`typecheck` 仍是 `tsc --noEmit` 走全 include）。
 
-> **UI 路徑不受影響（已查證）**：`appResources.ts:15` 用 `join(process.cwd(), 'dist', 'ui')`（**cwd-based**，非相對 compiled 檔位置）→ 容器 `WORKDIR /app` + `build:ui` 產物在 `/app/dist/ui` → server 即使在 `dist/src/index.js` 也照樣找到面板。DB 路徑走絕對的 `BE2_MCP_DB_PATH`（PVC 掛載點），亦 cwd-無關。
+> **UI 路徑不受影響（已查證）**：`appResources.ts:15` 用 `join(process.cwd(), 'dist', 'ui')`（**cwd-based**，非相對 compiled 檔位置）→ 容器 `WORKDIR /app` + `build:ui` 產物在 `/app/dist/ui` → server 即使在 `dist/src/index.js` 也照樣找到面板。DB 路徑走絕對的 `APP_DB_PATH`（PVC 掛載點），亦 cwd-無關。
 > **驗證點（實作期先跑）**：`npm run build` 後 `node dist/src/index.js` 能起；`dist/scripts/oauth-purge.js`、`dist/ui/*.html` 皆存在；`dist/eval`、`dist/tests` 不存在。
 
 ### 10.2 Dockerfile（multi-stage）
@@ -185,9 +185,9 @@ CMD ["node", "dist/src/index.js"]     # rootDir=. → 進入點在 dist/src/（�
 
 ## 11. 給 DevOps 的 env / 基礎設施契約（寫進 runbook，非本 repo manifests）
 
-**必設 env**：`BE2_ENV=stage`、`STAGE_AUTHSVC_SERVICE_KEY`（k8s Secret，需向 auth-service team 申請）、`BE2_MCP_BIND_HOST=0.0.0.0`、`BE2_MCP_PUBLIC_BASE_URL=https://<域名>`、`BE2_MCP_ALLOWED_HOSTS=<域名>`、`BE2_MCP_DB_PATH=<PVC 掛載點>`。
+**必設 env**：`APP_ENV=stage`、`API_AUTH_SERVICE_KEY`（k8s Secret，需向 auth-service team 申請）、`APP_BIND_HOST=0.0.0.0`、`APP_BASE_URL=https://<域名>`、`APP_ALLOWED_HOSTS=<域名>`、`APP_DB_PATH=<PVC 掛載點>`。
 **建議 env**：`OTEL_MODE=otlp` + `OTEL_EXPORTER_OTLP_ENDPOINT=<collector>`。
-**務必不要設**：`BE2_MCP_DEV_PANEL`。
+**務必不要設**：`APP_DEV_PANEL`。
 **基礎設施**：
 - **PVC**：**RWO block volume（ext4/xfs），非 NFS**——SQLite WAL 在網路檔案系統上鎖語義不安全。單副本 + RWO → 安全。加密 storage class（承載明文 token，見 §12）。備份 `audit_log`（合規）。
 - **replicas: 1**（見 §13 為何不多副本）。
@@ -205,13 +205,13 @@ CMD ["node", "dist/src/index.js"]     # rootDir=. → 進入點在 dist/src/（�
 - **不動 store schema / migration 機制**：`db.ts` 的 `CREATE TABLE IF NOT EXISTS` + PRAGMA-based ALTER 是既有技術債，單節點可運作；本波不重構（動它有回歸風險，且真 migration 框架屬 Phase C 換引擎時一併做）。
 - **不做 Postgres / Redis**（Q1）。
 - **不寫 k8s manifests**（Q2，交 DevOps）。
-- **live stage EKS e2e 標 PENDING**（Q7）：依賴 DevOps 部署 + `STAGE_AUTHSVC_SERVICE_KEY`（repo 目前無）+ stage 寫入權限（前面 phase 卡 403），本 session 無法獨力跑完。沿用 Phase 2a/2b/3a 的 PENDING 慣例。
+- **live stage EKS e2e 標 PENDING**（Q7）：依賴 DevOps 部署 + `API_AUTH_SERVICE_KEY`（repo 目前無）+ stage 寫入權限（前面 phase 卡 403），本 session 無法獨力跑完。沿用 Phase 2a/2b/3a 的 PENDING 慣例。
 
 ## 14. 驗收（我方可控，Q7）
 
 1. `npm run ci` 綠（`build:ui + typecheck + test`），含新回歸測試（§15）。
 2. `npm run build` 產出 `dist/src/index.js`、`dist/scripts/oauth-purge.js`、`dist/ui/*.html`；`dist/eval`、`dist/tests` 不存在。`node dist/src/index.js` 能起。
-3. `docker build` 成功；`docker run` 起容器（注入 `BE2_ENV=stage` + 假 service key + `BE2_MCP_PUBLIC_BASE_URL=https://example` + `BE2_MCP_BIND_HOST=0.0.0.0` + `BE2_MCP_ALLOWED_HOSTS=example` + tmp DB path）：
+3. `docker build` 成功；`docker run` 起容器（注入 `APP_ENV=stage` + 假 service key + `APP_BASE_URL=https://example` + `APP_BIND_HOST=0.0.0.0` + `APP_ALLOWED_HOSTS=example` + tmp DB path）：
    - `curl /healthz` → 200；`curl /readyz` → 200。
    - `curl -H 'Host: example' /.well-known/oauth-authorization-server` → endpoints 全帶 `https://example`。
    - `curl -H 'Host: evil' /mcp` → 403（Host guard 仍擋非白名單）。
@@ -222,10 +222,10 @@ CMD ["node", "dist/src/index.js"]     # rootDir=. → 進入點在 dist/src/（�
 ## 15. 測試計畫（TDD）
 
 新增/擴充：
-- `tests/config.test.ts`（擴充）：`BE2_MCP_BIND_HOST` 預設 `127.0.0.1`、可覆蓋；`BE2_MCP_PUBLIC_BASE_URL` 未設 fallback loopback、設了去尾斜線並生效；錯 URL → parse 失敗（不印值）。
-- `tests/publicBaseUrl.test.ts`（新）：注入 `BE2_MCP_PUBLIC_BASE_URL`，打 `/.well-known/oauth-authorization-server` + `/.well-known/oauth-protected-resource`，斷言所有輸出 URL 用該 base；未注入時用 loopback。
+- `tests/config.test.ts`（擴充）：`APP_BIND_HOST` 預設 `127.0.0.1`、可覆蓋；`APP_BASE_URL` 未設 fallback loopback、設了去尾斜線並生效；錯 URL → parse 失敗（不印值）。
+- `tests/publicBaseUrl.test.ts`（新）：注入 `APP_BASE_URL`，打 `/.well-known/oauth-authorization-server` + `/.well-known/oauth-protected-resource`，斷言所有輸出 URL 用該 base；未注入時用 loopback。
 - `tests/readyz.test.ts`（新）：`/readyz` DB 正常回 200、db.close 後回 503；`/readyz` 與 `/healthz` 豁免 Host guard（帶非白名單 Host 仍 200）。
-- `tests/hostGuard.test.ts`（擴充，若已存在則加案例）：`/readyz` 豁免；設 `BE2_MCP_ALLOWED_HOSTS` 後部署域名放行、其餘 403。
+- `tests/hostGuard.test.ts`（擴充，若已存在則加案例）：`/readyz` 豁免；設 `APP_ALLOWED_HOSTS` 後部署域名放行、其餘 403。
 - graceful shutdown（單元測試，注入 spy，不需真 SIGTERM）：
   - `scheduler.ts`：stopper 現在回傳 Promise——驗「有 in-flight tick 時 `await stop()` 會等該 tick settle 才 resolve」（用一個掛在 await 的 fake gateway/tokenManager 卡住 tick，斷言 stop 的 promise 在 tick resolve 前不 settle）。
   - `otel.ts`：`shutdownOtel()` 在 `off` 模式即刻 resolve（無 sdk）；`console/otlp` 模式呼叫 `sdk.shutdown()`。

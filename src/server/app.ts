@@ -286,7 +286,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     now: Date.now,
   }))
 
-  if (process.env.BE2_MCP_DEV_PANEL === '1') {
+  if (process.env.APP_DEV_PANEL === '1') {
     console.warn('DEV PANEL HARNESS ENABLED — never enable in production (nonce isolation bypassed for local dev)')
     app.use('/dev', buildDevPanelRouter({ db, appDeps }))
   }

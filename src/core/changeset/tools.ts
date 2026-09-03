@@ -30,7 +30,7 @@ export const createChangesetInputShape = {
   items: z.array(itemShape).min(1).max(20),
   note: z.string().max(500).optional(),
   schedule: z.object({
-    wall: z.string().min(1).describe('BE2_TZ(伺服器設定時區)的牆鐘時間,格式 YYYY-MM-DDTHH:mm——不是 UTC;server 會自行換算'),
+    wall: z.string().min(1).describe('APP_TZ(伺服器設定時區)的牆鐘時間,格式 YYYY-MM-DDTHH:mm——不是 UTC;server 會自行換算'),
   }).optional(),
 }
 const inputShape = createChangesetInputShape
@@ -147,7 +147,7 @@ export const createChangesetTool: L2ToolDef = {
     '(2) whether to apply immediately (shelf_toggle_plan) or schedule (shelf_schedule); ' +
     '(3) if scheduling, the exact date, time, and TIMEZONE (ask if not provided, do not guess). ' +
     'Convert local time to UTC "YYYY-MM-DD HH:mm:ss" for reserve_date_utc. If any is missing, ASK first, do NOT stage. ' +
-    'Optional schedule:{wall} stages a timed dispatch — wall is a BE2_TZ wall-clock time (YYYY-MM-DDTHH:mm), NOT UTC; execution requires human approval and happens server-side at that time.',
+    'Optional schedule:{wall} stages a timed dispatch — wall is a APP_TZ wall-clock time (YYYY-MM-DDTHH:mm), NOT UTC; execution requires human approval and happens server-side at that time.',
   inputShape,
   uiResourceUri: 'ui://be2/changeset-panel.html',
   annotations: {

@@ -7,7 +7,7 @@
 
 ## ✅ 這波 session 完成(2026-08-27 ~ 28)
 
-- **cloud-ready Phase A**:spec + plan(皆 agy APPROVED)→ 9-task subagent-driven TDD 實作 → 驗收(本機容器 smoke + live OAuth 身分貫穿到真實 SIT + Playwright 面板)→ 與 workbench 整合(merge main)→ 雙軸 code review + 修正 → **merged 進 main(PR #7)**。內容:bind `BE2_MCP_BIND_HOST`、public URL `BE2_MCP_PUBLIC_BASE_URL`、Host 白名單、`/readyz`、SIGTERM graceful(含長連線 drain / 非乾淨關機 exit(1))、tsc production build → `dist/src/index.js`、multi-stage Dockerfile(node:22-bookworm-slim)、Node 釘 22、runbook、`ci` 納入 build。
+- **cloud-ready Phase A**:spec + plan(皆 agy APPROVED)→ 9-task subagent-driven TDD 實作 → 驗收(本機容器 smoke + live OAuth 身分貫穿到真實 SIT + Playwright 面板)→ 與 workbench 整合(merge main)→ 雙軸 code review + 修正 → **merged 進 main(PR #7)**。內容:bind `APP_BIND_HOST`、public URL `APP_BASE_URL`、Host 白名單、`/readyz`、SIGTERM graceful(含長連線 drain / 非乾淨關機 exit(1))、tsc production build → `dist/src/index.js`、multi-stage Dockerfile(node:22-bookworm-slim)、Node 釘 22、runbook、`ci` 納入 build。
 - **workbench 面板寬度自適應**:`.wrap` 760px → `min(1360px,100%)` + 註解同步。雙軸 + Codex(gpt-5.5)review 皆 0 finding。**PR #8 open,待 merge。**
 - **cerebrum-gateway 接入**:討論摘要整理進 `cerebrum-gateway-integration-handoff.md` 頂部(給 RD 主管的拍板議題),待跨團隊會議。
 - memory:`agy-headless-permission-wall`、`oauth-invalid-request-stale-dcr-cache` 兩條已存。
@@ -46,7 +46,7 @@ main 已有 `PROJECT.yaml`(解鎖)→ 對 `kkday-vibe-framework` 開 PR,`registr
 **卡三個 gate**:①**Ownership / on-call**(平台級,RD 主管/組織拍板;不解不正式化)②**治理邊界**(cerebrum 寫入無人工批准 → 建議 v1 只代理讀取/preview,與 cerebrum team 對齊)③**elicitation spike**(工程可先做:驗 Claude Code/Desktop 對 `elicitation/create` 支援度)。三者到位再 grill-me → brainstorming → spec → agy → writing-plans → impl。工程細節見 `cerebrum-gateway-integration-handoff.md`(身份斷言 RS256、動態工具聚合 `cerebrum_` prefix、絕不轉發 refreshToken、放 `src/core/gateway/`)。
 
 ### T7. cloud-ready 上 stage EKS(live 部署)
-Phase A 程式已 merge 但**尚未部署**。依賴:DevOps 部署 + `STAGE_AUTHSVC_SERVICE_KEY`(repo 目前缺,向 auth-service team 申請)+ stage 寫入權限。驗收 = 員工用 Claude Code/Desktop 對 stage MCP 完成 OAuth 登入 + read + change-set 批准 e2e。文件:`cloud-ready-phaseA-runbook.md`、`deploy-architecture.md`。
+Phase A 程式已 merge 但**尚未部署**。依賴:DevOps 部署 + `API_AUTH_SERVICE_KEY`(repo 目前缺,向 auth-service team 申請)+ stage 寫入權限。驗收 = 員工用 Claude Code/Desktop 對 stage MCP 完成 OAuth 登入 + read + change-set 批准 e2e。文件:`cloud-ready-phaseA-runbook.md`、`deploy-architecture.md`。
 
 ### T8. cloud-ready Phase C(HA / 多副本)
 對齊 main 上 `docs/superpowers/specs/2026-08-26-be2-mcp-cloud-ready-migration-design.md`(agy APPROVED 的廣義遷移設計):SQLite → PostgreSQL(store 抽象 + 雙後端;注意 better-sqlite3 同步 → pg async 是全鏈路重構)、in-process 鎖(refresh single-flight / inventory mutex / MCP session)→ Redis 分散式鎖、scheduler in-process poller → HTTP endpoint(CronJob 觸發)、forward-only migration runner。Phase A 是第一片(單副本);解開 `replicas=1` 才進 Phase C。

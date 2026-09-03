@@ -52,19 +52,19 @@
 ```ts
   it('defaults bindHost to 127.0.0.1 and allows override', () => {
     expect(loadConfig(base as NodeJS.ProcessEnv).bindHost).toBe('127.0.0.1')
-    expect(loadConfig({ ...base, BE2_MCP_BIND_HOST: '0.0.0.0' } as NodeJS.ProcessEnv).bindHost).toBe('0.0.0.0')
+    expect(loadConfig({ ...base, APP_BIND_HOST: '0.0.0.0' } as NodeJS.ProcessEnv).bindHost).toBe('0.0.0.0')
   })
 
   it('publicBaseUrl falls back to loopback when unset, honours override and strips trailing slash', () => {
     expect(loadConfig(base as NodeJS.ProcessEnv).publicBaseUrl).toBe('http://127.0.0.1:8787')
-    expect(loadConfig({ ...base, BE2_MCP_PORT: '9000' } as NodeJS.ProcessEnv).publicBaseUrl).toBe('http://127.0.0.1:9000')
-    expect(loadConfig({ ...base, BE2_MCP_PUBLIC_BASE_URL: 'https://mcp.stage.kkday.com/' } as NodeJS.ProcessEnv).publicBaseUrl)
+    expect(loadConfig({ ...base, APP_PORT: '9000' } as NodeJS.ProcessEnv).publicBaseUrl).toBe('http://127.0.0.1:9000')
+    expect(loadConfig({ ...base, APP_BASE_URL: 'https://mcp.stage.kkday.com/' } as NodeJS.ProcessEnv).publicBaseUrl)
       .toBe('https://mcp.stage.kkday.com')
   })
 
   it('rejects a non-URL publicBaseUrl without echoing its value', () => {
-    expect(() => loadConfig({ ...base, BE2_MCP_PUBLIC_BASE_URL: 'not-a-url' } as NodeJS.ProcessEnv))
-      .toThrowError(/BE2_MCP_PUBLIC_BASE_URL/)
+    expect(() => loadConfig({ ...base, APP_BASE_URL: 'not-a-url' } as NodeJS.ProcessEnv))
+      .toThrowError(/APP_BASE_URL/)
   })
 ```
 
@@ -77,8 +77,8 @@ Expected: FAIL（`bindHost`/`publicBaseUrl` 不存在於 Config；新案例紅�
 
 `EnvSchema`（`config.ts:28-37`）加兩行：
 ```ts
-  BE2_MCP_BIND_HOST: z.string().default('127.0.0.1'),
-  BE2_MCP_PUBLIC_BASE_URL: z.string().url().optional(),
+  APP_BIND_HOST: z.string().default('127.0.0.1'),
+  APP_BASE_URL: z.string().url().optional(),
 ```
 `Config` interface（`config.ts:39-47`）加兩欄：
 ```ts
@@ -87,21 +87,21 @@ Expected: FAIL（`bindHost`/`publicBaseUrl` 不存在於 Config；新案例紅�
 ```
 `loadConfig` return（`config.ts:78-86`）前計算並補回傳：
 ```ts
-  const publicBaseUrl = (e.BE2_MCP_PUBLIC_BASE_URL ?? `http://127.0.0.1:${e.BE2_MCP_PORT}`).replace(/\/$/, '')
+  const publicBaseUrl = (e.APP_BASE_URL ?? `http://127.0.0.1:${e.APP_PORT}`).replace(/\/$/, '')
   return {
     authsvcUrl: e.AUTHSVC_URL.replace(/\/$/, ''),
     gatewayUrl: e.GATEWAY_URL.replace(/\/$/, ''),
     serviceKey,
-    port: e.BE2_MCP_PORT,
+    port: e.APP_PORT,
     dbPath,
     otelMode: e.OTEL_MODE,
-    scheduleTz: e.BE2_TZ,
-    bindHost: e.BE2_MCP_BIND_HOST,
+    scheduleTz: e.APP_TZ,
+    bindHost: e.APP_BIND_HOST,
     publicBaseUrl,
   }
 ```
 > **注意**：欄位鍵是 `e.OTEL_MODE`（大寫，EnvSchema 定義的鍵），沿用原 `config.ts:84` 的 `otelMode: e.OTEL_MODE`，勿誤打小寫（會變 `undefined` → tsc 型別不符）。此 return 只是在原本欄位後追加 `bindHost`/`publicBaseUrl` 兩行，其餘欄位維持原樣。
-> 注意：`z.string().url()` 對 `not-a-url` 會讓 `safeParse` 失敗，錯誤路徑含 `BE2_MCP_PUBLIC_BASE_URL`，走既有「只印 key 名」分支（`config.ts:60-64`），值不外洩。
+> 注意：`z.string().url()` 對 `not-a-url` 會讓 `safeParse` 失敗，錯誤路徑含 `APP_BASE_URL`，走既有「只印 key 名」分支（`config.ts:60-64`），值不外洩。
 
 - [ ] **Step 4: 跑測試確認通過**
 
@@ -593,13 +593,13 @@ Expected: PASS（全綠）
 
 Run:
 ```bash
-BE2_ENV=sit-220 BE2_MCP_BIND_HOST=0.0.0.0 tsx src/index.ts &
+APP_ENV=sit-220 APP_BIND_HOST=0.0.0.0 tsx src/index.ts &
 PID=$!; sleep 2
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/healthz    # 200
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/readyz     # 200
 kill -TERM $PID; wait $PID 2>/dev/null; echo "exit=$?"                     # 乾淨退出、無 uncaught
 ```
-Expected: healthz/readyz 皆 200；SIGTERM 後 process 在數秒內退出、無「database is closed」。（需 `.env` 有 `SIT_AUTHSVC_SERVICE_KEY`；純啟動不打下游，缺 key 只影響 tool 呼叫。）
+Expected: healthz/readyz 皆 200；SIGTERM 後 process 在數秒內退出、無「database is closed」。（需 `.env` 有 `API_AUTH_SERVICE_KEY`；純啟動不打下游，缺 key 只影響 tool 呼叫。）
 
 - [ ] **Step 8: Commit**
 
@@ -654,7 +654,7 @@ Expected: 印出 `OK-index` / `OK-purge` / `OK-ui` / `OK-no-eval-tests`（四個
 
 Run:
 ```bash
-BE2_ENV=sit-220 BE2_MCP_BIND_HOST=0.0.0.0 node dist/src/index.js &
+APP_ENV=sit-220 APP_BIND_HOST=0.0.0.0 node dist/src/index.js &
 PID=$!; sleep 2; curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8787/healthz; kill -TERM $PID; wait $PID 2>/dev/null
 ```
 Expected: `200`（`node dist/src/index.js` 能起、healthz 綠）
@@ -735,9 +735,9 @@ Run:
 ```bash
 docker build -t be2-mcp:phaseA .
 docker run --rm -d --name be2mcp-smoke -p 18787:8787 \
-  -e BE2_ENV=stage -e STAGE_AUTHSVC_SERVICE_KEY=dummy \
-  -e BE2_MCP_BIND_HOST=0.0.0.0 -e BE2_MCP_PUBLIC_BASE_URL=https://mcp.stage.example \
-  -e BE2_MCP_ALLOWED_HOSTS=example -e BE2_MCP_DB_PATH=/tmp/be2.sqlite \
+  -e APP_ENV=stage -e API_AUTH_SERVICE_KEY=dummy \
+  -e APP_BIND_HOST=0.0.0.0 -e APP_BASE_URL=https://mcp.stage.example \
+  -e APP_ALLOWED_HOSTS=example -e APP_DB_PATH=/tmp/be2.sqlite \
   be2-mcp:phaseA
 sleep 3
 curl -s -o /dev/null -w 'healthz=%{http_code}\n' http://127.0.0.1:18787/healthz
@@ -769,7 +769,7 @@ git commit -m "build: multi-stage Dockerfile + pin Node 22 (cloud-ready Phase A)
 - [ ] **Step 1: 寫 `cloud-ready-phaseA-runbook.md`**
 
 內容至少涵蓋（散文，繁中）：
-- **必設 env**：`BE2_ENV=stage`、`STAGE_AUTHSVC_SERVICE_KEY`(Secret)、`BE2_MCP_BIND_HOST=0.0.0.0`、`BE2_MCP_PUBLIC_BASE_URL=https://<域名>`、`BE2_MCP_ALLOWED_HOSTS=<域名>`、`BE2_MCP_DB_PATH=<PVC 掛載點>`；**建議** `OTEL_MODE=otlp`+`OTEL_EXPORTER_OTLP_ENDPOINT`；**務必不設** `BE2_MCP_DEV_PANEL`。
+- **必設 env**：`APP_ENV=stage`、`API_AUTH_SERVICE_KEY`(Secret)、`APP_BIND_HOST=0.0.0.0`、`APP_BASE_URL=https://<域名>`、`APP_ALLOWED_HOSTS=<域名>`、`APP_DB_PATH=<PVC 掛載點>`；**建議** `OTEL_MODE=otlp`+`OTEL_EXPORTER_OTLP_ENDPOINT`；**務必不設** `APP_DEV_PANEL`。
 - **build/run**：`npm run build` → `node dist/src/index.js`；Docker `docker build` + `docker run`（含上面冒煙指令）。
 - **k8s（交 DevOps）契約**：replicas=1；PVC 需 **RWO block volume（非 NFS，WAL 安全）**、加密 storage class（承載明文 token）、備份 audit_log；probe liveness=`/healthz`、readiness=`/readyz`；`terminationGracePeriodSeconds ≥ 30`（app 內硬逾時 25s）；egress 放行 stage auth-service / api-gateway / OTLP collector；CronJob `node dist/scripts/oauth-purge.js` 每日。
 - **邊界**：單副本硬前提；HA（Postgres/Redis）是 Phase C；live stage e2e PENDING（依 DevOps 部署 + STAGE service key + 寫入權限）。
@@ -790,6 +790,6 @@ git commit -m "docs: cloud-ready Phase A runbook + DevOps env contract"
 - [ ] `npm run ci` 綠（含全部新測試）。
 - [ ] `npm run build` 產出 `dist/src/index.js`、`dist/scripts/oauth-purge.js`、`dist/ui/*.html`；`dist/eval`/`dist/tests` 不存在；`node dist/src/index.js` 能起。
 - [ ] `docker build` + `docker run` 冒煙全綠（或標 SKIP 註明待 Docker 環境）：healthz/readyz 200、discovery 帶注入 public base URL、evil Host 403、SIGTERM 乾淨退出。
-- [ ] **live stage EKS e2e = PENDING**（依 DevOps 部署 + `STAGE_AUTHSVC_SERVICE_KEY` + stage 寫入權限，沿用前面 phase 慣例）。
+- [ ] **live stage EKS e2e = PENDING**（依 DevOps 部署 + `API_AUTH_SERVICE_KEY` + stage 寫入權限，沿用前面 phase 慣例）。
 
 <!-- agy-peer-reviewed: 2026-08-27T07:00:05Z rounds=2 verdict=approved -->

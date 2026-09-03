@@ -1292,7 +1292,7 @@ describe('batch-wizard panel: inventory_setting 排程(塊 B)', () => {
     schedToggle.checked = true
     schedToggle.onchange!()
     expect(schedWall.hidden).toBe(false)
-    // §9：時區標籤顯示實際 BE2_TZ 值（來自 app_get_batch_view.schedule_tz），非通用「伺服器時區」
+    // §9：時區標籤顯示實際 APP_TZ 值（來自 app_get_batch_view.schedule_tz），非通用「伺服器時區」
     expect(wizardEl.textContent).toContain('時區：Asia/Taipei')
     expect(wizardEl.textContent).not.toContain('伺服器時區')
 

@@ -64,7 +64,7 @@ X 與 Y 動的檔不同 → **可真並行**；唯一交會點是 wizard 的 act
 > **merge 待使用者拍板**。
 
 ### 塊 C — 商品公告進 wizard（原接力包，留存）
-- **契約**：`docs/be2-mcp/sit-announcement-contract.md`（§6 list row + create 必填欄位；envelope `metadata.status "0000"`；header `x-api-key`(已在 `.env` `SIT_ANNOUNCE_API_KEY`) + `user-uuid`=JWT platformId）。
+- **契約**：`docs/be2-mcp/sit-announcement-contract.md`（§6 list row + create 必填欄位；envelope `metadata.status "0000"`；header `x-api-key`(已在 `.env` `API_ANNOUNCE_KEY`) + `user-uuid`=JWT platformId）。
 - **做什麼**：仿 `module-onboarding.md` 建 `announcement` module（svc-b2c 域，非 product 形狀——正好驗 `ActionModule` 介面通用性）；接 wizard 分頁；**生效時間走原生 `startTime`/`endTime` 欄位，不碰 B**。
 - **阻擋**：executor live 寫入卡 svc-b2c 的 **S2S token 403**（`sit-announcement-contract.md` §5）——可 build + 到 draft/staging；live 200 待授權釐清。**POST wire body 確切格式**待一次真 create 攔（list row + create 欄位已足以產 schema/renderer）。
 - **驗收**：不碰 core（module-onboarding 標準）；wizard 分頁能選商品→填公告→批准。

@@ -137,7 +137,7 @@ describe('DNS-Rebinding and Host Header Guard', () => {
     expect(res.status).toBe(403)
   })
 
-  it('supports custom allowed hosts via BE2_MCP_ALLOWED_HOSTS env', async () => {
+  it('supports custom allowed hosts via APP_ALLOWED_HOSTS env', async () => {
     const db = openDb(':memory:')
     const config: Config = {
       authsvcUrl: 'https://auth.invalid',
@@ -149,9 +149,9 @@ describe('DNS-Rebinding and Host Header Guard', () => {
       bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
     }
 
-    const prevEnv = process.env.BE2_MCP_ALLOWED_HOSTS
+    const prevEnv = process.env.APP_ALLOWED_HOSTS
     try {
-      process.env.BE2_MCP_ALLOWED_HOSTS = 'custom.corp.internal, another-host:9999'
+      process.env.APP_ALLOWED_HOSTS = 'custom.corp.internal, another-host:9999'
       const app = buildApp({ config, db })
       const server = createServer(app)
       await new Promise<void>(r => server.listen(0, () => r()))
@@ -172,9 +172,9 @@ describe('DNS-Rebinding and Host Header Guard', () => {
       }
     } finally {
       if (prevEnv === undefined) {
-        delete process.env.BE2_MCP_ALLOWED_HOSTS
+        delete process.env.APP_ALLOWED_HOSTS
       } else {
-        process.env.BE2_MCP_ALLOWED_HOSTS = prevEnv
+        process.env.APP_ALLOWED_HOSTS = prevEnv
       }
     }
   })

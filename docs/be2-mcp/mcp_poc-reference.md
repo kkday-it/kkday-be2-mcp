@@ -23,7 +23,7 @@
 
 | # | 軸 | 標題 | 級別 |
 |---|---|---|---|
-| S1 | 安全 | `BE2_MCP_DEV_PANEL=1` 讓兩個無認證 curl 完成自我批准 | **P0** |
+| S1 | 安全 | `APP_DEV_PANEL=1` 讓兩個無認證 curl 完成自我批准 | **P0** |
 | S2 | 安全 | dev panel 鑄的 static_bearer 是**永久憑證且 secret 寫在 repo 裡**，flag 關掉後仍有效 | **P0** |
 | S3 | 安全 | dev panel 的測試只驗「能不能跑」，沒有任何測試斷言它不該能批准 | P1 |
 | H1 | 幻覺 | `inventory_platform` 的 `affected_pkgs` 可被編造，且**逐列 provenance 遺失**（假列會顯示成已驗證） | P1 |
@@ -46,12 +46,12 @@
 
 ## 2. 安全性
 
-### S1（P0）`BE2_MCP_DEV_PANEL=1` 打穿「agent 結構上無法自我批准」
+### S1（P0）`APP_DEV_PANEL=1` 打穿「agent 結構上無法自我批准」
 
 **現象**：帶了這個 flag 起 server 之後，兩個無認證的 localhost POST 就能核准並執行任何一筆 pending change-set，不需要 SSO cookie、不需要人。
 
 **證據**
-- `src/server/app.ts:266-268` — flag gate，`process.env.BE2_MCP_DEV_PANEL === '1'` 就掛 `/dev`。
+- `src/server/app.ts:266-268` — flag gate，`process.env.APP_DEV_PANEL === '1'` 就掛 `/dev`。
 - `src/server/devPanelRoutes.ts:50` — `router.post('/panel-tool', ...)`，**整個 handler 沒有任何 bearer / cookie / nonce 檢查**。
 - `src/server/devPanelRoutes.ts:58-61` — 撈 `SELECT identity_id FROM be2_identities ORDER BY updated_at DESC LIMIT 1`，也就是「最近登入的那個人」＝剛示範登入的你。
 - `src/server/devPanelRoutes.ts:75-80` — 用 `DEV_SESSION_ID = 'dev-panel-session'` 呼叫**任何一支** `APP_TOOLS`。
@@ -116,7 +116,7 @@ POST /dev/panel-tool  {"name":"app_confirm_changeset",
 ### S3（P1）dev panel 的測試把「能執行」當成通過條件
 
 **證據**：`tests/devPanelRoutes.test.ts:47-86` 只有兩個案例——「flag off → 404」與「flag on → 面板 HTML 出來且 tool 跑得動」。**沒有任何案例斷言 dev 路由不該能批准、或不該鑄永久憑證。**
-另外 `.env.example` 完全沒提 `BE2_MCP_DEV_PANEL`，這個 flag 只活在 demo 文件裡——新人接手不會知道它存在。
+另外 `.env.example` 完全沒提 `APP_DEV_PANEL`，這個 flag 只活在 demo 文件裡——新人接手不會知道它存在。
 
 **建議修法**：把 S1/S2 的兩條斷言補進這個測試檔；`.env.example` 加一行註明「此 flag 僅供本機 harness，永不用於 prod」。
 
@@ -303,7 +303,7 @@ POST /dev/panel-tool  {"name":"app_confirm_changeset",
 
 ## 7. 給開發者的對焦順序建議
 
-1. **今天 demo 前**：決定帶不帶 `BE2_MCP_DEV_PANEL` flag（S1）；查 SIT DB 有沒有殘留 dev credential（S2）。
+1. **今天 demo 前**：決定帶不帶 `APP_DEV_PANEL` flag（S1）；查 SIT DB 有沒有殘留 dev credential（S2）。
 2. **demo 後第一批**：S1 + S2 + S3（一起做，同一個 PR），U2（list 工具，便宜且回報高）。
 3. **第二批**：U1 的定位對焦（這題要人決定，不是 code），H1 + H2（都是 provenance / 介面收斂），H3。
 4. **第三批**：X1 前兩個破口、U3 的錯誤碼對照表、X4。

@@ -10,7 +10,7 @@
 - [ ] **Identity 新鮮度**：確定上次登入距離現在小於 12 小時 (refresh 仍有效)；保險起見，**建議現場砍掉重登**展示完整 OAuth 流程。
 - [ ] **Claude Desktop 設定**：`claude_desktop_config.json` 確認已使用 `mcp-remote` 指向 `http://127.0.0.1:8787/mcp`。
 - [ ] **標的商品準備**：預選可安全操作的測試商品 OID `34133` (以及備用的 `9468`)；**確認示範方案現況**（1944031 上架中 → 排程方向選「下架」，見 131105 教訓）。
-- [ ] **備案預埋**：server 以 `BE2_MCP_DEV_PANEL=1 npm run dev` 啟動，備案面板隨時可切。
+- [ ] **備案預埋**：server 以 `APP_DEV_PANEL=1 npm run dev` 啟動，備案面板隨時可切。
 
 > 完整彩排結果見 [`demo-rehearsal-2026-08-16.md`](./demo-rehearsal-2026-08-16.md)。
 
@@ -58,7 +58,7 @@
 
 | 突發狀況 | 備案處理 | 備註 |
 |---|---|---|
-| **SIT 掛了或 Gateway timeout** | 改開 `http://127.0.0.1:8787/dev/panel/batch-wizard` harness。**前提：server 一開始就要用 `BE2_MCP_DEV_PANEL=1 npm run dev` 啟動（彩排實測沒帶 flag 是 404）**，local-only。 | 證明面板渲染與機制正常，僅後端無回應。 |
+| **SIT 掛了或 Gateway timeout** | 改開 `http://127.0.0.1:8787/dev/panel/batch-wizard` harness。**前提：server 一開始就要用 `APP_DEV_PANEL=1 npm run dev` 啟動（彩排實測沒帶 flag 是 404）**，local-only。 | 證明面板渲染與機制正常，僅後端無回應。 |
 | **Tool call 說過期 401** | **正好展示 L2 Refresh！** 但如果連 refresh 12h 都過期，只需請 AI 重試觸發重走 OAuth。 | 「看，我們的 12 小時安全憑證正好過期了，機制正常運作。」 |
 | **Desktop 面板出不來 (純文字)** | **順勢展演「退路 (Fallback)」**。點擊終端機/純文字給的連結，到瀏覽器完成 SSO 核准。 | 「當 UI 渲染失敗或你在無頭環境，系統會自動降級到無懈可擊的瀏覽器 SSO 確認。」 |
 

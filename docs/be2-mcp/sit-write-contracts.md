@@ -28,8 +28,8 @@ Conclusions:
 - **`modify_user` = JWT `platformId`** reconfirmed (the successful stage PUT uses it).
 
 ### Still needed for a fully-green live write THROUGH our code
-Our code can't reproduce the stage write yet because **`.env` has `STAGE_pwd` and `STAGE_AUTHSVC_SERVICE_KEY` empty** (only `STAGE_email` set), and the curl's bearer is a ~5-min token (expired). To close it, ONE of:
-1. Fill `STAGE_pwd` + `STAGE_AUTHSVC_SERVICE_KEY` in `.env` → run the executor/probe against stage hosts (`auth.stage.kkday.com` / `api-gateway.stage.kkday.com`) for a reversible toggle+revert; OR
+Our code can't reproduce the stage write yet because **`.env` has `STAGE_pwd` and `API_AUTH_SERVICE_KEY` empty** (only `STAGE_email` set), and the curl's bearer is a ~5-min token (expired). To close it, ONE of:
+1. Fill `STAGE_pwd` + `API_AUTH_SERVICE_KEY` in `.env` → run the executor/probe against stage hosts (`auth.stage.kkday.com` / `api-gateway.stage.kkday.com`) for a reversible toggle+revert; OR
 2. Paste a fresh stage be2 bearer (validity ~5 min) to drive `GatewayClient.put` directly; OR
 3. Grant this account write authz on a be2-220 test product (keeps everything on the SIT anchor).
 
@@ -103,7 +103,7 @@ No `tests/fixtures/inventory-quantities.json` was written — the script's guard
 
 The `.env` SIT account is **not mapped to any supplier** on be2-220 for the tested item (or any item — `/status` has no supplier dimension so it can't discriminate; the 403 is specifically on the `{supplierOid}` path segment). Two independent unblock paths, either sufficient:
 1. **be2-220 grant**: get this account mapped as a supplier for a test item on be2-220 (ask whoever owns supplier assignment — likely the same grant surface as the Phase 2a shelf-write grant, but scoped to inventory/supplier rather than product-sale-status).
-2. **stage**: `.env`'s `STAGE_pwd` and `STAGE_AUTHSVC_SERVICE_KEY` are still empty (unchanged since Phase 2a) — filling them would let this probe run against stage, where the account may already have supplier mappings (per the Phase 2a stage shelf-toggle success, stage authz differs from be2-220 for this account).
+2. **stage**: `.env`'s `STAGE_pwd` and `API_AUTH_SERVICE_KEY` are still empty (unchanged since Phase 2a) — filling them would let this probe run against stage, where the account may already have supplier mappings (per the Phase 2a stage shelf-toggle success, stage authz differs from be2-220 for this account).
 
 **Downstream consequence for Phase 3a Tasks 2–9**: Q1–Q6 stay open. Per the plan (Task 1 interface note), later tasks proceed with **defensive/tolerant parsing** of the inventory quantities shape (accept either a `total`/`remaining`-style field, don't assume merge vs replace, cap batch size defensively) rather than a shape confirmed against a real 200. Task 9's live e2e exit gate goes **PENDING** on this same blocker, exactly as Task 10 did for the shelf-toggle in Phase 2a.
 
@@ -330,7 +330,7 @@ be2-web UI 完整鏈路已從原始碼證實(`kkday-be2-web` + `kkday-be2-api`,�
 
 ## mid→oid resolver fixture(Task 7,2026-09-02)
 
-供 `tests/midOidResolver.integration.test.ts`(fixture-gated live 整合測試,`describe.skipIf(!process.env.BE2_LIVE_BEARER)`)與未來任何需要「真實舊商品 `prod_oid ≠ prod_mid`」測資的人使用。
+供 `tests/midOidResolver.integration.test.ts`(fixture-gated live 整合測試,`describe.skipIf(!process.env.APP_LIVE_BEARER)`)與未來任何需要「真實舊商品 `prod_oid ≠ prod_mid`」測資的人使用。
 
 ### 候選 fixture pair(spec §2.3,尚未 live 重驗)
 
@@ -366,5 +366,5 @@ GET /product/api/v1/drafts/products/mid-{mid}/info
 2. 對上表兩組候選 `(mid, oid)` 打一次 `GET /product/api/v1/drafts/products/mid-{mid}/info`,記錄:
    - `prod_oid` 欄位的實際位置(頂層 or 巢狀)——若非頂層,依上節「bugfix」段補 `resolveProdOid()` fallback + 單元測試。
    - 該 mid 是否仍解析到上表記錄的 oid(商品可能已下架/oid 回收,見 memory `be2-stage-fixture-volatile`)。
-3. 匯出 `BE2_LIVE_BEARER=<剛登入的 be2 access token>`(不要 commit、不要 log),視需要另設 `BE2_LIVE_MID_FIXTURE`/`BE2_LIVE_OID_FIXTURE` 覆寫預設候選值,執行 `npx vitest run tests/midOidResolver.integration.test.ts`。
+3. 匯出 `APP_LIVE_BEARER=<剛登入的 be2 access token>`(不要 commit、不要 log),視需要另設 `APP_LIVE_MID_FIXTURE`/`APP_LIVE_OID_FIXTURE` 覆寫預設候選值,執行 `npx vitest run tests/midOidResolver.integration.test.ts`。
 4. 兩案例綠燈後,回本節把「PENDING」改記為已驗證(含日期、環境、實際跑出的 oid)。

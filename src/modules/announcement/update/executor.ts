@@ -69,7 +69,7 @@ export async function executeAnnouncementUpdateWith(
 }
 
 export async function executeAnnouncementUpdate(ctx: ExecCtx, rec: ChangeSetRecord): Promise<ItemResult[]> {
-  // 安全建構：無 SIT_ANNOUNCE_API_KEY 時 makeAnnouncementClient() 會 throw。同步拋出會讓整個執行段
+  // 安全建構：無 API_ANNOUNCE_KEY 時 makeAnnouncementClient() 會 throw。同步拋出會讓整個執行段
   // 崩潰（而非把每筆標 failed）——改為 catch 後把每筆 item 記為 failed（同 create/executor 的模式）。
   let client: AnnouncementClient
   try {
