@@ -12,6 +12,7 @@ import { TokenManager } from '../auth/tokenManager.js'
 import { AuthServiceClient } from '../auth/authServiceClient.js'
 import { GatewayClient } from '../gateway/client.js'
 import { AuditLog } from '../audit/auditLog.js'
+import { buildOnReauthRequired } from '../auth/reauthAudit.js'
 import { RateBudget } from '../limits/rateBudget.js'
 import { AppRateBudget } from '../limits/appRateBudget.js'
 import { ChangeSetStore } from '../core/changeset/store.js'
@@ -105,17 +106,13 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // client 註冊；authorization_code/refresh 由 Task 8/9 接續使用同一個 OAuthStore 實例的
   // 其他方法。
   const oauthStore = new OAuthStore(db)
+  const audit = new AuditLog(db, Date.now, { stdout: config.auditStdout, env: config.appEnv })
   // Task 2: TokenManager 直接操作 identity 層（be2 refresh 只在 identity 這格 rotate 一次，
   // 多個 credential 共用同一 identity 時不會互撞）。
   const tokenManager = new TokenManager({ identities, credentials }, authServiceClient, {
-    onReauthRequired: async (identityId) => {
-      // identity 列刻意留下（oauth-purge 會清 ghost），web_session/static_bearer 一併撤銷是刻意的——同一 identity 的 be2 refresh 死了，所有面向的憑證都已無法服務。
-      await credentials.deleteByIdentity(identityId)
-      await oauthStore.deleteRefreshByIdentity(identityId)
-    }
+    onReauthRequired: buildOnReauthRequired({ credentials, oauthStore, identities, audit })
   })
   const rateBudget = new RateBudget(db)
-  const audit = new AuditLog(db, Date.now, { stdout: config.auditStdout, env: config.appEnv })
   const gateway = new GatewayClient({ baseUrl: config.gatewayUrl })
   const readOids = new ReadOidStore(db)
   const changeSets = new ChangeSetStore(db)

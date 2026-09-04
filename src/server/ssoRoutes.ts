@@ -12,6 +12,7 @@ import type { TokenManager } from '../auth/tokenManager.js'
 import { requireSession } from './sessionGate.js'
 import { revokeGrant } from '../oauth/revocation.js'
 import { esc } from '../core/changeset/html.js'
+import { randomTraceId } from '../auth/reauthAudit.js'
 
 export interface SsoDeps {
   authServiceClient: AuthServiceClient; identities: IdentityStore; credentials: CredentialStore; webSessions: WebSessionStore
@@ -114,6 +115,11 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
       expiresAt: null, updatedAt: deps.now(),
     })
     await deps.webSessions.create(sessionId, identity.identityId)
+    await deps.audit.record({
+      userLabel: identity.userLabel, sessionId: '-', clientInfo: 'confirm-sso',
+      tool: 'sso.login', params: {}, status: 'ok',
+      eventType: 'authn.login', severity: 'INFO', traceId: randomTraceId(), durationMs: 0,
+    })
     res.setHeader('Set-Cookie', serializeSetCookie('be2mcp_sid', sessionId, { httpOnly: true, sameSite: 'Lax', path: '/confirm' }))
     res.status(200).json({ ok: true })
   }))
