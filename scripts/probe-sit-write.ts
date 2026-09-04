@@ -1,7 +1,7 @@
 import { loadConfig } from '../src/config.js'
 import { AuthServiceClient } from '../src/auth/authServiceClient.js'
 import { decodeJwtExpMs } from '../src/auth/jwt.js'
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { saveFixture, decodeJwtClaims, gw as gwReq } from './probeShared.js'
 
 // Manual only: npm run probe-sit-write -- <managedProdOid> [pkgOid]
 // Resolves modify_user, merge-vs-replace, required fields, gateway-403 behavior.
@@ -11,26 +11,8 @@ if (!prodOid) { console.error('usage: npm run probe-sit-write -- <managedProdOid
 const cfg = loadConfig()
 const auth = new AuthServiceClient({ baseUrl: cfg.authsvcUrl, serviceKey: cfg.serviceKey })
 
-function decodeJwtClaims(jwt: string): Record<string, unknown> {
-  return JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString('utf8'))
-}
-function save(name: string, body: unknown) {
-  mkdirSync('tests/fixtures/write', { recursive: true })
-  const json = JSON.stringify(body, null, 2)
-  if (/eyJ[A-Za-z0-9_-]{20,}/.test(json)) throw new Error(`fixture ${name} contains a JWT — refusing`)
-  writeFileSync(`tests/fixtures/write/${name}.json`, json)
-  console.log(`fixture: tests/fixtures/write/${name}.json`)
-}
-async function gw(at: string, method: string, path: string, body?: unknown) {
-  const res = await fetch(`${cfg.gatewayUrl}${path}`, {
-    method,
-    headers: { authorization: `Bearer ${at}`, accept: 'application/json', 'x-auth-id': 'be2', 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
-  const j = await res.json().catch(() => ({}))
-  console.log(`${method} ${path} -> ${res.status}`)
-  return { status: res.status, body: (j as { data?: unknown }).data ?? j }
-}
+const save = (name: string, body: unknown) => saveFixture(`write/${name}.json`, body)
+const gw = (at: string, method: string, path: string, body?: unknown) => gwReq(cfg.gatewayUrl, at, method, path, body)
 
 async function main() {
   const { authorizationCode } = await auth.login(process.env.AUTH_email!, process.env.AUTH_pwd!)

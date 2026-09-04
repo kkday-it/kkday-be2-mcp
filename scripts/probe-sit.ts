@@ -1,7 +1,7 @@
 import { loadConfig } from '../src/config.js'
 import { AuthServiceClient } from '../src/auth/authServiceClient.js'
 import { decodeJwtExpMs } from '../src/auth/jwt.js'
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { saveFixture, shape } from './probeShared.js'
 
 // Probes SIT be2-220 contracts. Manual run only: npm run probe-sit -- <prodOid> [itemOid]
 // Prints STRUCTURE (keys/types) to stdout, writes full sanitized bodies to tests/fixtures/.
@@ -13,22 +13,9 @@ if (!prodOid) { console.error('usage: npm run probe-sit -- <prodOid> [itemOid]')
 const cfg = loadConfig()
 const auth = new AuthServiceClient({ baseUrl: cfg.authsvcUrl, serviceKey: cfg.serviceKey })
 
-function saveFixture(name: string, body: unknown) {
-  mkdirSync('tests/fixtures', { recursive: true })
-  // Save UNWRAPPED, matching what GatewayClient.get() actually hands to tools (body.data ?? body).
-  const unwrapped = (body as { data?: unknown })?.data ?? body
-  const json = JSON.stringify(unwrapped, null, 2)
-  if (/eyJ[A-Za-z0-9_-]{20,}/.test(json)) throw new Error(`fixture ${name} appears to contain a JWT — refusing to write`)
-  writeFileSync(`tests/fixtures/${name}.json`, json)
-  console.log(`fixture written: tests/fixtures/${name}.json`)
-}
-
-function shape(v: unknown, depth = 0): unknown {
-  if (depth > 3) return '...'
-  if (Array.isArray(v)) return v.length ? [shape(v[0], depth + 1), `(+${v.length - 1} more)`] : []
-  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, shape(x, depth + 1)]))
-  return typeof v
-}
+// Save UNWRAPPED, matching what GatewayClient.get() actually hands to tools (body.data ?? body).
+const save = (name: string, body: unknown) =>
+  saveFixture(`${name}.json`, (body as { data?: unknown })?.data ?? body)
 
 async function gatewayGet(accessToken: string, path: string): Promise<{ status: number; body: unknown }> {
   const res = await fetch(`${cfg.gatewayUrl}${path}`, {
@@ -72,8 +59,8 @@ async function main() {
   }
   for (const [name, path] of probes) {
     const { status, body } = await gatewayGet(at, path)
-    if (status === 200) { saveFixture(name, body); console.log(JSON.stringify(shape(body), null, 2)) }
-    else console.log('  body shape:', JSON.stringify(shape(body)))
+    if (status === 200) { save(name, body); console.log(JSON.stringify(shape(body, 0, 3), null, 2)) }
+    else console.log('  body shape:', JSON.stringify(shape(body, 0, 3)))
   }
 }
 main().catch(e => { console.error('probe failed:', e.code ?? '', e.message); process.exit(1) })
