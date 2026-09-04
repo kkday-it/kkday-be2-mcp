@@ -30,6 +30,7 @@ export function makeScheduler(deps: SchedulerDeps, opts: Partial<typeof SCHEDULE
           await deps.audit.record({ userLabel: rec.executorRef.userLabel, sessionId: rec.executorRef.sessionId,
             clientInfo: 'scheduler', tool: 'schedule.execute',
             params: { changeset_id: id }, status: 'error',
+            eventType: 'governance.scheduler', severity: 'ERROR',
             errorMessage: `AUTH_EXPIRED: ${(e as Error).message}`, traceId: 'n/a', durationMs: 0 })
         }
       } else {
@@ -48,7 +49,8 @@ export function makeScheduler(deps: SchedulerDeps, opts: Partial<typeof SCHEDULE
       // 假的 reclaim 紀錄。
       if (await deps.changeSets.releaseClaim(id)) {
         await deps.audit.record({ userLabel: 'scheduler', sessionId: 'scheduler', clientInfo: 'scheduler',
-          tool: 'schedule.reclaim', params: { changeset_id: id }, status: 'ok', traceId: 'n/a', durationMs: 0 })
+          tool: 'schedule.reclaim', params: { changeset_id: id }, status: 'ok',
+          eventType: 'governance.scheduler', severity: 'INFO', traceId: 'n/a', durationMs: 0 })
       }
     }
     // (1)(2)(3) 到期處理
@@ -59,6 +61,7 @@ export function makeScheduler(deps: SchedulerDeps, opts: Partial<typeof SCHEDULE
         if (await deps.changeSets.casStatus(id, 'scheduled', 'missed')) {
           await deps.audit.record({ userLabel: 'scheduler', sessionId: 'scheduler', clientInfo: 'scheduler',
             tool: 'schedule.missed', params: { changeset_id: id }, status: 'error',
+            eventType: 'governance.scheduler', severity: 'ERROR',
             errorMessage: 'missed: server was down past the grace window; re-create the schedule',
             traceId: 'n/a', durationMs: 0 })
         }
@@ -73,11 +76,13 @@ export function makeScheduler(deps: SchedulerDeps, opts: Partial<typeof SCHEDULE
       const out = await deps.tokenManager.keepAlive(ids, { windowMs: p.keepAliveWindowMs, claimTtlMs: p.tickMs })
       for (const iid of out.refreshed) {
         await deps.audit.record({ userLabel: 'scheduler', sessionId: 'scheduler', clientInfo: 'scheduler',
-          tool: 'schedule.keepalive', params: { identity: iid }, status: 'ok', traceId: 'n/a', durationMs: 0 })
+          tool: 'schedule.keepalive', params: { identity: iid }, status: 'ok',
+          eventType: 'governance.scheduler', severity: 'INFO', traceId: 'n/a', durationMs: 0 })
       }
       for (const f of out.failed) {
         await deps.audit.record({ userLabel: 'scheduler', sessionId: 'scheduler', clientInfo: 'scheduler',
           tool: 'schedule.keepalive', params: { identity: f.identityId }, status: 'error',
+          eventType: 'governance.scheduler', severity: 'ERROR',
           errorMessage: f.code, traceId: 'n/a', durationMs: 0 })
         // terminal(撤權/identity 消失):identity 已死,到 T 也必失敗——立即 fail 其名下所有
         // 排程件(fail-closed 提早浮現)。否則 claim TTL 一過,每 tick 重打 auth-service 直到 T
@@ -92,6 +97,7 @@ export function makeScheduler(deps: SchedulerDeps, opts: Partial<typeof SCHEDULE
                 sessionId: rec?.executorRef?.sessionId ?? 'scheduler',
                 clientInfo: 'scheduler',
                 tool: 'schedule.execute', params: { changeset_id: cid }, status: 'error',
+                eventType: 'governance.scheduler', severity: 'ERROR',
                 errorMessage: `AUTH_EXPIRED (keep-alive): ${f.code}`, traceId: 'n/a', durationMs: 0 })
             }
           }
@@ -108,6 +114,7 @@ export function makeScheduler(deps: SchedulerDeps, opts: Partial<typeof SCHEDULE
       await deps.audit.record({
         userLabel: 'scheduler', sessionId: 'scheduler', clientInfo: 'scheduler',
         tool: 'schedule.stranded_executing', params: { changeset_id: id }, status: 'error',
+        eventType: 'governance.scheduler', severity: 'ERROR',
         errorMessage: 'stranded in executing (process crash mid-execution?); manual review required',
         traceId: 'n/a', durationMs: 0,
       })

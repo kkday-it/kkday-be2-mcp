@@ -162,6 +162,7 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
         // not only hard failures.
         await deps.audit.record({ userLabel, sessionId: reqCtx.sessionId, clientInfo: reqCtx.clientInfo,
           tool: `app/${tool.name}`, params: auditParams, status, errorMessage: message,
+          eventType: 'tool_call', severity: status === 'ok' ? 'INFO' : 'ERROR',
           traceId, durationMs: Date.now() - started })
         span.end()
       }

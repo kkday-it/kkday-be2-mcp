@@ -101,6 +101,8 @@ function runWrapped<Ctx>(
           // message may be set even when status==='ok' (partial errors / degrade warnings) —
           // record it so the audit trail shows warn-and-proceed outcomes, not just failures.
           params: args, status, errorMessage: message,
+          eventType: 'tool_call',
+          severity: status === 'ok' ? 'INFO' : 'ERROR',
           traceId, durationMs: Date.now() - started,
         })
         span.end()

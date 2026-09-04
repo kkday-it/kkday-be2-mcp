@@ -266,6 +266,8 @@ describe('approveAndExecute — audit clientInfo prefix (Task 11 Finding 3)', ()
     })
     const row = (await audit.recent()).find(r => r.tool === 'changeset.approve')!
     expect(row.clientInfo).toBe('confirm-page:Mozilla/5.0 test-agent')
+    expect(row.eventType).toBe('approval')
+    expect(row.severity).toBe('INFO')
   })
 
   it('panel channel records a "panel:" prefix', async () => {

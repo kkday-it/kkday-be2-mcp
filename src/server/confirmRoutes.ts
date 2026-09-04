@@ -161,7 +161,9 @@ ${view.tableHtml}
       userLabel: who.userLabel, sessionId: who.sessionId,
       clientInfo: 'confirm-page:' + String(req.headers['user-agent'] ?? '').slice(0, 80),
       tool: 'changeset.cancel', params: { changeset_id: rec.id, ip: req.ip },
-      status: 'ok', traceId: 'n/a', durationMs: 0,
+      status: 'ok',
+      eventType: 'rejection', severity: 'INFO',
+      traceId: 'n/a', durationMs: 0,
     })
     res.status(200).send('已取消排程')
   }))
@@ -180,7 +182,9 @@ ${view.tableHtml}
       userLabel: who.userLabel, sessionId: who.sessionId,
       clientInfo: 'confirm-page:' + String(req.headers['user-agent'] ?? '').slice(0, 80),
       tool: 'changeset.reject', params: { changeset_id: rec.id, ip: req.ip },
-      status: 'ok', traceId: 'n/a', durationMs: 0,
+      status: 'ok',
+      eventType: 'rejection', severity: 'INFO',
+      traceId: 'n/a', durationMs: 0,
     })
     res.status(200).send('rejected')
   }))

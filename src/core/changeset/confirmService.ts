@@ -121,7 +121,9 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
       clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
       tool: 'changeset.approve',
       params: { changeset_id: rec.id, ip: audit?.ip, channel, scheduled_for: rec.schedule.executeAtUtc },
-      status: 'ok', traceId: 'n/a', durationMs: 0,
+      status: 'ok',
+      eventType: 'approval', severity: 'INFO',
+      traceId: 'n/a', durationMs: 0,
     })
     return { scheduled: true }
   }
@@ -143,7 +145,9 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
     clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
     tool: 'changeset.approve',
     params: { changeset_id: rec.id, ip: audit?.ip, channel },
-    status: 'ok', traceId: 'n/a', durationMs: 0,
+    status: 'ok',
+    eventType: 'approval', severity: 'INFO',
+    traceId: 'n/a', durationMs: 0,
   })
 
   // (4) execute.

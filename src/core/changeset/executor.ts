@@ -68,6 +68,8 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
       userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: clientInfoFor(who), tool: 'changeset.execute',
       params: { changeset_id: changesetId, item: r.item_key },
       status: (r.status === 'done' || r.status === 'skipped_noop') ? 'ok' : 'error',
+      eventType: 'execution',
+      severity: (r.status === 'done' || r.status === 'skipped_noop') ? 'INFO' : 'ERROR',
       errorMessage: r.error_message, traceId: r.trace_id, durationMs: 0,
     })
   }

@@ -35,6 +35,8 @@
 | **G8** | **oauth-purge 執行結果未留痕**<br>清理過期憑證的治理作業未寫入 audit。 | 內部維運治理作業必須留存紀錄，以備查核資料庫清理合法性。 | `governance.oauth_purge` | P2 |
 | **G9** | **導出能力不足**<br>日誌只存在本地 SQLite，無串接 SIEM 或送出管道；OTel Logs 亦未啟用。 | 單機 SQLite 損毀即遺失軌跡，無法納入公司級集中監控 (Kibana) 與即時告警體系。 | N/A (見第三章設計) | P0 |
 
+已定案事件名（2026-09-04 實作）：`tool_call` / `approval` / `rejection` / `execution` / `governance.scheduler` / `authn.login`（Task 4 用）/ `security.token_revoked` / `security.reauth_required` / `authn.unauthorized_attempt`。
+
 ---
 
 ## 3. Kibana 導出設計

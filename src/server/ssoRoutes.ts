@@ -170,7 +170,9 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
       await deps.audit.record({
         userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-connections',
         tool: 'confirm_connections_revoke_all', params: { identity_id: conn.identityId },
-        status: 'ok', traceId: '-', durationMs: 0,
+        status: 'ok',
+        eventType: 'security.token_revoked', severity: 'CRITICAL',
+        traceId: '-', durationMs: 0,
       })
       n++
     }

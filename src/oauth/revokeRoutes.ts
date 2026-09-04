@@ -52,7 +52,9 @@ export function buildRevokeRouter(deps: RevokeDeps): express.Router {
       await deps.audit.record({
         userLabel: revoked?.userLabel ?? 'unknown', sessionId: '-', clientInfo: 'oauth-revoke',
         tool: 'oauth_revoke', params: { kind, client_id: clientId || undefined, cred_hash_prefix: hash.slice(0, 8) },
-        status: 'ok', traceId: '-', durationMs: 0,
+        status: 'ok',
+        eventType: 'security.token_revoked', severity: 'CRITICAL',
+        traceId: '-', durationMs: 0,
       })
       res.status(200).end()
     })().catch(() => { if (!res.headersSent) res.status(500).json({ error: 'server_error' }) })
