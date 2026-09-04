@@ -115,7 +115,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     }
   })
   const rateBudget = new RateBudget(db)
-  const audit = new AuditLog(db)
+  const audit = new AuditLog(db, Date.now, { stdout: config.auditStdout, env: config.appEnv })
   const gateway = new GatewayClient({ baseUrl: config.gatewayUrl })
   const readOids = new ReadOidStore(db)
   const changeSets = new ChangeSetStore(db)

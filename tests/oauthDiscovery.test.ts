@@ -13,7 +13,7 @@ beforeAll(async () => {
   db = await openTestDb()
   const config: Config = {
     authsvcUrl: 'https://auth.invalid', gatewayUrl: 'https://gw.invalid',
-    serviceKey: 'sk', port: 0, db: { host: 'localhost', ssl: false }, schedulerMode: 'poller', otelMode: 'off', scheduleTz: 'Asia/Taipei',
+    serviceKey: 'sk', port: 0, db: { host: 'localhost', ssl: false }, schedulerMode: 'poller', auditStdout: false, otelMode: 'off', scheduleTz: 'Asia/Taipei',
     bindHost: '127.0.0.1', publicBaseUrl: 'https://mcp.stage.example',
   }
   const app = buildApp({ config, db })

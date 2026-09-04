@@ -13,15 +13,44 @@ export interface AuditEntry {
 const JWT_RE = /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}(\.[A-Za-z0-9_-]*)?/g
 
 export class AuditLog {
-  constructor(private db: Db, private now: () => number = Date.now) {}
+  constructor(
+    private db: Db,
+    private now: () => number = Date.now,
+    private opts: { stdout?: boolean; env?: string } = {},
+  ) {}
 
   async record(e: AuditEntry): Promise<void> {
     const paramsJson = JSON.stringify(e.params ?? {}).replace(JWT_RE, '[REDACTED_TOKEN]')
+    // 先 stdout（獨立 fallback 軌）、後 DB——DB 故障不得滅掉 SIEM 軌跡（spec §3.2）。
+    this.emitStdout(e, paramsJson)
     await this.db.query(`
       INSERT INTO audit_log (ts, user_label, session_id, client_info, tool, params_json, status, error_message, trace_id, duration_ms, event_type, severity)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
     `, [this.now(), e.userLabel, e.sessionId, e.clientInfo, e.tool, paramsJson, e.status, e.errorMessage ?? null,
         e.traceId, e.durationMs, e.eventType ?? 'tool_call', e.severity ?? 'INFO'])
+  }
+
+  // ECS 對映（gap analysis §3.3）。stdout 例外吞掉：導出軌是 best-effort，不影響 DB 真相。
+  private emitStdout(e: AuditEntry, paramsJson: string): void {
+    if (!this.opts.stdout) return
+    try {
+      console.log(JSON.stringify({
+        '@timestamp': new Date(this.now()).toISOString(),
+        'system.service_name': 'be2-mcp',
+        env: this.opts.env ?? 'local',
+        'user.name': e.userLabel,
+        'event.type': e.eventType ?? 'tool_call',
+        'log.level': e.severity ?? 'INFO',
+        'trace.id': e.traceId,
+        'mcp.session_id': e.sessionId,
+        'mcp.tool': e.tool,
+        'mcp.client_info': e.clientInfo,
+        'mcp.status': e.status,
+        'mcp.error_message': e.errorMessage,
+        'mcp.duration_ms': e.durationMs,
+        'mcp.params': paramsJson,
+      }))
+    } catch { /* swallow */ }
   }
 
   async recent(limit = 50): Promise<Array<AuditEntry & { ts: number }>> {

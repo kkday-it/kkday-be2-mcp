@@ -61,7 +61,7 @@ describe('DNS-Rebinding and Host Header Guard', () => {
       serviceKey: 'sk',
       port: 0,
       db: { host: 'localhost', ssl: false },
-      schedulerMode: 'poller',
+      schedulerMode: 'poller', auditStdout: false,
       otelMode: 'off', scheduleTz: 'Asia/Taipei',
       bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
     }
@@ -146,7 +146,7 @@ describe('DNS-Rebinding and Host Header Guard', () => {
       serviceKey: 'sk',
       port: 0,
       db: { host: 'localhost', ssl: false },
-      schedulerMode: 'poller',
+      schedulerMode: 'poller', auditStdout: false,
       otelMode: 'off', scheduleTz: 'Asia/Taipei',
       bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
     }

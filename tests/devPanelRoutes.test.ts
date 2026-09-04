@@ -38,7 +38,7 @@ describe('Dev Panel Harness (APP_DEV_PANEL flag)', () => {
   })
 
   async function startApp() {
-    const config: Config = { authsvcUrl: 'http://a', gatewayUrl: 'http://g', serviceKey: 'sk', port: 0, db: { host: 'localhost', ssl: false }, schedulerMode: 'poller', otelMode: 'off', scheduleTz: 'Asia/Taipei', bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0' }
+    const config: Config = { authsvcUrl: 'http://a', gatewayUrl: 'http://g', serviceKey: 'sk', port: 0, db: { host: 'localhost', ssl: false }, schedulerMode: 'poller', auditStdout: false, otelMode: 'off', scheduleTz: 'Asia/Taipei', bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0' }
     const app = buildApp({ config, db })
     server = app.listen(0)
     await new Promise(r => server.on('listening', r as () => void))

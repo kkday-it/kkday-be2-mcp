@@ -6,6 +6,7 @@ import 'dotenv/config'
 // APP_ENV 只當標籤（log），不再選 host / key。
 const EnvSchema = z.object({
   APP_ENV: z.enum(['sit', 'stage', 'prod']).optional(),
+  APP_AUDIT_STDOUT: z.enum(['true', 'false']).default('false'),
   AUTHSVC_URL: z.string().url(),
   GATEWAY_URL: z.string().url(),
   API_AUTH_SERVICE_KEY: z.string().min(1),
@@ -56,6 +57,8 @@ export interface Config {
   scheduleTz: string
   bindHost: string
   publicBaseUrl: string
+  auditStdout: boolean
+  appEnv?: 'sit' | 'stage' | 'prod'
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -88,5 +91,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     scheduleTz: e.APP_TZ,
     bindHost: e.APP_BIND_HOST,
     publicBaseUrl,
+    auditStdout: e.APP_AUDIT_STDOUT === 'true',
+    appEnv: e.APP_ENV,
   }
 }
