@@ -12,6 +12,7 @@
     "probe-sit": "tsx scripts/probe-sit.ts",
     "probe-sit-write": "tsx scripts/probe-sit-write.ts",
     "probe-sit-inventory": "tsx scripts/probe-sit-inventory.ts",
+    "probe-sit-bm": "tsx scripts/probe-sit-bluemountain.ts",
     "oauth-purge": "tsx scripts/oauth-purge.ts",
     "build:ui": "node scripts/build-ui.mjs",
     "build": "tsc -p tsconfig.build.json && npm run build:ui",
