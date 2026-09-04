@@ -29,6 +29,8 @@
 
 gateway ACL 允許的 header 白名單（response header `access-control-allow-headers` 揭露）：`Content-Type, Authorization, request-uuid, x-deputy-oid, x-auth-id, x-api-key, user-uuid`。
 
+**`request-uuid` 貫穿已 live 驗證（2026-09-04，SIT be2-220）**：以我方 `AnnouncementClient` 帶自訂 `request-uuid`（`f3aclcheck` 前綴）GET 公告列表（200），Kibana `new-kklog-*` 以 `request.uuid:"<uuid>"` 撈到 **9 hits**：svc-b2c REQUEST/RESPONSE（`api/v1/admin/product/announcement`）、auth `api/v1/verify` REQUEST/RESPONSE/TRACE×2、gateway 層 RESPONSE×3——**同一 uuid 貫穿 gateway→auth verify→svc-b2c 全鏈**，MCP audit ↔ be2 端 log 的 join 在公告域成立（audit spec §3.5 的 F3 caveat 就此關閉）。CORS 白名單（上行）與實際 forwarding（本段）為兩回事，兩者現皆已實證。
+
 ## 4. businessList 授權碼（前端 bundle 逆向）
 
 | 動作 | businessList code | 來源 |

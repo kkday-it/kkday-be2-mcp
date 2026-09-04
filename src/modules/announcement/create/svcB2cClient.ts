@@ -28,8 +28,9 @@ export class AnnouncementClient {
   // request-uuid：稽核事件模型 spec §「request-uuid 貫穿」要求任一筆 be2-mcp 發出的下游請求都能
   // join 回 MCP audit（F3）。traceId 為 optional（沿用 GatewayClient.withTrace 的「有才帶、沒有不帶」
   // 語義，向後相容未帶 trace 的呼叫），值即為呼叫端的 ctx.traceId / span traceId。
-  // 注意：gateway ACL 是否放行 svc-b2c 路由的這個 header 尚未 live 驗證——sit-write-contracts 只驗過
-  // be2 product 路由（GatewayClient 那條線），svc-b2c 這條線待補一次真的 live 驗證。
+  // gateway ACL 放行已 live 驗證（2026-09-04，SIT be2-220）：帶自訂 request-uuid GET 公告列表，
+  // Kibana new-kklog-* 以 request.uuid 撈到 9 hits——svc-b2c REQUEST/RESPONSE、auth /verify、
+  // gateway 層皆同一 uuid，join 鏈完整。見 sit-announcement-contract.md §3。
   private headers(accessToken: string, traceId?: string): Record<string, string> {
     return {
       authorization: `Bearer ${accessToken}`,
