@@ -46,8 +46,12 @@ export class OAuthStore {
       consumed: (r.consumed as boolean) ? 1 : 0,
     }
   }
-  async consumeAuthCode(codeHash: string): Promise<void> {
-    await this.db.query('UPDATE oauth_auth_codes SET consumed = TRUE WHERE code_hash = $1', [codeHash])
+  // 一次性消費必須是單條條件式 UPDATE（spec §3.3/§6 CAS 慣例）：只有 consumed 仍為 FALSE 時才
+  // 翻轉，rowCount===1 才算這次呼叫搶到。無條件 UPDATE 會讓兩個並發請求都通過前面的 SELECT
+  // 檢查而各自把 code 換成一組 token（雙發）。回傳是否搶贏，caller 據此決定發 token 或 fail。
+  async consumeAuthCode(codeHash: string): Promise<boolean> {
+    const r = await this.db.query('UPDATE oauth_auth_codes SET consumed = TRUE WHERE code_hash = $1 AND consumed = FALSE', [codeHash])
+    return r.rowCount === 1
   }
 
   async insertRefresh(rec: OAuthRefresh): Promise<void> {
@@ -77,8 +81,12 @@ export class OAuthStore {
   async countRefreshByIdentity(identityId: string): Promise<number> {
     return (await this.db.query<{ c: number }>('SELECT COUNT(*) c FROM oauth_refresh WHERE identity_id = $1', [identityId])).rows[0].c
   }
-  async markRefreshConsumed(refreshHash: string): Promise<void> {
-    await this.db.query('UPDATE oauth_refresh SET consumed = TRUE WHERE refresh_hash = $1', [refreshHash])
+  // 同 consumeAuthCode 的條件式翻轉：只有 consumed 仍為 FALSE 才成立。輸掉 race（rowCount===0）
+  // 代表這顆 refresh 正被並發雙用——這是 token 遭竊訊號，caller 據此走 reuse-detection family
+  // revoke（RFC 9700 fail-closed），否則兩個並發請求都會通過 consumed===0 檢查而各自 rotate 一次。
+  async markRefreshConsumed(refreshHash: string): Promise<boolean> {
+    const r = await this.db.query('UPDATE oauth_refresh SET consumed = TRUE WHERE refresh_hash = $1 AND consumed = FALSE', [refreshHash])
+    return r.rowCount === 1
   }
   async deleteRefreshByIdentity(identityId: string): Promise<void> {
     await this.db.query('DELETE FROM oauth_refresh WHERE identity_id = $1', [identityId])

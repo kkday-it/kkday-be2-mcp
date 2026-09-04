@@ -16,8 +16,12 @@ describe('OAuthStore', () => {
     const d = await openTestDb(); const s = new OAuthStore(d)
     await s.insertAuthCode({ codeHash: 'h1', clientId: 'c1', redirectUri: 'https://x/callback', codeChallenge: 'ch1', identityId: 'I1', exp: 100, consumed: 0 })
     expect(await s.getAuthCode('h1')).toMatchObject({ codeHash: 'h1', clientId: 'c1', identityId: 'I1', consumed: 0 })
-    await s.consumeAuthCode('h1')
+    // 條件式一次性消費：第一次搶贏回 true，第二次（已 consumed）回 false → caller 據此 fail-closed
+    expect(await s.consumeAuthCode('h1')).toBe(true)
     expect((await s.getAuthCode('h1'))!.consumed).toBe(1)
+    expect(await s.consumeAuthCode('h1')).toBe(false)
+    // 不存在的 hash 也回 false（沒有可翻轉的 row）
+    expect(await s.consumeAuthCode('missing')).toBe(false)
     expect(await s.getAuthCode('missing')).toBeUndefined()
     // 明文絕不落地：DB 只查得到 hash 欄位，查不到任何原始 code
     const raw = (await d.query<{ code_hash: string }>('SELECT code_hash FROM oauth_auth_codes')).rows.map(r => r.code_hash)
@@ -30,8 +34,10 @@ describe('OAuthStore', () => {
     await s.insertRefresh({ refreshHash: 'r1', identityId: 'I1', clientId: 'c1', exp: 200, consumed: 0 })
     await s.insertRefresh({ refreshHash: 'r2', identityId: 'I1', clientId: 'c1', exp: 200, consumed: 0 })
     expect(await s.getRefresh('r1')).toMatchObject({ refreshHash: 'r1', identityId: 'I1', clientId: 'c1', consumed: 0 })
-    await s.markRefreshConsumed('r1')
+    // 條件式一次性消費：第一次搶贏回 true，第二次（已 consumed）回 false → 並發雙用訊號
+    expect(await s.markRefreshConsumed('r1')).toBe(true)
     expect((await s.getRefresh('r1'))!.consumed).toBe(1)
+    expect(await s.markRefreshConsumed('r1')).toBe(false)
     // rotation 語意：consumed 標記而非刪除（供 Task 10 的 reuse 偵測 / family revoke）
     expect(await s.getRefresh('r1')).toBeDefined()
     await s.deleteRefreshByIdentity('I1')

@@ -6,6 +6,7 @@ import { createPgDb } from '../src/store/pgDb.js'
 import { runMigrations } from '../src/store/migrate.js'
 import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { IdentityStore, type Identity } from '../src/store/identityStore.js'
+import { OAuthStore } from '../src/oauth/oauthStore.js'
 import type { ChangeSetRecord, ExecutorRef } from '../src/core/changeset/types.js'
 
 const URL = process.env.TEST_PG_URL   // e.g. postgres://test:test@localhost:55432/be2mcp_test
@@ -147,6 +148,32 @@ d('CAS 併發（真 PG、兩個獨立 pool）', () => {
       // casStatus 先落地：row 已離開 pending_approval，updateDiff 的 WHERE 落空，diff 維持原值。
       expect(rec!.diffVersion).toBe('v')
     }
+  })
+
+  it('consumeAuthCode：兩連線同搶消費同一支 authorization code，恰一個贏（F1：不雙發 token）', async () => {
+    const oa = new OAuthStore(a), ob = new OAuthStore(b)
+    const codeHash = 'code-cas'
+    await oa.insertAuthCode({ codeHash, clientId: 'c', redirectUri: 'http://x/cb', codeChallenge: 'ch', identityId: 'I1', exp: Date.now() + 60_000, consumed: 0 })
+    const [ra, rb] = await Promise.all([
+      oa.consumeAuthCode(codeHash),
+      ob.consumeAuthCode(codeHash),
+    ])
+    // 恰一個 CAS 翻轉成功——兩個並發請求不會都拿到 code 去各自發一組 token。
+    expect([ra, rb].filter(Boolean).length).toBe(1)
+    expect((await oa.getAuthCode(codeHash))!.consumed).toBe(1)
+  })
+
+  it('markRefreshConsumed：兩連線同搶消費同一顆 refresh，恰一個贏（F1：輸家 = reuse 訊號）', async () => {
+    const oa = new OAuthStore(a), ob = new OAuthStore(b)
+    const refreshHash = 'refresh-cas'
+    await oa.insertRefresh({ refreshHash, identityId: 'I1', clientId: 'c', exp: Date.now() + 60_000, consumed: 0 })
+    const [ra, rb] = await Promise.all([
+      oa.markRefreshConsumed(refreshHash),
+      ob.markRefreshConsumed(refreshHash),
+    ])
+    // 恰一個贏；輸家（回 false）在 route 層即為 reuse-detection family revoke 的觸發訊號。
+    expect([ra, rb].filter(Boolean).length).toBe(1)
+    expect((await oa.getRefresh(refreshHash))!.consumed).toBe(1)
   })
 
   it('claimKeepalive (IdentityStore)：兩連線同搶同一 identity 的 keepalive claim，恰一個贏', async () => {

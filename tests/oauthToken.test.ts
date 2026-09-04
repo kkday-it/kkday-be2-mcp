@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import express from 'express'
 import { createServer, type Server } from 'node:http'
 import { createHash, randomBytes } from 'node:crypto'
 import { buildApp } from '../src/server/app.js'
@@ -6,6 +7,7 @@ import { openTestDb } from './support/testDb.js'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { OAuthStore } from '../src/oauth/oauthStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
+import { buildTokenRouter } from '../src/oauth/tokenRoutes.js'
 import type { Config } from '../src/config.js'
 import type { Db } from '../src/store/dbTypes.js'
 import { AuditLog } from '../src/audit/auditLog.js'
@@ -228,6 +230,53 @@ describe('POST /oauth/token', () => {
     const refresh2AfterRevoke = await post('/oauth/token', { grant_type: 'refresh_token', refresh_token: refresh2, client_id: CLIENT_ID })
     expect(refresh2AfterRevoke.status).toBe(400)
     expect(refresh2AfterRevoke.body.error).toBe('invalid_grant')
+  })
+
+  // F1：refresh 消費是條件式 CAS。真正的並發雙用要在 tests-pg（雙連線）證明；這裡用注入一個
+  // 「markRefreshConsumed 永遠輸掉 race（回 false）」的 store，deterministic 地驗證：即使 getRefresh
+  // 仍讀到 consumed=0，只要 CAS 翻轉失敗（= 有並發請求搶先消費），也要走 family revoke，不是靜默雙發。
+  it('refresh CAS 輸掉 race（markRefreshConsumed 回 false）→ family revoke（reuse-detection 不漏接）', async () => {
+    // 先用正規流程換到一組合法的 {access, refresh}
+    const { rawCode } = await seedCode(db, { verifier: 'VER' })
+    const first = await post('/oauth/token', {
+      grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER',
+      client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
+    })
+    expect(first.status).toBe(200)
+    const refresh1 = first.body.refresh_token as string
+    const access1 = first.body.access_token as string
+
+    // 包一層 store：getRefresh 照實回（consumed=0，通過前面所有檢查），但 markRefreshConsumed
+    // 一律回 false，模擬「讀到 0 之後、翻轉之前被並發請求搶先消費」的 TOCTOU 輸家。
+    const realStore = new OAuthStore(db)
+    const racingStore = Object.assign(Object.create(OAuthStore.prototype) as OAuthStore, realStore, {
+      markRefreshConsumed: async () => false,
+    })
+    const raceApp = express()
+    raceApp.use(express.json())  // 主 app.ts 全域掛了 json 中介層，這個 mini app 要自己補
+    raceApp.use(buildTokenRouter({
+      oauthStore: racingStore, credentials: new CredentialStore(db),
+      identities: new IdentityStore(db), audit: new AuditLog(db), now: Date.now,
+    }))
+    const raceHttp = createServer(raceApp)
+    await new Promise<void>(r => raceHttp.listen(0, () => r()))
+    const racePort = (raceHttp.address() as { port: number }).port
+
+    const lost = await (await fetch(`http://127.0.0.1:${racePort}/oauth/token`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: refresh1, client_id: CLIENT_ID }),
+    })).json() as Record<string, unknown>
+    await new Promise<void>(r => raceHttp.close(() => r()))
+
+    expect(lost.error).toBe('invalid_grant')
+    // family revoke 真的跑了：security 稽核留痕 + identity 的 refresh/access 全被撤
+    const revokedRow = (await new AuditLog(db).recent()).find(r => r.tool === 'oauth_refresh_reuse')
+    expect(revokedRow).toBeDefined()
+    expect(revokedRow!.eventType).toBe('security.token_revoked')
+    expect(revokedRow!.severity).toBe('CRITICAL')
+    expect(await realStore.getRefresh(CredentialStore.hash(refresh1))).toBeUndefined()
+    // 原本合法的 access1 也一併失效（整個 family 撤）
+    expect((await mcpInitialize(access1)).status).toBe(401)
   })
 
   it('/mcp 401 帶 WWW-Authenticate 指向 protected-resource', async () => {

@@ -55,6 +55,27 @@ export function buildTokenRouter(deps: TokenDeps): express.Router {
     res.status(400).json({ error: 'invalid_grant' })
   }
 
+  // reuse-detection family revoke（RFC 9700 fail-closed）：偵測到一顆 refresh 被重複使用時，撤銷
+  // 整個 token family——不只這顆。兩條路徑會走到這裡：(a) getRefresh 讀到 consumed===1（先前已被
+  // rotate 掉的舊 refresh 又被拿來用）；(b) 條件式 markRefreshConsumed 輸掉 race（讀到 consumed=0
+  // 但翻轉時已被並發請求搶先消費）。兩者語義相同（合法 client 每顆 refresh 只會用一次），故共用
+  // 這一份，避免複製兩份 revoke 邏輯而漂移。audit 失敗不擋 revoke 本身（invalidGrant 照回）。
+  async function revokeRefreshFamily(identityId: string, refreshHash: string): Promise<void> {
+    await deps.oauthStore.deleteRefreshByIdentity(identityId)
+    await deps.credentials.deleteByIdentityAndKind(identityId, 'oauth_access')
+    // spec §3.3：reuse-detection family revoke = token 遭竊訊號，SIEM 價值最高的一筆 security 事件。
+    try {
+      await deps.audit.record({
+        userLabel: (await deps.identities.get(identityId))?.userLabel ?? 'unknown',
+        sessionId: '-', clientInfo: 'oauth-token', tool: 'oauth_refresh_reuse',
+        params: { identity_id: identityId, refresh_hash_prefix: refreshHash.slice(0, 8) },
+        status: 'error', errorMessage: 'refresh reuse detected — whole family revoked (RFC 9700 fail-closed)',
+        eventType: 'security.token_revoked', severity: 'CRITICAL',
+        traceId: randomTraceId(), durationMs: 0,
+      })
+    } catch (err) { console.error('refresh-reuse audit failed:', err) }
+  }
+
   // 鑄一組新的 access+refresh，兩者互相綁定（refresh 記著這批一起發出的 access 是哪一列），
   // 供之後 rotation 精準刪除用。回傳的明文只活在這次 response 裡，store 永遠只落雜湊。
   async function issueTokenPair(identityId: string, clientId: string): Promise<{ access_token: string; refresh_token: string }> {
@@ -97,8 +118,10 @@ export function buildTokenRouter(deps: TokenDeps): express.Router {
         if (!(await deps.identities.get(row.identityId))) { invalidGrant(res); return }
 
         // 一次性：驗證全部通過才 consume（驗證失敗絕不消費這支 code——見上面獨立的 PKCE-only
-        // 測試，錯 verifier 不該燒掉一支原本合法的 code）。
-        await deps.oauthStore.consumeAuthCode(row.codeHash)
+        // 測試，錯 verifier 不該燒掉一支原本合法的 code）。consume 本身是條件式 CAS：輸掉 race
+        // （另一個並發請求已先消費同一支 code）代表這支 code 不再屬於我方，回 invalidGrant，語義
+        // 同上面 row.consumed===1 的路徑，不額外做 revoke。
+        if (!(await deps.oauthStore.consumeAuthCode(row.codeHash))) { invalidGrant(res); return }
 
         const tokens = await issueTokenPair(row.identityId, row.clientId)
         res.status(200).json({ ...tokens, token_type: 'Bearer', expires_in: accessTtlSeconds })
@@ -119,20 +142,7 @@ export function buildTokenRouter(deps: TokenDeps): express.Router {
           // (a legitimate client only ever presents each refresh once, right before it gets
           // replaced). OAuth 2.1 / RFC 9700 要求 fail closed on the WHOLE family, not just this
           // token — the attacker may already hold the current rotated pair too.
-          await deps.oauthStore.deleteRefreshByIdentity(row.identityId)
-          await deps.credentials.deleteByIdentityAndKind(row.identityId, 'oauth_access')
-          // spec §3.3：reuse-detection family revoke = token 遭竊訊號，SIEM 價值最高的一筆
-          // security 事件。audit 失敗不擋 revoke 本身（invalidGrant 照回）。
-          try {
-            await deps.audit.record({
-              userLabel: (await deps.identities.get(row.identityId))?.userLabel ?? 'unknown',
-              sessionId: '-', clientInfo: 'oauth-token', tool: 'oauth_refresh_reuse',
-              params: { identity_id: row.identityId, refresh_hash_prefix: refreshHash.slice(0, 8) },
-              status: 'error', errorMessage: 'refresh reuse detected — whole family revoked (RFC 9700 fail-closed)',
-              eventType: 'security.token_revoked', severity: 'CRITICAL',
-              traceId: randomTraceId(), durationMs: 0,
-            })
-          } catch (err) { console.error('refresh-reuse audit failed:', err) }
+          await revokeRefreshFamily(row.identityId, refreshHash)
           invalidGrant(res)
           return
         }
@@ -142,8 +152,15 @@ export function buildTokenRouter(deps: TokenDeps): express.Router {
 
         // Rotate：舊 refresh 標 consumed（不刪——reuse-detection 需要它還在，才能認出「這顆曾經
         // 合法過」），刪掉這顆 refresh 綁定的那一列舊 access credential（精準、只刪這一列，不動
-        // 同 identity 底下的其他 credential），再鑄一組新的。
-        await deps.oauthStore.markRefreshConsumed(row.refreshHash)
+        // 同 identity 底下的其他 credential），再鑄一組新的。markRefreshConsumed 是條件式 CAS：
+        // 上面 getRefresh 讀到 consumed=0 到這裡之間，可能有並發請求搶先消費了同一顆 refresh——
+        // 輸掉這個 race（回 false）與 consumed===1 是同一個訊號（同一顆 refresh 被雙用），故走
+        // 相同的 family revoke，reuse-detection 才不會在真正的並發雙用下漏接。
+        if (!(await deps.oauthStore.markRefreshConsumed(row.refreshHash))) {
+          await revokeRefreshFamily(row.identityId, refreshHash)
+          invalidGrant(res)
+          return
+        }
         if (row.accessCredHash) await deps.credentials.delete(row.accessCredHash)
 
         const tokens = await issueTokenPair(row.identityId, row.clientId)
