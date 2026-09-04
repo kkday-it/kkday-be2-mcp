@@ -6,6 +6,14 @@ import { buildJobRoutes } from '../src/server/jobRoutes.js'
 import { openTestDb } from './support/testDb.js'
 import type { Config } from '../src/config.js'
 import type { Db } from '../src/store/dbTypes.js'
+import type { TickSummary } from '../src/core/schedule/scheduler.js'
+
+// F5 修復：runTick 現在回 TickSummary（本輪處理件數摘要），非 void——unit 測試的假 deps
+// 也要照這個型別，否則型別不合、且不能反映「非拋錯路徑一定回摘要」的真實契約。
+const fakeTickSummary: TickSummary = {
+  strandedRecovered: 0, missed: 0, claimed: 0, executed: 0, failed: 0,
+  keepaliveRefreshed: 0, keepaliveFailed: 0,
+}
 
 // Task 10：cron HTTP endpoints（/api/jobs/oauth-purge、/api/jobs/scheduler-tick）+ SCHEDULER_MODE。
 // jobRoutes 自帶 bearer 驗證（CRON_SECRET，常數時間比對），故掛在 hostGuard 之後、MCP bearer
@@ -76,17 +84,27 @@ describe('job routes — integration (via buildApp)', () => {
     })
   })
 
-  it('case 4: POST /api/jobs/scheduler-tick 對 bearer -> 200 {ok:true}；重複打不炸（冪等靠 CAS）', async () => {
+  it('case 4: POST /api/jobs/scheduler-tick 對 bearer -> 200 + JSON 摘要（TickSummary 形狀）；重複打不炸（冪等靠 CAS）', async () => {
     const call = () => fetch(`${securedBase}/api/jobs/scheduler-tick`, {
       method: 'POST', headers: { authorization: `Bearer ${SECRET}` },
     })
+    // F5 修復：scheduler-tick 現在照 spec 回本輪處理件數摘要，不再是裸的 {ok:true}。
+    const tickSummaryShape = {
+      strandedRecovered: expect.any(Number),
+      missed: expect.any(Number),
+      claimed: expect.any(Number),
+      executed: expect.any(Number),
+      failed: expect.any(Number),
+      keepaliveRefreshed: expect.any(Number),
+      keepaliveFailed: expect.any(Number),
+    }
     const first = await call()
     expect(first.status).toBe(200)
-    expect(await first.json()).toEqual({ ok: true })
+    expect(await first.json()).toEqual(tickSummaryShape)
 
     const second = await call()
     expect(second.status).toBe(200)
-    expect(await second.json()).toEqual({ ok: true })
+    expect(await second.json()).toEqual(tickSummaryShape)
   })
 
   it('未知 job 名稱 -> 404', async () => {
@@ -106,7 +124,7 @@ describe('job routes — unit (buildJobRoutes with fake deps)', () => {
   }
 
   it('沒有 authorization header -> 401（非 503，因為 cronSecret 有設）', async () => {
-    const app = mount({ cronSecret: 'abc', runPurge: async () => ({}), runTick: async () => {} })
+    const app = mount({ cronSecret: 'abc', runPurge: async () => ({}), runTick: async () => fakeTickSummary })
     const http = createServer(app)
     await new Promise<void>(r => http.listen(0, () => r()))
     const base = `http://127.0.0.1:${(http.address() as { port: number }).port}`
@@ -122,7 +140,7 @@ describe('job routes — unit (buildJobRoutes with fake deps)', () => {
     const app = mount({
       cronSecret: 'abc',
       runPurge: async () => { throw new Error('boom') },
-      runTick: async () => {},
+      runTick: async () => fakeTickSummary,
     })
     const http = createServer(app)
     await new Promise<void>(r => http.listen(0, () => r()))

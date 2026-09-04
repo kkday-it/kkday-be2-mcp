@@ -107,7 +107,9 @@ function runWrapped<Ctx>(
           severity: status === 'ok' ? 'INFO' : 'ERROR',
           traceId, durationMs: Date.now() - started,
           })
-        } finally {
+        // F2（spec 98 行）：audit 失敗一律不擋業務請求——若外拋會把已算好的 tool 結果（含成功）
+        // 換成 throw，等於 audit 故障癱瘓整個工具面。吞掉並記 stderr，result 照常回。
+        } catch (err) { console.error(`tool_call audit failed (${toolName}):`, err) } finally {
           span.end()
         }
       }

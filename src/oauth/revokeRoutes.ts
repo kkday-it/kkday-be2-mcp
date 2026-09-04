@@ -49,13 +49,17 @@ export function buildRevokeRouter(deps: RevokeDeps): express.Router {
       if (clientId && boundClientId && boundClientId !== clientId) { res.status(200).end(); return }  // 歸屬不符=視為 unknown
 
       const revoked = await revokeGrant(deps, identityId!)
-      await deps.audit.record({
-        userLabel: revoked?.userLabel ?? 'unknown', sessionId: '-', clientInfo: 'oauth-revoke',
-        tool: 'oauth_revoke', params: { kind, client_id: clientId || undefined, cred_hash_prefix: hash.slice(0, 8) },
-        status: 'ok',
-        eventType: 'security.token_revoked', severity: 'CRITICAL',
-        traceId: '-', durationMs: 0,
-      })
+      // spec §3.2(98 行):audit 失敗不擋業務——revoke 已完成,throw 會被外層 .catch 轉 500,
+      // 但撤銷其實成功了(誤導呼叫端重試)。
+      try {
+        await deps.audit.record({
+          userLabel: revoked?.userLabel ?? 'unknown', sessionId: '-', clientInfo: 'oauth-revoke',
+          tool: 'oauth_revoke', params: { kind, client_id: clientId || undefined, cred_hash_prefix: hash.slice(0, 8) },
+          status: 'ok',
+          eventType: 'security.token_revoked', severity: 'CRITICAL',
+          traceId: '-', durationMs: 0,
+        })
+      } catch (err) { console.error('oauth-revoke audit failed:', err) }
       res.status(200).end()
     })().catch(() => { if (!res.headersSent) res.status(500).json({ error: 'server_error' }) })
   })

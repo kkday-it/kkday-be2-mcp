@@ -119,9 +119,11 @@ describe('wrapTool pipeline', () => {
     expect(row.errorMessage).toContain('boom')
   })
 
-  it('pipeline span closes safely even if audit record throws (#3)', async () => {
+  it('audit record throws -> tool call still succeeds（spec §3.2 audit 失敗不擋業務）, span closes safely (#3)', async () => {
     const { deps } = await makeDeps()
-    vi.spyOn((deps as any).audit, 'record').mockRejectedValue(new Error('db down'))
-    await expect(requestContext.run(ctx, () => wrapTool(tool as never, deps)({ v: 'x' }))).rejects.toThrow('db down')
+    vi.spyOn((deps as never as { audit: AuditLog }).audit, 'record').mockRejectedValue(new Error('db down'))
+    const out = await requestContext.run(ctx, () => wrapTool(tool as never, deps)({ v: 'x' }))
+    expect(out.isError).toBeUndefined()
+    expect(JSON.parse(out.content[0].text).items).toEqual([{ v: 'x' }])
   })
 })

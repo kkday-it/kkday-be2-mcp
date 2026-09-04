@@ -167,7 +167,8 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
           tool: `app/${tool.name}`, params: auditParams, status, errorMessage: message,
           eventType: 'tool_call', severity: status === 'ok' ? 'INFO' : 'ERROR',
           traceId, durationMs: Date.now() - started })
-        } finally {
+        // F2（spec 98 行）：同 toolPipeline——audit 失敗不得把已算好的 app-tool 結果換成 throw。
+        } catch (err) { console.error(`app tool_call audit failed (${tool.name}):`, err) } finally {
           span.end()
         }
       }

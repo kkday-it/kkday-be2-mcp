@@ -78,29 +78,41 @@ describe('scheduler', () => {
     await seed('c1', 2000)
     const s = makeScheduler(deps, p)
     currentTime = 2000
-    await s.tick()
+    const summary = await s.tick()
     expect((await changeSets.get('c1'))?.status).toBe('done')
     expect(putCount).toBe(1)
+    // F5：tick() 回本輪處理件數摘要——一件到期並成功執行 → claimed=1、executed=1，其餘為 0。
+    expect(summary).toEqual({
+      strandedRecovered: 0, missed: 0, claimed: 1, executed: 1, failed: 0,
+      keepaliveRefreshed: 0, keepaliveFailed: 0,
+    })
   })
 
-  it('2. 未到點:tick(now=T-1) → 仍 scheduled、PUT 未被呼叫', async () => {
+  it('2. 未到點:tick(now=T-1) → 仍 scheduled、PUT 未被呼叫、摘要全 0（空輪）', async () => {
     await seed('c2', 2000)
     const s = makeScheduler(deps, p)
     currentTime = 1999
-    await s.tick()
+    const summary = await s.tick()
     expect((await changeSets.get('c2'))?.status).toBe('scheduled')
     expect(putCount).toBe(0)
+    // F5：沒有到期件、沒有 stranded、沒有 keep-alive window 內的 identity → 全 0。
+    expect(summary).toEqual({
+      strandedRecovered: 0, missed: 0, claimed: 0, executed: 0, failed: 0,
+      keepaliveRefreshed: 0, keepaliveFailed: 0,
+    })
   })
 
-  it('3. grace 超窗:tick(now=T+graceMs+1) → status=missed、PUT 未被呼叫、audit 有 schedule.missed', async () => {
+  it('3. grace 超窗:tick(now=T+graceMs+1) → status=missed、PUT 未被呼叫、audit 有 schedule.missed、摘要 missed=1', async () => {
     await seed('c3', 2000)
     const s = makeScheduler(deps, p)
     currentTime = 2000 + p.graceMs + 1
-    await s.tick()
+    const summary = await s.tick()
     expect((await changeSets.get('c3'))?.status).toBe('missed')
     expect(putCount).toBe(0)
     const row = await auditRow('schedule.missed')
     expect(row).toBeDefined()
+    expect(summary.missed).toBe(1)
+    expect(summary.claimed).toBe(0)
   })
 
   it('4. terminal refresh 失敗:identity access 已過期 + fake auth refresh 丟 AuthError 401 → status=failed, audit 記 AUTH_EXPIRED; PUT 未被呼叫', async () => {
@@ -108,11 +120,15 @@ describe('scheduler', () => {
     fakeAuth.refresh.mockRejectedValue(new AuthError('REVOKED', 'revoked', 401))
     const s = makeScheduler(deps, p)
     currentTime = 2000
-    await s.tick()
+    const summary = await s.tick()
     expect((await changeSets.get('c4'))?.status).toBe('failed')
     expect(putCount).toBe(0)
     const row = await auditRow('schedule.execute', 'error')
     expect(row.error_message).toContain('AUTH_EXPIRED')
+    // F5：claim 成功但 terminal auth 失敗 → claimed=1、failed=1、executed=0。
+    expect(summary.claimed).toBe(1)
+    expect(summary.failed).toBe(1)
+    expect(summary.executed).toBe(0)
   })
 
   it('5. transient refresh 失敗:fake auth refresh 丟 AppError 503 → 放回 scheduled; 下一 tick 成功執行', async () => {
@@ -139,11 +155,15 @@ describe('scheduler', () => {
 
     const s = makeScheduler(deps, p)
     currentTime = 2000 + p.staleClaimMs + 1
-    await s.tick()
+    const summary = await s.tick()
     expect((await changeSets.get('c6'))?.status).toBe('done')
     expect(putCount).toBe(1)
     const row = await auditRow('schedule.reclaim')
     expect(row).toBeDefined()
+    // F5：這件先被回收(strandedRecovered=1)、同 tick 重新認領並執行成功(claimed=1、executed=1)。
+    expect(summary.strandedRecovered).toBe(1)
+    expect(summary.claimed).toBe(1)
+    expect(summary.executed).toBe(1)
   })
 
   it('7. 併發認領:兩個 makeScheduler 共用同一 db,同 tick 併發 → PUT 僅一次(CAS 去重)', async () => {
@@ -160,12 +180,15 @@ describe('scheduler', () => {
     await seed('c8', 9_000_000, 1000 + 30_000) // windowMs is 60_000, so expires within window
     const s = makeScheduler(deps, p)
     currentTime = 1000
-    await s.tick()
+    const summary = await s.tick()
     expect(fakeAuth.refresh).toHaveBeenCalledTimes(1)
     expect((await changeSets.get('c8'))?.status).toBe('scheduled') // not executed yet
 
     const row = await auditRow('schedule.keepalive')
     expect(row.status).toBe('ok')
+    // F5：keep-alive 成功續命一個 identity → keepaliveRefreshed=1,其餘 0。
+    expect(summary.keepaliveRefreshed).toBe(1)
+    expect(summary.keepaliveFailed).toBe(0)
 
     // next tick within TTL doesn't call refresh again
     currentTime = 1000 + 10_000 // 10s passed, still < 30_000 TTL of keepAlive
@@ -196,7 +219,7 @@ describe('scheduler', () => {
     fakeAuth.refresh.mockRejectedValue(new AuthError('REVOKED', 'revoked', 401))
     const s = makeScheduler(deps, p)
     currentTime = 1000
-    await s.tick()
+    const summary = await s.tick()
     expect((await changeSets.get('c9'))?.status).toBe('failed')
 
     const errKeepAlive = await auditRow('schedule.keepalive', 'error')
@@ -206,6 +229,30 @@ describe('scheduler', () => {
     expect(errExec.error_message).toContain('AUTH_EXPIRED (keep-alive)')
     // M-1(spec §11):歸屬批准者(seed() 的 executor userLabel='u'),不是系統標籤 'scheduler'。
     expect(errExec.user_label).toBe('u')
+    // F5：keep-alive terminal 失敗 → keepaliveFailed=1,且連帶 fail 掉名下排程件計入 failed=1。
+    expect(summary.keepaliveFailed).toBe(1)
+    expect(summary.failed).toBe(1)
+  })
+
+  it('F4 (spec §3.5): 批准 traceId 貫穿執行——scheduled 件執行後 ItemResult.trace_id 與 execution audit 皆帶批准當下的 trace', async () => {
+    await identities.upsert({ identityId: 'id-1', userLabel: 'u', accessToken: 'acc', refreshToken: 'ref', businessList: [], accessExpiresAt: 9999999, updatedAt: currentTime })
+    await changeSets.create({
+      id: 'cF4', creatorLabel: 'u', creatorBearerHash: 'bh', sessionId: 'sess', actionType: 'inventory_setting',
+      items: [{ item_oid: 'i1', supplier_oid: '0', quantity: 5 }], diff: [], diffVersion: 'v',
+      status: 'pending_approval', createdAt: currentTime,
+      schedule: { executeAtUtc: 2000, wall: '2026-08-20T12:00:00', tz: 'Asia/Taipei' },
+    })
+    // setScheduled 帶批准當下的 traceId：scheduler 重建 who 時應帶出，executor 用它當 execTraceId。
+    await changeSets.setScheduled('cF4', { identityId: 'id-1', userLabel: 'u', modifyUser: 'mu', sessionId: 'sess', traceId: 'trace-approve-xyz' }, currentTime)
+    const s = makeScheduler(deps, p)
+    currentTime = 2000
+    await s.tick()
+    expect((await changeSets.get('cF4'))?.status).toBe('done')
+    // 執行結果與 execution audit 都必須帶批准 trace（非 executor 自產的新 trace）→ 三方可 join。
+    const results = await changeSets.getResults('cF4')
+    expect(results[0].trace_id).toBe('trace-approve-xyz')
+    const row = await auditRow('changeset.execute')
+    expect(row.trace_id).toBe('trace-approve-xyz')
   })
 
   it('11. I-2:啟動時對 stranded executing 記 audit 警示(schedule.stranded_executing),且不轉狀態', async () => {

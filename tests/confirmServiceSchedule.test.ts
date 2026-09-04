@@ -58,7 +58,8 @@ describe('approveAndExecute - schedule branches', () => {
     expect(out).toEqual({ scheduled: true })
     const updated = (await store.get('cs-1'))!
     expect(updated.status).toBe('scheduled')
-    expect(updated.executorRef).toEqual({ identityId: WHO.identityId, userLabel: WHO.userLabel, modifyUser: 'U:' + WHO.accessToken, sessionId: WHO.sessionId })
+    // F4：executor 快照現在多存 traceId（批准當下的 trace，供執行端 join）。
+    expect(updated.executorRef).toEqual({ identityId: WHO.identityId, userLabel: WHO.userLabel, modifyUser: 'U:' + WHO.accessToken, sessionId: WHO.sessionId, traceId: expect.any(String) })
     expect(putSpy).not.toHaveBeenCalled()
   })
   it('2. 回聲不符(expectedExecuteAtUtc 差 1)→ throw SCHEDULE_ECHO_MISMATCH', async () => {
@@ -109,6 +110,36 @@ describe('approveAndExecute - schedule branches', () => {
     expect((await store.get('cs-5'))!.status).toBe('done')
   })
 })
+describe('approveAndExecute — F2/F4 (audit 不擋業務 + trace 貫穿)', () => {
+  it('F2 (spec 98 行): scheduled approve 的 audit.record throw 仍回 { scheduled: true } 且 status=scheduled', async () => {
+    timeNow = 1000
+    const gw = shelfGateway()
+    const { store, deps } = await makeDeps(gw)
+    // setScheduled 已成功（狀態已落 scheduled）後 approve audit 若外拋，會讓已排程回 500——不可。
+    deps.audit = { record: async () => { throw new Error('audit db down') } } as unknown as AuditLog
+    const rec = await seedShelf(store, 'cs-f2-sched', { executeAtUtc: 2000 })
+    const version = await realShelfDiffVersion(rec, gw)
+    const out = await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, channel: 'confirm_page', expectedExecuteAtUtc: 2000 })
+    expect(out).toEqual({ scheduled: true })
+    expect((await store.get('cs-f2-sched'))!.status).toBe('scheduled')
+  })
+
+  it('F4 (spec §3.5): scheduled approve 把 approve audit 的 traceId 一併存進 executor 快照', async () => {
+    timeNow = 1000
+    const gw = shelfGateway()
+    const { store, deps, audit } = await makeDeps(gw)
+    const rec = await seedShelf(store, 'cs-f4-store', { executeAtUtc: 2000 })
+    const version = await realShelfDiffVersion(rec, gw)
+    await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, channel: 'confirm_page', expectedExecuteAtUtc: 2000 })
+    const stored = (await store.get('cs-f4-store'))!
+    const approveRow = (await audit.recent()).find(r => r.tool === 'changeset.approve')!
+    // 存進快照的 traceId 必須就是 approve audit 這筆的 trace（同一次批准的同一個 trace）。
+    expect(stored.executorRef?.traceId).toBeDefined()
+    expect(stored.executorRef?.traceId).toBe(approveRow.traceId)
+    expect(stored.executorRef?.traceId).not.toBe('n/a')
+  })
+})
+
 describe('executeChangeSet CAS 起點', () => {
   it('6. executor CAS 起點: status 不是 approved throw BAD_STATE; 併發 executeChangeSet CAS 輸的 null', async () => {
     timeNow = 1000

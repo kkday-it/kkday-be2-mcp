@@ -159,14 +159,18 @@ ${view.tableHtml}
     // 只有 scheduled 可取消(spec §8):cancelled 是唯一允許的人工轉移、終態。
     const won = await deps.changeSets.casStatus(rec.id, 'scheduled', 'cancelled', deps.now())
     if (!won) { res.status(409).send('已被處理或非排程狀態'); return }
-    await deps.audit.record({
-      userLabel: who.userLabel, sessionId: who.sessionId,
-      clientInfo: 'confirm-page:' + String(req.headers['user-agent'] ?? '').slice(0, 80),
-      tool: 'changeset.cancel', params: { changeset_id: rec.id, ip: req.ip },
-      status: 'ok',
-      eventType: 'rejection', severity: 'INFO',
-      traceId: 'n/a', durationMs: 0,
-    })
+    // F2（spec 98 行）：CAS 已改成 cancelled（業務狀態已變更），audit 失敗不得回 500——否則
+    // 使用者看到失敗、狀態卻已取消。吞掉並記 stderr。
+    try {
+      await deps.audit.record({
+        userLabel: who.userLabel, sessionId: who.sessionId,
+        clientInfo: 'confirm-page:' + String(req.headers['user-agent'] ?? '').slice(0, 80),
+        tool: 'changeset.cancel', params: { changeset_id: rec.id, ip: req.ip },
+        status: 'ok',
+        eventType: 'rejection', severity: 'INFO',
+        traceId: 'n/a', durationMs: 0,
+      })
+    } catch (err) { console.error('changeset.cancel audit failed:', err) }
     res.status(200).send('已取消排程')
   }))
 
@@ -180,14 +184,17 @@ ${view.tableHtml}
     // rejecting a change-set that has already been approved/executed (or rejected) concurrently.
     const won = await deps.changeSets.casStatus(rec.id, 'pending_approval', 'rejected', deps.now())
     if (!won) { res.status(409).send('已被處理或已過期'); return }
-    await deps.audit.record({
-      userLabel: who.userLabel, sessionId: who.sessionId,
-      clientInfo: 'confirm-page:' + String(req.headers['user-agent'] ?? '').slice(0, 80),
-      tool: 'changeset.reject', params: { changeset_id: rec.id, ip: req.ip },
-      status: 'ok',
-      eventType: 'rejection', severity: 'INFO',
-      traceId: 'n/a', durationMs: 0,
-    })
+    // F2（spec 98 行）：CAS 已改成 rejected，audit 失敗不得回 500（同 cancel）。
+    try {
+      await deps.audit.record({
+        userLabel: who.userLabel, sessionId: who.sessionId,
+        clientInfo: 'confirm-page:' + String(req.headers['user-agent'] ?? '').slice(0, 80),
+        tool: 'changeset.reject', params: { changeset_id: rec.id, ip: req.ip },
+        status: 'ok',
+        eventType: 'rejection', severity: 'INFO',
+        traceId: 'n/a', durationMs: 0,
+      })
+    } catch (err) { console.error('changeset.reject audit failed:', err) }
     res.status(200).send('rejected')
   }))
   return r

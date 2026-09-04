@@ -70,14 +70,18 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
   }
   await deps.changeSets.recordResults(changesetId, results)
   for (const r of results) {
-    await deps.audit.record({
-      userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: clientInfoFor(who), tool: 'changeset.execute',
-      params: { changeset_id: changesetId, item: r.item_key },
-      status: (r.status === 'done' || r.status === 'skipped_noop') ? 'ok' : 'error',
-      eventType: 'execution',
-      severity: (r.status === 'done' || r.status === 'skipped_noop') ? 'INFO' : 'ERROR',
-      errorMessage: r.error_message, traceId: r.trace_id, durationMs: 0,
-    })
+    // F2（spec 98 行）：寫入此刻「已打到 be2」、results 也已落 change_set_results。per-item audit
+    // 失敗一律不得外拋——否則會跳過迴圈後的 setStatus，change-set 卡在 'executing'（明明已寫完）。
+    try {
+      await deps.audit.record({
+        userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: clientInfoFor(who), tool: 'changeset.execute',
+        params: { changeset_id: changesetId, item: r.item_key },
+        status: (r.status === 'done' || r.status === 'skipped_noop') ? 'ok' : 'error',
+        eventType: 'execution',
+        severity: (r.status === 'done' || r.status === 'skipped_noop') ? 'INFO' : 'ERROR',
+        errorMessage: r.error_message, traceId: r.trace_id, durationMs: 0,
+      })
+    } catch (err) { console.error('changeset.execute audit failed:', err) }
   }
   const status = results.every(r => r.status === 'done' || r.status === 'skipped_noop') ? 'done'
     : results.every(r => r.status === 'failed') ? 'failed' : 'partial'

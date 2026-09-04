@@ -16,9 +16,9 @@ describe('runMigrations', () => {
   it('空 DB 套用全部 migration、建出 schema_migrations 記錄', async () => {
     const pg = new PGlite()
     const applied = await runMigrations(target(pg))
-    expect(applied).toEqual(['0001_baseline.sql', '0002_grants.sql', '0003_audit_event_type.sql'])
+    expect(applied).toEqual(['0001_baseline.sql', '0002_grants.sql', '0003_audit_event_type.sql', '0004_scheduled_executor_trace.sql'])
     const t = await pg.query<Record<string, unknown>>(`SELECT filename FROM schema_migrations ORDER BY filename`)
-    expect(t.rows.map((r: Record<string, unknown>) => r.filename)).toEqual(['0001_baseline.sql', '0002_grants.sql', '0003_audit_event_type.sql'])
+    expect(t.rows.map((r: Record<string, unknown>) => r.filename)).toEqual(['0001_baseline.sql', '0002_grants.sql', '0003_audit_event_type.sql', '0004_scheduled_executor_trace.sql'])
     // 11 張表存在抽查
     await pg.query(`SELECT 1 FROM change_sets LIMIT 0`)
     await pg.query(`SELECT 1 FROM audit_log LIMIT 0`)

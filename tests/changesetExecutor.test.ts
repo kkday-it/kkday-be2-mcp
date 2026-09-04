@@ -138,6 +138,16 @@ describe('executeChangeSet', () => {
     expect(byKey.p3).toBe('done')
   })
 
+  it('F2 (spec 98 行): per-item audit throw 不影響 recordResults/setStatus——寫入已打到 be2 後 audit 故障不得讓件卡在 executing', async () => {
+    const { deps: d, store } = await deps({ '/product/api/v1/product-configs/p1/switch': { is_active: true, is_locked_for_active: false } })
+    d.audit = { record: async () => { throw new Error('audit db down') } } as unknown as AuditLog
+    await seedProduct(store, false)
+    const out = (await executeChangeSet(d, 'cs1', WHO))!
+    expect(out.status).toBe('done')                              // 走完 setStatus
+    expect((await store.get('cs1'))!.status).toBe('done')
+    expect((await store.getResults('cs1'))[0]).toMatchObject({ item_key: 'p1', status: 'done' })  // recordResults 已落
+  })
+
   it('I-2: a failed inventory item (quantity PUT rejected) audits as status "error" (not "ok")', async () => {
     // fullday SET (塊A): no more per-date "partial" — a single value either writes or fails. When
     // the quantity PUT is rejected (e.g. AU9403), the item is 'failed'; its audit row MUST be

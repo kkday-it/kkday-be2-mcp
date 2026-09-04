@@ -114,19 +114,25 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
     if (rec.schedule.executeAtUtc <= deps.now()) {
       throw new AppError('SCHEDULE_IN_PAST', 'scheduled time has passed — cancel and re-create with a new time', 409)
     }
+    // F4：把批准當下的 traceId 一併存進 executor 快照——scheduler 之後重建 who 時帶出，執行 trace
+    // 就接得上這筆批准 trace（spec §3.5 三方 join）。同一個 traceId 也用在下面的 approve audit。
     const won = await deps.changeSets.setScheduled(rec.id, {
-      identityId: who.identityId, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId,
+      identityId: who.identityId, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId, traceId,
     }, deps.now())
     if (!won) return { casFailed: true }
-    await deps.audit.record({
-      userLabel: who.userLabel, sessionId: who.sessionId,
-      clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
-      tool: 'changeset.approve',
-      params: { changeset_id: rec.id, ip: audit?.ip, channel, scheduled_for: rec.schedule.executeAtUtc },
-      status: 'ok',
-      eventType: 'approval', severity: 'INFO',
-      traceId, durationMs: 0,
-    })
+    // F2（spec 98 行）：CAS 已成功（status=scheduled、憑證已落庫），audit 失敗一律不得回擋——
+    // 否則 throw 外拋會讓「已排程」回 500、change-set 卡在 scheduled 卻讓呼叫端以為失敗。
+    try {
+      await deps.audit.record({
+        userLabel: who.userLabel, sessionId: who.sessionId,
+        clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
+        tool: 'changeset.approve',
+        params: { changeset_id: rec.id, ip: audit?.ip, channel, scheduled_for: rec.schedule.executeAtUtc },
+        status: 'ok',
+        eventType: 'approval', severity: 'INFO',
+        traceId, durationMs: 0,
+      })
+    } catch (err) { console.error('changeset.approve (scheduled) audit failed:', err) }
     return { scheduled: true }
   }
 
@@ -142,15 +148,20 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
   // tool='changeset.execute'. Preserves the confirm-page's original ip/clientInfo audit fields
   // (params.audit) verbatim — dropping IP audit here was an explicitly called-out regression risk
   // during this extraction.
-  await deps.audit.record({
-    userLabel: who.userLabel, sessionId: who.sessionId,
-    clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
-    tool: 'changeset.approve',
-    params: { changeset_id: rec.id, ip: audit?.ip, channel },
-    status: 'ok',
-    eventType: 'approval', severity: 'INFO',
-    traceId, durationMs: 0,
-  })
+  // F2（spec 98 行）：CAS 已把 pending_approval→approved（業務狀態已變更），接著必須走完 execute。
+  // approve audit 失敗一律不得回擋——否則 throw 外拋會跳過下面的 executeChangeSet，change-set 卡在
+  // 'approved' 永不執行（正是 spec 禁止的「audit 擋業務流程」）。
+  try {
+    await deps.audit.record({
+      userLabel: who.userLabel, sessionId: who.sessionId,
+      clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
+      tool: 'changeset.approve',
+      params: { changeset_id: rec.id, ip: audit?.ip, channel },
+      status: 'ok',
+      eventType: 'approval', severity: 'INFO',
+      traceId, durationMs: 0,
+    })
+  } catch (err) { console.error('changeset.approve audit failed:', err) }
 
   // (4) execute.
   const out = await executeChangeSet(deps, rec.id, { accessToken: who.accessToken, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId, channel, traceId })

@@ -177,13 +177,17 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
     let n = 0
     for (const conn of await listConnections(who.userLabel)) {
       await revokeGrant(deps, conn.identityId)
-      await deps.audit.record({
-        userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-connections',
-        tool: 'confirm_connections_revoke_all', params: { identity_id: conn.identityId },
-        status: 'ok',
-        eventType: 'security.token_revoked', severity: 'CRITICAL',
-        traceId: '-', durationMs: 0,
-      })
+      // F2（spec 98 行）：grant 已撤（業務狀態已變更），audit 失敗不得中斷整批 revoke——否則
+      // throw 外拋會讓已撤的連線得不到回應、後續連線也停撤。吞掉、續撤下一條。
+      try {
+        await deps.audit.record({
+          userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-connections',
+          tool: 'confirm_connections_revoke_all', params: { identity_id: conn.identityId },
+          status: 'ok',
+          eventType: 'security.token_revoked', severity: 'CRITICAL',
+          traceId: '-', durationMs: 0,
+        })
+      } catch (err) { console.error('confirm_connections_revoke_all audit failed:', err) }
       n++
     }
     res.redirect(303, `/confirm/connections?revoked=${n}`)

@@ -55,7 +55,7 @@ export class ChangeSetStore {
       createdAt: r.created_at as number,
       decidedAt: (r.decided_at as number) ?? undefined,
       schedule: r.execute_at_utc != null ? { executeAtUtc: r.execute_at_utc as number, wall: r.schedule_wall as string, tz: r.schedule_tz as string } : undefined,
-      executorRef: r.executor_identity_id != null ? { identityId: r.executor_identity_id as string, userLabel: r.executor_label as string, modifyUser: r.executor_modify_user as string, sessionId: r.executor_session_id as string } : undefined,
+      executorRef: r.executor_identity_id != null ? { identityId: r.executor_identity_id as string, userLabel: r.executor_label as string, modifyUser: r.executor_modify_user as string, sessionId: r.executor_session_id as string, traceId: (r.executor_trace_id as string) ?? undefined } : undefined,
       scheduleClaimedAt: r.schedule_claimed_at != null ? (r.schedule_claimed_at as number) : undefined,
     }
   }
@@ -125,9 +125,9 @@ export class ChangeSetStore {
   async setScheduled(id: string, executor: ExecutorRef, decidedAt: number): Promise<boolean> {
     const r = await this.db.query(
       `UPDATE change_sets SET status='scheduled', decided_at=$1,
-       executor_identity_id=$2, executor_label=$3, executor_modify_user=$4, executor_session_id=$5
-       WHERE id=$6 AND status='pending_approval'`,
-      [decidedAt, executor.identityId, executor.userLabel, executor.modifyUser, executor.sessionId, id])
+       executor_identity_id=$2, executor_label=$3, executor_modify_user=$4, executor_session_id=$5, executor_trace_id=$6
+       WHERE id=$7 AND status='pending_approval'`,
+      [decidedAt, executor.identityId, executor.userLabel, executor.modifyUser, executor.sessionId, executor.traceId ?? null, id])
     return r.rowCount === 1
   }
 

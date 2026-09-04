@@ -282,6 +282,23 @@ describe('approveAndExecute — audit clientInfo prefix (Task 11 Finding 3)', ()
   })
 })
 
+describe('approveAndExecute — audit failure must not block business flow (F2, spec 98 行)', () => {
+  // spec 98 行：audit 失敗（DB 或 stdout）一律不擋業務請求。CAS 已把 pending_approval→approved
+  // 後，approve audit 若外拋 throw 會跳過 executeChangeSet，change-set 卡在 'approved' 永不執行。
+  const throwingAudit = { record: async () => { throw new Error('audit db down') } } as unknown as AuditLog
+  it('immediate approve：audit.record throw 仍執行到底且 final status=done、寫入確實發生', async () => {
+    const gw = shelfGateway()   // live is_active=true, target=false → 應寫成 false
+    const { store, deps } = await makeDeps(gw)
+    deps.audit = throwingAudit
+    const rec = await seedShelf(store, 'cs-f2-imm')
+    const version = await realShelfDiffVersion(rec, gw)
+    const out = await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, channel: 'confirm_page' })
+    expect(out.status).toBe('done')
+    expect((await store.get('cs-f2-imm'))!.status).toBe('done')
+    expect(gw.live.is_active).toBe(false)   // 業務寫入未被 audit 故障擋掉
+  })
+})
+
 describe('approveAndExecute — executor per-item audit clientInfo reflects the real approval channel (final whole-branch review Minor)', () => {
   // executor.ts's changeset.execute rows used to hardcode clientInfo: 'confirm-page' regardless of
   // which channel actually approved the change-set — a panel approval's per-item audit trail would
