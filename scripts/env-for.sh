@@ -21,21 +21,26 @@ cd "$(dirname "$0")/.."
 [ $# -ge 2 ] || { echo "usage: $0 <stage|prod> <command...>" >&2; exit 2; }
 ENV_NAME="$1"; shift
 
-# Read one key out of .env without printing its value.
-get() { grep -E "^$1=" .env | head -1 | cut -d= -f2- | sed 's/^"//;s/"$//'; }
+# Read one key out of .env without printing its value; fall back to $2 if the key
+# is absent. URLs (non-secret) carry a default here; creds have no default and are
+# validated below. `.env` is NOT sourced, so every override must flow through get().
+get() {
+  local v; v="$(grep -E "^$1=" .env | head -1 | cut -d= -f2- | sed 's/^"//;s/"$//')"
+  printf '%s' "${v:-${2:-}}"
+}
 
 case "$ENV_NAME" in
   stage)
-    export AUTHSVC_URL="${STAGE_AUTHSVC_URL:-https://auth.stage.kkday.com}"
-    export GATEWAY_URL="${STAGE_GATEWAY_URL:-https://api-gateway.stage.kkday.com}"
+    export AUTHSVC_URL="$(get STAGE_AUTHSVC_URL https://auth.stage.kkday.com)"
+    export GATEWAY_URL="$(get STAGE_GATEWAY_URL https://api-gateway.stage.kkday.com)"
     export API_AUTH_SERVICE_KEY="$(get STAGE_AUTHSVC_SERVICE_KEY)"
     export AUTH_email="$(get STAGE_email)"
     export AUTH_pwd="$(get STAGE_pwd)"
     export APP_ENV=stage
     ;;
   prod)
-    export AUTHSVC_URL="${PROD_AUTHSVC_URL:-https://auth.kkday.com}"
-    export GATEWAY_URL="${PROD_GATEWAY_URL:-https://api-gateway.kkday.com}"
+    export AUTHSVC_URL="$(get PROD_AUTHSVC_URL https://auth.kkday.com)"
+    export GATEWAY_URL="$(get PROD_GATEWAY_URL https://api-gateway.kkday.com)"
     export API_AUTH_SERVICE_KEY="$(get PRODUCTION_AUTHSVC_SERVICE_KEY)"
     export AUTH_email="$(get PROD_email)"
     export AUTH_pwd="$(get PROD_pwd)"

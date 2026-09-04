@@ -1,6 +1,6 @@
 import { loadConfig } from '../src/config.js'
 import { AuthServiceClient } from '../src/auth/authServiceClient.js'
-import { writeFileSync, mkdirSync } from 'node:fs'
+import { saveFixture as saveShared, shape } from './probeShared.js'
 
 // Probes the blueMountain (工單) read API through api-gateway.
 // Manual run only: npm run probe-sit-bm -- <orderMid> [serviceName]
@@ -30,21 +30,8 @@ const auth = new AuthServiceClient({ baseUrl: cfg.authsvcUrl, serviceKey: cfg.se
 // gateway-JWT branch, where the real authKey is read from the Bearer token.
 const SERVICE_NAMES = serviceNameArg ? [serviceNameArg] : ['BCS', 'CRM']
 
-function saveFixture(name: string, body: unknown) {
-  mkdirSync('tests/fixtures', { recursive: true })
-  const json = JSON.stringify(body, null, 2)
-  if (/eyJ[A-Za-z0-9_-]{20,}/.test(json)) throw new Error(`fixture ${name} appears to contain a JWT — refusing to write`)
-  // .local.json is gitignored — probe output carries live ticket text and employee emails.
-  writeFileSync(`tests/fixtures/${name}.local.json`, json)
-  console.log(`  fixture written: tests/fixtures/${name}.local.json`)
-}
-
-function shape(v: unknown, depth = 0): unknown {
-  if (depth > 4) return '...'
-  if (Array.isArray(v)) return v.length ? [shape(v[0], depth + 1), `(+${v.length - 1} more)`] : []
-  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, shape(x, depth + 1)]))
-  return typeof v
-}
+// .local.json is gitignored — probe output carries live ticket text and employee emails.
+const saveFixture = (name: string, body: unknown) => saveShared(`${name}.local.json`, body)
 
 // Keys that would mean raw ticket_task.extra_info leaked through the DTO whitelist.
 // Matched against object KEYS, not the serialized blob: a substring test would flag
