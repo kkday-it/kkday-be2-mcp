@@ -22,7 +22,7 @@ describe('scheduler graceful stop', () => {
       listExecutingScheduled: () => [],
     }
     const deps: any = {
-      changeSets, gateway: {}, audit: { record() {} }, now: () => 0,
+      changeSets, gateway: { withTrace() { return this } }, audit: { record() {} }, now: () => 0,
       tokenManager: { getFreshByIdentityId: () => gate.promise, keepAlive: async () => ({ refreshed: [], failed: [] }) },
     }
     const scheduler = makeScheduler(deps, { tickMs: 60_000, graceMs: 1_000_000 })

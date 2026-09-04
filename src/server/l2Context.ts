@@ -12,6 +12,7 @@ import type { ToolAnnotations } from '../tools/types.js'
 // from the token only — never from tool input.
 export interface L2ToolContext {
   gateway: GatewayClient
+  traceId: string
   accessToken: string
   userLabel: string
   sessionId: string

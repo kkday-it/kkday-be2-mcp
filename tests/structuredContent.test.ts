@@ -9,7 +9,7 @@ function fakeDeps(): PipelineDeps {
     tokenManager: { getFreshAccessToken: async () => ({ accessToken: 'AT', userLabel: 'u1', businessList: [] }) } as never,
     rateBudget: { consume() {} } as never,
     audit: { record() {} } as never,
-    gateway: {} as never,
+    gateway: { withTrace() { return this } } as never,
     readOids: { record() {}, has: () => true } as never,
   }
 }

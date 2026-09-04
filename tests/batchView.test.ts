@@ -64,6 +64,7 @@ function fakeGateway(overrides: Record<string, unknown> = {}) {
     ...overrides,
   }
   return {
+    withTrace() { return this },
     get: async (path: string) => {
       const v = routes[path]
       if (v === undefined) throw new Error(`no fixture for GET ${path}`)

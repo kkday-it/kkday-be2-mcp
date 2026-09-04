@@ -260,7 +260,7 @@ async function main() {
   const userLabel = process.env.AUTH_email!
 
   const ctx: L2ToolContext = {
-    gateway, accessToken, userLabel, sessionId,
+    gateway, accessToken, userLabel, sessionId, traceId: 'live4a'.padEnd(32, '0'),
     bearerHash: createHash('sha256').update(accessToken).digest('hex'),
     businessList: tokens.businessList,
     readOids, changeSets, rateBudget,

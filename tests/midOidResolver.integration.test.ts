@@ -25,7 +25,7 @@ const KNOWN_OID = process.env.APP_LIVE_OID_FIXTURE ?? '38352'
 function liveCtx(): ToolContext {
   const cfg = loadConfig()
   return {
-    accessToken: process.env.APP_LIVE_BEARER!,
+    accessToken: process.env.APP_LIVE_BEARER!, traceId: 'liveinteg'.padEnd(32, '0'),
     userLabel: process.env.APP_LIVE_USER_LABEL ?? 'live-integration-test',
     gateway: new GatewayClient({ baseUrl: cfg.gatewayUrl }),
   }

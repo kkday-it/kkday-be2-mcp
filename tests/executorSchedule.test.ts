@@ -120,7 +120,7 @@ describe('itemKeysOf — shelf_schedule key rule (Task 4)', () => {
     const store = new ChangeSetStore(db, { now: () => 1000 })
     const audit = new AuditLog(db, () => 1000)
     const deps: ConfirmServiceDeps = {
-      changeSets: store, gateway: gateway as never, audit, now: () => 1000,
+      changeSets: store, gateway: Object.assign(Object.create(gateway), { withTrace() { return this } }) as never, audit, now: () => 1000,
       modifyUserFrom: (at: string) => 'U:' + at,
     }
     return { store, deps }
@@ -133,7 +133,7 @@ describe('itemKeysOf — shelf_schedule key rule (Task 4)', () => {
     return (await store.get(id))!
   }
   async function realVersion(rec: ChangeSetRecord, gw: { get: Function; put: Function }): Promise<string> {
-    const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel })
+    const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel, traceId: 't'.repeat(32) })
     return diffVersionHash(diff)
   }
 

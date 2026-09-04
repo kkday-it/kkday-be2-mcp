@@ -28,7 +28,7 @@ async function makeCtx(over: Partial<L2ToolContext> = {}): Promise<{ ctx: L2Tool
   const rateBudget = new RateBudget(db, { now: () => 1000 })
   await readOids.record('s1', ['i1', 'p1', 'pkg1'])
   const ctx: L2ToolContext = {
-    gateway: {} as never, accessToken: 'fake', userLabel: 'p@kkday.com', sessionId: 's1', bearerHash: 'bh',
+    gateway: {} as never, accessToken: 'fake', userLabel: 'p@kkday.com', sessionId: 's1', bearerHash: 'bh', traceId: 't'.repeat(32),
     businessList: [], readOids, changeSets: store, rateBudget,
     baseUrl: 'http://127.0.0.1:8787', genId: () => 'cs1', now: () => 1000,
     emitConfirmUrl: vi.fn(), scheduleTz: 'Asia/Taipei', ...over,

@@ -6,7 +6,7 @@ const diffVersionHash = shelfToggleProductModule.diffVersion as (d: unknown[]) =
 import type { ToolContext } from '../src/tools/types.js'
 
 function ctx(routes: Record<string, unknown>): ToolContext {
-  return { accessToken: 'fake', userLabel: 'u', gateway: { get: async (p: string) => {
+  return { accessToken: 'fake', userLabel: 'u', traceId: 't'.repeat(32), gateway: { get: async (p: string) => {
     for (const [frag, v] of Object.entries(routes)) if (p.includes(frag)) { if (v instanceof Error) throw v; return v }
     throw new Error(`unexpected ${p}`)
   } } as never }

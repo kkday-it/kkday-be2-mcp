@@ -103,7 +103,7 @@ export async function createChangesetCore(args: Record<string, unknown>, ctx: L2
 
   try {
     await ctx.rateBudget.consumeChangeset(ctx.userLabel)
-    const diff = await mod.computeDiff({ gateway: ctx.gateway, accessToken: ctx.accessToken, userLabel: ctx.userLabel }, items)
+    const diff = await mod.computeDiff({ gateway: ctx.gateway, traceId: ctx.traceId, accessToken: ctx.accessToken, userLabel: ctx.userLabel }, items)
     const diffVersion = mod.diffVersion(diff)
     const id = ctx.genId()
     await ctx.changeSets.create({

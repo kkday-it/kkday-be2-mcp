@@ -7,6 +7,7 @@ import { AppError } from '../../errors.js'
 import { getModule } from './registry.js'
 import type { ExecCtx } from './module.js'
 import '../../modules/index.js'
+import { randomTraceId } from '../../otel.js'
 
 export interface ExecutorDeps {
   changeSets: ChangeSetStore; gateway: GatewayClient; audit: AuditLog; now: () => number
@@ -22,7 +23,7 @@ export interface ExecutorDeps {
 // hardcoded 'confirm-page' every branch used to write regardless of caller. Defaults to
 // 'confirm_page' semantics (via clientInfoFor's fallback) for any pre-existing direct caller that
 // doesn't pass it — see clientInfoFor below.
-export interface ExecutorIdentity { accessToken: string; userLabel: string; modifyUser: string; sessionId: string; channel?: 'panel' | 'confirm_page' | 'scheduler' }
+export interface ExecutorIdentity { accessToken: string; userLabel: string; modifyUser: string; sessionId: string; channel?: 'panel' | 'confirm_page' | 'scheduler'; traceId?: string }
 
 // Same channel->label mapping as confirmService.ts's clientInfoPrefix, but for the PER-ITEM
 // changeset.execute audit rows (as opposed to confirmService's single changeset.approve decision
@@ -45,8 +46,9 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
   }
   const mod = getModule(rec.actionType)
   const tracer = trace.getTracer('be2-mcp')
+  const execTraceId = who.traceId ?? randomTraceId()
   const ctx: ExecCtx = {
-    gateway: deps.gateway, accessToken: who.accessToken, modifyUser: who.modifyUser,
+    gateway: deps.gateway.withTrace(execTraceId), traceId: execTraceId, accessToken: who.accessToken, modifyUser: who.modifyUser,
     userLabel: who.userLabel, sessionId: who.sessionId, channel: who.channel, now: deps.now,
     span: (name, fn) => tracer.startActiveSpan(name, async span => {
       try { return await fn(span.spanContext().traceId) } finally { span.end() }
@@ -59,7 +61,7 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
     // 整批兜底（與現行三個 batch 分支的 .catch 等價）：每 item 一筆 failed
     results = rec.items.map(it => ({
       item_key: mod.itemKey(it), status: 'failed' as const,
-      error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: 'n/a',
+      error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: execTraceId,
     }))
   }
   await deps.changeSets.recordResults(changesetId, results)

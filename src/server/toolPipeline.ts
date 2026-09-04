@@ -1,4 +1,5 @@
 import { trace, SpanStatusCode } from '@opentelemetry/api'
+import { ensureTraceId } from '../otel.js'
 import { requestContext, type RequestContext } from './requestContext.js'
 import type { TokenManager, UserAuthContext } from '../auth/tokenManager.js'
 import type { RateBudget } from '../limits/rateBudget.js'
@@ -47,7 +48,7 @@ function errResult(code: string, message: string): ToolResult {
 function runWrapped<Ctx>(
   toolName: string,
   deps: Pick<PipelineDeps, 'tokenManager' | 'rateBudget' | 'audit' | 'readOids'>,
-  buildCtx: (user: UserAuthContext, reqCtx: RequestContext) => Ctx,
+  buildCtx: (user: UserAuthContext, reqCtx: RequestContext, traceId: string) => Ctx,
   callHandler: (ctx: Ctx, args: Record<string, unknown>) => Promise<Envelope>,
 ) {
   const tracer = trace.getTracer('be2-mcp')
@@ -57,7 +58,7 @@ function runWrapped<Ctx>(
 
     return tracer.startActiveSpan(`mcp.tool/${toolName}`, async span => {
       const started = Date.now()
-      const traceId = span.spanContext().traceId
+      const traceId = ensureTraceId(span.spanContext().traceId)
       span.setAttribute('mcp.tool', toolName)
       span.setAttribute('mcp.session_id', reqCtx.sessionId)
       let userLabel = 'unknown'
@@ -69,7 +70,7 @@ function runWrapped<Ctx>(
         userLabel = user.userLabel
         span.setAttribute('user_id', userLabel)
         await deps.rateBudget.consume(userLabel, reqCtx.sessionId)
-        const toolCtx = buildCtx(user, reqCtx)
+        const toolCtx = buildCtx(user, reqCtx, traceId)
         const envelope = await callHandler(toolCtx, args)
         if (envelope.read_oids.length) await deps.readOids.record(reqCtx.sessionId, envelope.read_oids)
         if (envelope.errors.length > 0) {
@@ -96,16 +97,19 @@ function runWrapped<Ctx>(
         if (status === 'error') console.error(`be2-mcp tool ${toolName} failed:`, e)
         result = errResult(code, message)
       } finally {
-        await deps.audit.record({
-          userLabel, sessionId: reqCtx.sessionId, clientInfo: reqCtx.clientInfo, tool: toolName,
+        try {
+          await deps.audit.record({
+            userLabel, sessionId: reqCtx.sessionId, clientInfo: reqCtx.clientInfo, tool: toolName,
           // message may be set even when status==='ok' (partial errors / degrade warnings) —
           // record it so the audit trail shows warn-and-proceed outcomes, not just failures.
           params: args, status, errorMessage: message,
           eventType: 'tool_call',
           severity: status === 'ok' ? 'INFO' : 'ERROR',
           traceId, durationMs: Date.now() - started,
-        })
-        span.end()
+          })
+        } finally {
+          span.end()
+        }
       }
       return result
     })
@@ -114,7 +118,7 @@ function runWrapped<Ctx>(
 
 export function wrapTool(tool: ToolDef, deps: PipelineDeps) {
   return runWrapped(tool.name, deps,
-    user => ({ gateway: deps.gateway, accessToken: user.accessToken, userLabel: user.userLabel }),
+    (user, _reqCtx, traceId) => ({ gateway: deps.gateway.withTrace(traceId), traceId, accessToken: user.accessToken, userLabel: user.userLabel }),
     (ctx, args) => tool.handler(args as never, ctx))
 }
 
@@ -125,8 +129,9 @@ export function wrapTool(tool: ToolDef, deps: PipelineDeps) {
 // wrapTool does above.
 export function wrapL2Tool(tool: L2ToolDef, deps: L2PipelineDeps) {
   return runWrapped(tool.name, deps,
-    (user, reqCtx): L2ToolContext => ({
-      gateway: deps.gateway,
+    (user, reqCtx, traceId): L2ToolContext => ({
+      gateway: deps.gateway.withTrace(traceId),
+      traceId,
       accessToken: user.accessToken,
       userLabel: user.userLabel,
       sessionId: reqCtx.sessionId,

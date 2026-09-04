@@ -10,6 +10,7 @@ import type { CredentialStore } from '../store/credentialStore.js'
 import type { AnyDiffItem, ChangeSetRecord } from '../core/changeset/types.js'
 import { esc } from '../core/changeset/html.js'
 import type { ConfirmView } from '../core/changeset/module.js'
+import { randomTraceId } from "../otel.js"
 import { requireSession } from './sessionGate.js'
 
 // Task 5: the confirm-page's auth model switches from a per-change-set capability token
@@ -69,7 +70,8 @@ export function buildConfirmRouter(deps: ConfirmDeps): express.Router {
 
   async function liveDiff(rec: ChangeSetRecord, accessToken: string) {
     const mod = getModule(rec.actionType)
-    const diff = await mod.computeDiff({ gateway: deps.gateway, accessToken, userLabel: rec.creatorLabel }, rec.items) as AnyDiffItem[]
+    const traceId = randomTraceId()
+    const diff = await mod.computeDiff({ gateway: deps.gateway.withTrace(traceId), traceId, accessToken, userLabel: rec.creatorLabel }, rec.items) as AnyDiffItem[]
     return { diff, version: mod.diffVersion(diff) }
   }
 

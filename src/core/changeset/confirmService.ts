@@ -1,5 +1,6 @@
 import { getModule } from './registry.js'
 import '../../modules/index.js'
+import { randomTraceId } from '../../otel.js'
 import { executeChangeSet, itemKey, type ExecutorDeps } from './executor.js'
 import { AppError } from '../../errors.js'
 import type { ChangeSetRecord, ChangeSetItem, InventoryItem, InventoryPlatformItem, ShelfScheduleItem, ItemResult } from './types.js'
@@ -13,7 +14,7 @@ import type { ChangeSetRecord, ChangeSetItem, InventoryItem, InventoryPlatformIt
 // decision": that sequence is security-critical (it is what makes approval execute-exactly-once
 // and immune to a stale/replayed diff) and a copy would silently drift from the original.
 
-export interface ApproveWho { accessToken: string; userLabel: string; sessionId: string; identityId: string }
+export interface ApproveWho { accessToken: string; userLabel: string; sessionId: string; identityId: string; traceId?: string }
 
 export interface ApproveParams {
   rec: ChangeSetRecord
@@ -54,6 +55,7 @@ export interface ConfirmServiceDeps extends ExecutorDeps {
 export async function approveAndExecute(deps: ConfirmServiceDeps, params: ApproveParams): Promise<ApproveResult> {
   const { rec, who, expectedDiffVersion, confirmedKeys, channel, audit } = params
   const mod = getModule(rec.actionType)
+  const traceId = who.traceId ?? randomTraceId()
 
   // (1) confirmed_keys 校驗（面板專用；確認頁不傳此欄位、跳過本步）——見 spec §4.3:面板取消勾選
   // 某個項目後,後端不得仍全量執行整批。集合須完全一致(無多、無缺)。
@@ -73,7 +75,7 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
 
   // (2) 即時重算 diff + staleness 比對——批准的必須是「此刻仍為真」的 diff,不是使用者打開頁面/
   // 面板當下的舊 diff。
-  const diff = await mod.computeDiff({ gateway: deps.gateway, accessToken: who.accessToken, userLabel: rec.creatorLabel }, rec.items) as import('./types.js').AnyDiffItem[]
+  const diff = await mod.computeDiff({ gateway: deps.gateway.withTrace(traceId), traceId, accessToken: who.accessToken, userLabel: rec.creatorLabel }, rec.items) as import('./types.js').AnyDiffItem[]
   const version = mod.diffVersion(diff)
   if (version !== expectedDiffVersion) {
     // Final whole-branch review Important 2: without this write-back, app_get_changeset_view
@@ -123,7 +125,7 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
       params: { changeset_id: rec.id, ip: audit?.ip, channel, scheduled_for: rec.schedule.executeAtUtc },
       status: 'ok',
       eventType: 'approval', severity: 'INFO',
-      traceId: 'n/a', durationMs: 0,
+      traceId, durationMs: 0,
     })
     return { scheduled: true }
   }
@@ -147,11 +149,11 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
     params: { changeset_id: rec.id, ip: audit?.ip, channel },
     status: 'ok',
     eventType: 'approval', severity: 'INFO',
-    traceId: 'n/a', durationMs: 0,
+    traceId, durationMs: 0,
   })
 
   // (4) execute.
-  const out = await executeChangeSet(deps, rec.id, { accessToken: who.accessToken, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId, channel })
+  const out = await executeChangeSet(deps, rec.id, { accessToken: who.accessToken, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId, channel, traceId })
   if (!out) return { casFailed: true }
   return { status: out.status, results: out.results }
 }

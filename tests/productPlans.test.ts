@@ -5,7 +5,7 @@ import { existsSync, readFileSync } from 'node:fs'
 
 function ctxWith(routes: Record<string, unknown | Error>): ToolContext {
   return {
-    accessToken: 'fake-jwt', userLabel: 'p@kkday.com',
+    accessToken: 'fake-jwt', userLabel: 'p@kkday.com', traceId: 't'.repeat(32),
     gateway: { get: async (path: string) => {
       for (const [frag, v] of Object.entries(routes)) if (path.includes(frag)) {
         if (v instanceof Error) throw v

@@ -6,7 +6,7 @@ import { getChangesetStatusTool } from '../src/core/changeset/tools.js'
 import type { L2ToolContext } from '../src/server/l2Context.js'
 
 function ctxFor(store: ChangeSetStore, userLabel: string): L2ToolContext {
-  return { gateway: {} as never, accessToken: 'x', userLabel, sessionId: 's', bearerHash: 'bh',
+  return { gateway: {} as never, accessToken: 'x', userLabel, sessionId: 's', bearerHash: 'bh', traceId: 't'.repeat(32),
     businessList: [], readOids: {} as unknown as ReadOidStore, changeSets: store, rateBudget: {} as never,
     baseUrl: 'http://x', genId: () => 'id', now: () => 1000, emitConfirmUrl: () => {}, scheduleTz: 'Asia/Taipei' }
 }

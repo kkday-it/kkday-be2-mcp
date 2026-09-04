@@ -24,7 +24,7 @@ async function makeDeps(db?: Db) {
       tokenManager: { getFreshAccessToken: vi.fn(async () => ({ accessToken: 'fake-jwt', userLabel: 'p@kkday.com', businessList: [] })) },
       rateBudget: new RateBudget(db, { perSession: 2, perUserDay: 100 }),
       audit: new AuditLog(db),
-      gateway: {} as never,
+      gateway: { withTrace() { return this } } as never,
       readOids,
     } as never,
   }
@@ -43,7 +43,8 @@ describe('wrapTool pipeline', () => {
     expect(env.items).toEqual([{ v: 'hi' }])
     const row = (await new AuditLog(db).recent())[0]
     expect(row).toMatchObject({ tool: 't_echo', status: 'ok', sessionId: 'sess1', userLabel: 'p@kkday.com' })
-    expect(row.traceId.length).toBeGreaterThan(0)
+    expect(row.traceId).toMatch(/^[0-9a-f]{32}$/)
+    expect(row.traceId).not.toBe('0'.repeat(32))
     expect(await readOids.has('sess1', 'oid-read-1')).toBe(true) // spec §6.2 substrate
   })
   it('no request context -> denied_auth error result, handler not called', async () => {
@@ -116,5 +117,11 @@ describe('wrapTool pipeline', () => {
     expect(row.status).toBe('error')
     expect(row.errorMessage).toBeTruthy()
     expect(row.errorMessage).toContain('boom')
+  })
+
+  it('pipeline span closes safely even if audit record throws (#3)', async () => {
+    const { deps } = await makeDeps()
+    vi.spyOn((deps as any).audit, 'record').mockRejectedValue(new Error('db down'))
+    await expect(requestContext.run(ctx, () => wrapTool(tool as never, deps)({ v: 'x' }))).rejects.toThrow('db down')
   })
 })

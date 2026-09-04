@@ -15,7 +15,7 @@ async function makeDeps(gateway: any): Promise<{ store: ChangeSetStore; audit: A
   const store = new ChangeSetStore(db, { now: () => timeNow })
   const audit = new AuditLog(db, () => timeNow)
   const deps: ConfirmServiceDeps = {
-    changeSets: store, gateway, audit, now: () => timeNow,
+    changeSets: store, gateway: Object.assign(Object.create(gateway), { withTrace() { return this } }), audit, now: () => timeNow,
     modifyUserFrom: (at: string) => 'U:' + at,
   }
   return { store, audit, deps }
@@ -43,7 +43,7 @@ function shelfGateway(live: { is_active: boolean } = { is_active: true }) {
   }
 }
 async function realShelfDiffVersion(rec: ChangeSetRecord, gw: any): Promise<string> {
-  const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: gw, accessToken: WHO.accessToken, userLabel: rec.creatorLabel })
+  const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: gw, accessToken: WHO.accessToken, userLabel: rec.creatorLabel, traceId: 't'.repeat(32) })
   return getModule(rec.actionType).diffVersion(diff)
 }
 describe('approveAndExecute - schedule branches', () => {

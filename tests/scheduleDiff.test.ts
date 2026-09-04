@@ -20,7 +20,7 @@ function gatewayWith(rowsByProd: Record<string, unknown[]>) {
     async put() { throw new Error('diff must never write') },
   }
 }
-const ctxOf = (gw: unknown) => ({ gateway: gw as never, accessToken: 'at', userLabel: 'u' })
+const ctxOf = (gw: unknown) => ({ gateway: gw as never, accessToken: 'at', userLabel: 'u', traceId: 't'.repeat(32) })
 const item = (o: Partial<ShelfScheduleItem> = {}): ShelfScheduleItem =>
   ({ prod_oid: 'p1', pkg_oid: 'k1', queue: [{ reserve_date_utc: '2027-01-01 00:00:00', reserve_status: true }], ...o })
 

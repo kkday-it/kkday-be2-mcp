@@ -27,7 +27,7 @@ async function mkCtx(over: Partial<L2ToolContext> = {}) {
   } as never
   const emitConfirmUrl = vi.fn()
   const ctx: L2ToolContext = {
-    gateway, accessToken: 'fake', userLabel: 'p@kkday.com', sessionId: 's1', bearerHash: 'bh',
+    gateway, accessToken: 'fake', userLabel: 'p@kkday.com', sessionId: 's1', bearerHash: 'bh', traceId: 't'.repeat(32),
     businessList: ['product.product-inventory.update', 'product.product-sale-status.update'], readOids, changeSets: store, rateBudget,
     baseUrl: 'http://127.0.0.1:8787', genId: () => 'cs1', now: () => T0,
     emitConfirmUrl, scheduleTz: 'Asia/Taipei', ...over,

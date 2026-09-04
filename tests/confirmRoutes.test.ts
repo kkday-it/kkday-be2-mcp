@@ -58,6 +58,7 @@ beforeEach(async () => {
   modifyUserThrows = false
 
   const gateway = {
+    withTrace() { return this },
     get: async (p: string) => { if (p.includes('/info')) return { name: 'Prod A' }; await new Promise(r => setTimeout(r, 15)); return { is_active: live.is_active } },
     put: async (_p: string, at: string) => { putCalls++; putBearer = at; live.is_active = false; return {} },
   } as never

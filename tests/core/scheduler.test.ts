@@ -33,6 +33,7 @@ describe('scheduler', () => {
 
     putCount = 0
     gateway = {
+      withTrace() { return this },
       get: async (p: string) => {
         if (p.endsWith('/inventories/status')) return { is_processing: false }
         return {}

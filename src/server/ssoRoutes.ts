@@ -12,7 +12,7 @@ import type { TokenManager } from '../auth/tokenManager.js'
 import { requireSession } from './sessionGate.js'
 import { revokeGrant } from '../oauth/revocation.js'
 import { esc } from '../core/changeset/html.js'
-import { randomTraceId } from '../auth/reauthAudit.js'
+import { randomTraceId } from '../otel.js'
 
 export interface SsoDeps {
   authServiceClient: AuthServiceClient; identities: IdentityStore; credentials: CredentialStore; webSessions: WebSessionStore

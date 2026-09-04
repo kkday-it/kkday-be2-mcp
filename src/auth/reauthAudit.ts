@@ -1,10 +1,8 @@
 import type { CredentialStore } from '../store/credentialStore.js'
 import type { OAuthStore } from '../oauth/oauthStore.js'
 import type { IdentityStore } from '../store/identityStore.js'
+import { randomTraceId } from '../otel.js'
 import type { AuditLog } from '../audit/auditLog.js'
-import crypto from 'node:crypto'
-
-export const randomTraceId = (): string => crypto.randomUUID().replace(/-/g, '')
 
 // G2（spec §3.3）：identity 的 be2 refresh 死亡（撤權/鎖定/到期）＝重大安全事件。
 // 撤銷動作沿用 app.ts 原 callback 內容；audit 只記 identityId + userLabel，

@@ -6,7 +6,7 @@ import { z } from 'zod'
 
 function ctxWith(routes: Record<string, unknown | Error>): ToolContext {
   return {
-    accessToken: 'fake-jwt', userLabel: 'pilot@kkday.com',
+    accessToken: 'fake-jwt', userLabel: 'pilot@kkday.com', traceId: 't'.repeat(32),
     gateway: {
       get: async (path: string) => {
         for (const [frag, v] of Object.entries(routes)) if (path.includes(frag)) {
@@ -46,7 +46,7 @@ describe('be2_find_products', () => {
       await new Promise(r => setTimeout(r, 5))
       inFlight--; return info
     } }
-    const ctx = { accessToken: 'fake-jwt', userLabel: 'u', gateway: gateway as never }
+    const ctx = { accessToken: 'fake-jwt', userLabel: 'u', traceId: 't'.repeat(32), gateway: gateway as never }
     await findProductsTool.handler({ prod_oids: Array.from({ length: 20 }, (_, i) => `p${i}`) }, ctx)
     expect(peak).toBeLessThanOrEqual(10) // 5 oids x 2 requests each
   })

@@ -89,7 +89,7 @@ beforeEach(async () => {
   const modifyUserFrom = (at: string) => 'U:' + at
 
   const router = buildConfirmRouter({
-    changeSets: store, gateway: gw as never, tokenManager, webSessions, credentials, audit: new AuditLog(db, () => 1000),
+    changeSets: store, gateway: Object.assign(Object.create(gw), { withTrace() { return this } }) as never, tokenManager, webSessions, credentials, audit: new AuditLog(db, () => 1000),
     modifyUserFrom, now: () => 1000,
   })
   const app = express(); app.use(express.json()); app.use(router)

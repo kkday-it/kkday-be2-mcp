@@ -17,7 +17,7 @@ function gatewayWith(configsByItem: Record<string, unknown>) {
     async put() { throw new Error('diff must never write') },
   }
 }
-const ctxOf = (gw: unknown) => ({ gateway: gw as never, accessToken: 'at', userLabel: 'u' })
+const ctxOf = (gw: unknown) => ({ gateway: gw as never, accessToken: 'at', userLabel: 'u', traceId: 't'.repeat(32) })
 const item = (o: Partial<InventoryPlatformItem> = {}): InventoryPlatformItem =>
   ({ item_oid: 'i1', supplier_oid: 's1', target: 'BE2_SCM', affected_pkgs: [{ prod_oid: 'p1', pkg_oid: 'k1', pkg_name: 'A' }], ...o })
 

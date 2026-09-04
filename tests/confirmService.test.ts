@@ -22,7 +22,7 @@ async function makeDeps(gateway: { get: Function; put: Function; post?: Function
   const store = new ChangeSetStore(db, { now: () => 1000 })
   const audit = new AuditLog(db, () => 1000)
   const deps: ConfirmServiceDeps = {
-    changeSets: store, gateway: gateway as never, audit, now: () => 1000,
+    changeSets: store, gateway: Object.assign(Object.create(gateway), { withTrace() { return this } }) as never, audit, now: () => 1000,
     modifyUserFrom: (at: string) => 'U:' + at,
   }
   return { store, audit, deps }
@@ -55,7 +55,7 @@ function shelfGateway(live: { is_active: boolean } = { is_active: true }) {
 }
 
 async function realShelfDiffVersion(rec: ChangeSetRecord, gw: ReturnType<typeof shelfGateway>): Promise<string> {
-  const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel })
+  const diff = await computeChangesetDiff(rec.actionType, rec.items, { traceId: 'test-trace', gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel })
   return getModule(rec.actionType).diffVersion(diff)
 }
 
@@ -95,7 +95,7 @@ function invGateway(qty: Record<string, number>) {
 }
 
 async function realInventoryDiffVersion(rec: ChangeSetRecord, gw: ReturnType<typeof invGateway>): Promise<string> {
-  const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel })
+  const diff = await computeChangesetDiff(rec.actionType, rec.items, { traceId: 'test-trace', gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel })
   return getModule(rec.actionType).diffVersion(diff)
 }
 
@@ -268,6 +268,7 @@ describe('approveAndExecute — audit clientInfo prefix (Task 11 Finding 3)', ()
     expect(row.clientInfo).toBe('confirm-page:Mozilla/5.0 test-agent')
     expect(row.eventType).toBe('approval')
     expect(row.severity).toBe('INFO')
+    expect(row.traceId).not.toBe('n/a')
   })
 
   it('panel channel records a "panel:" prefix', async () => {

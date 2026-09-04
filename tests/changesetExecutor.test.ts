@@ -11,6 +11,7 @@ async function deps(gwState: Record<string, any>, over: Partial<ExecutorDeps> = 
   const db = await openTestDb()
   const store = new ChangeSetStore(db, { now: () => 1000 })
   const gateway = {
+    withTrace() { return this },
     get: async (p: string) => gwState[p.split('?')[0]],
     put: async (p: string, _t: string, body: any) => { gwState[p.split('?')[0]] = actApply(p, gwState[p.split('?')[0]], body); return { ok: true } },
   } as never
@@ -42,6 +43,7 @@ describe('executeChangeSet', () => {
     let putToken: string | undefined
     const db = await openTestDb(); const store = new ChangeSetStore(db, { now: () => 1000 })
     const gateway = {
+      withTrace() { return this },
       get: async (p: string) => gwState[p.split('?')[0]],
       put: async (p: string, t: string, body: any) => { putToken = t; gwState[p.split('?')[0]] = actApply(p, gwState[p.split('?')[0]], body); return { ok: true } },
     } as never
@@ -65,7 +67,7 @@ describe('executeChangeSet', () => {
     const db = await openTestDb(); const store = new ChangeSetStore(db, { now: () => 1000 })
     const state: Record<string, any> = { '/product/api/v1/products/p1/package-configs': [{ pkg_oid: 'k1', is_active: true, name: 'A', updated_by: 'U-old', updated_at: '2026-01-01' }, { pkg_oid: 'k2', is_active: true, name: 'B', updated_by: 'U-old', updated_at: '2026-01-01' }] }
     let putBody: any
-    const gateway = { get: async (p: string) => state[p.split('?')[0]], put: async (_p: string, _t: string, body: any) => { putBody = body; return { ok: true } } } as never
+    const gateway = { withTrace() { return this }, get: async (p: string) => state[p.split('?')[0]], put: async (_p: string, _t: string, body: any) => { putBody = body; return { ok: true } } } as never
     const d: ExecutorDeps = { changeSets: store, gateway, audit: new AuditLog(db, () => 1000), now: () => 1000 }
     await store.create({ id: 'cs2', creatorLabel: 'owner@kkday.com', creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_plan',
       items: [{ prod_oid: 'p1', pkg_oid: 'k1', target_is_active: false }], diff: [{ prod_oid: 'p1', pkg_oid: 'k1', target_is_active: false, no_op: false }], diffVersion: 'v', status: 'approved', createdAt: 1000 })
@@ -102,6 +104,7 @@ describe('executeChangeSet', () => {
     }
     let inFlight = 0, maxInFlight = 0
     const gateway = {
+      withTrace() { return this },
       get: async (p: string) => {
         const path = p.split('?')[0]
         if (path.includes('/p2/')) throw new Error('p2 read failed')
@@ -141,6 +144,7 @@ describe('executeChangeSet', () => {
     // 'error' so audit scans filtering on error do not miss it.
     const db = await openTestDb(); const store = new ChangeSetStore(db, { now: () => 1000 })
     const gateway = {
+      withTrace() { return this },
       get: async (p: string) => p.endsWith('/inventories/status') ? { is_processing: false } : {},
       post: async () => ({ i1: { fullday: 10 } }),
       put: async () => { throw Object.assign(new Error('403'), { code: 'AU9403' }) },

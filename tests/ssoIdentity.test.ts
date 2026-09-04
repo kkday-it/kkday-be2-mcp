@@ -70,6 +70,7 @@ beforeEach(async () => {
   } as never
 
   const gateway = {
+    withTrace() { return this },
     get: async (p: string) => (p.includes('/info') ? { name: 'Prod A' } : { is_active: true }),
     put: async () => ({}),
   } as never

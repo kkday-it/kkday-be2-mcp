@@ -55,7 +55,7 @@ function fakeAppDeps(over: Partial<AppPipelineDeps> = {}): AppPipelineDeps {
     rateBudget: { consume() {}, consumeChangeset() {} } as never,
     scheduleTz: 'Asia/Taipei',
     audit: { record() {} } as never,
-    gateway: {} as never,
+    gateway: { withTrace() { return this } } as never,
     changeSets: {
       get: (id: string) => id === 'cs1'
         ? { id: 'cs1', creatorLabel: 'alice', status: 'pending_approval', actionType: 'shelf_toggle_product', note: undefined, diff: [{ a: 1 }], diffVersion: 'v1' }

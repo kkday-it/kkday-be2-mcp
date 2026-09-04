@@ -19,11 +19,23 @@ export class GatewayClient {
   private baseUrl: string
   private fetchImpl: typeof fetch
   private timeoutMs: number
+  private traceId?: string
 
   constructor(opts: { baseUrl: string; fetchImpl?: typeof fetch; timeoutMs?: number }) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, '')
     this.fetchImpl = opts.fetchImpl ?? fetch
     this.timeoutMs = opts.timeoutMs ?? 15_000
+  }
+
+  withTrace(traceId: string): GatewayClient {
+    const bound = Object.create(this) as GatewayClient
+    bound.traceId = traceId
+    return bound
+  }
+
+  private traceHeaders(): Record<string, string> {
+    return this.traceId ? { "request-uuid": this.traceId } : {}
+
   }
 
   // 成功語義（data envelope 解包）與錯誤碼萃取（meta/metadata/error）留在此層；HTTP 底層
@@ -40,20 +52,20 @@ export class GatewayClient {
   async get(path: string, accessToken: string, query?: Record<string, string>): Promise<unknown> {
     const qs = query && Object.keys(query).length ? `?${new URLSearchParams(query)}` : ''
     const r = await fetchJson(this.fetchImpl, `${this.baseUrl}${path}${qs}`,
-      { headers: { authorization: `Bearer ${accessToken}`, ...BE2_HEADERS } }, this.timeoutMs, `GET ${path}`)
+      { headers: { authorization: `Bearer ${accessToken}`, ...BE2_HEADERS, ...this.traceHeaders() } }, this.timeoutMs, `GET ${path}`)
     return this.unwrap(path, 'GET', r)
   }
 
   async put(path: string, accessToken: string, body: unknown): Promise<unknown> {
     const r = await fetchJson(this.fetchImpl, `${this.baseUrl}${path}`,
-      { method: 'PUT', headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json', ...BE2_HEADERS }, body: JSON.stringify(body) },
+      { method: 'PUT', headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json', ...BE2_HEADERS, ...this.traceHeaders() }, body: JSON.stringify(body) },
       this.timeoutMs, `PUT ${path}`)
     return this.unwrap(path, 'PUT', r)
   }
 
   async post(path: string, accessToken: string, body: unknown): Promise<unknown> {
     const r = await fetchJson(this.fetchImpl, `${this.baseUrl}${path}`,
-      { method: 'POST', headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json', ...BE2_HEADERS }, body: JSON.stringify(body) },
+      { method: 'POST', headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json', ...BE2_HEADERS, ...this.traceHeaders() }, body: JSON.stringify(body) },
       this.timeoutMs, `POST ${path}`)
     return this.unwrap(path, 'POST', r)
   }
