@@ -24,4 +24,17 @@ describe('AuditLog', () => {
     expect(JSON.stringify(rows[0].params)).not.toContain('eyJa')
     await db.close()
   })
+  it('records eventType/severity and defaults them for plain entries', async () => {
+    const db = await openTestDb()
+    const log = new AuditLog(db, () => 123)
+    await log.record({ userLabel: 'u', sessionId: 's', clientInfo: 'c', tool: 't',
+      params: {}, status: 'ok', traceId: 'tr', durationMs: 1 })
+    await log.record({ userLabel: 'u', sessionId: 's', clientInfo: 'c', tool: 'oauth_revoke',
+      params: {}, status: 'ok', traceId: 'tr', durationMs: 1,
+      eventType: 'security.token_revoked', severity: 'CRITICAL' })
+    const rows = await log.recent()
+    expect(rows[1]).toMatchObject({ eventType: 'tool_call', severity: 'INFO' })
+    expect(rows[0]).toMatchObject({ eventType: 'security.token_revoked', severity: 'CRITICAL' })
+    await db.close()
+  })
 })
