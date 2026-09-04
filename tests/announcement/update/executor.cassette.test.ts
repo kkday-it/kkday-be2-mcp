@@ -142,6 +142,28 @@ describe('executeAnnouncementUpdate via cassette (offline, real client, same-oid
     expect(after.isEnabled).toBe(true)
   })
 
+  // F3: request-uuid 貫穿 — read-merge-write 的 GET 與 PATCH 兩腿都要帶，且與該筆 ItemResult.trace_id
+  // 同值（span callback 給的值，見 executeAnnouncementUpdate 的 ctx.span 呼叫）。makeCassetteFetch 本身
+  // 不記錄 headers（matchKey 只看 method/url/body），故外包一層擷取實際送出的 init.headers。
+  it('threads the span traceId as request-uuid on both the GET and PATCH legs', async () => {
+    const cassetteFetch = makeCassetteFetch('replay', CASSETTE_PATH)
+    const captured: Array<{ method: string; headers: Record<string, string> }> = []
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      captured.push({ method: (init?.method ?? 'GET').toUpperCase(), headers: { ...(init?.headers as Record<string, string>) } })
+      return cassetteFetch(input, init)
+    }) as typeof fetch
+    const client = new AnnouncementClient({ baseUrl: BASE_URL, apiKey: 'test-key', fetchImpl })
+    const rec = { id: 'cs1', actionType: 'announcement_update', items: [item] } as unknown as ChangeSetRecord
+
+    const results = await executeAnnouncementUpdateWith(client, ctx(), rec)
+
+    expect(results[0].trace_id).toBe('trace-1')
+    const getCall = captured.find(c => c.method === 'GET')
+    const patchCall = captured.find(c => c.method === 'PATCH')
+    expect(getCall?.headers['request-uuid']).toBe('trace-1')
+    expect(patchCall?.headers['request-uuid']).toBe('trace-1')
+  })
+
   it('reports failed with the be2 error code on a 403 PATCH (does not throw)', async () => {
     const fetchImpl = makeCassetteFetch('replay', CASSETTE_PATH)
     fetchImpl.stubError('PATCH', '/admin/product/announcement', 403, { metadata: { status: 'AU9997', desc: 'forbidden' } })

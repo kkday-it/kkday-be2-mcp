@@ -49,4 +49,22 @@ describe('AnnouncementClient', () => {
     expect(url).toContain('prodOids=7781%2C16384')
     expect(init.headers['user-uuid']).toBe('uuid-1')
   })
+
+  // F3: request-uuid 貫穿（稽核 join 鏈），比照 GatewayClient 的 withTrace 語義——帶 traceId 才有
+  // header，沒帶就沒有（向後相容 probe/既有呼叫）。
+  it('create: sends request-uuid header when traceId is passed, omits it otherwise', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(res(200, { metadata: { status: '0000' }, data: {} }))
+    const c = new AnnouncementClient({ baseUrl: 'https://gw/svc-b2c/api/v1', apiKey: 'K', fetchImpl })
+    await c.create(TOKEN, { name: 'x' }, 'trace-abc')
+    expect(fetchImpl.mock.calls[0][1].headers['request-uuid']).toBe('trace-abc')
+    await c.create(TOKEN, { name: 'x' })
+    expect(fetchImpl.mock.calls[1][1].headers).not.toHaveProperty('request-uuid')
+  })
+
+  it('listByProdOids: sends request-uuid header when traceId is passed', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(res(200, { metadata: { status: '0000' }, data: [] }))
+    const c = new AnnouncementClient({ baseUrl: 'https://gw/svc-b2c/api/v1', apiKey: 'K', fetchImpl })
+    await c.listByProdOids(TOKEN, ['7781'], 'trace-xyz')
+    expect(fetchImpl.mock.calls[0][1].headers['request-uuid']).toBe('trace-xyz')
+  })
 })

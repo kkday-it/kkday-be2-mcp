@@ -25,7 +25,12 @@ export class AnnouncementClient {
     this.timeoutMs = opts.timeoutMs ?? 15_000
   }
 
-  private headers(accessToken: string): Record<string, string> {
+  // request-uuid：稽核事件模型 spec §「request-uuid 貫穿」要求任一筆 be2-mcp 發出的下游請求都能
+  // join 回 MCP audit（F3）。traceId 為 optional（沿用 GatewayClient.withTrace 的「有才帶、沒有不帶」
+  // 語義，向後相容未帶 trace 的呼叫），值即為呼叫端的 ctx.traceId / span traceId。
+  // 注意：gateway ACL 是否放行 svc-b2c 路由的這個 header 尚未 live 驗證——sit-write-contracts 只驗過
+  // be2 product 路由（GatewayClient 那條線），svc-b2c 這條線待補一次真的 live 驗證。
+  private headers(accessToken: string, traceId?: string): Record<string, string> {
     return {
       authorization: `Bearer ${accessToken}`,
       accept: 'application/json',
@@ -33,6 +38,7 @@ export class AnnouncementClient {
       'x-api-key': this.apiKey,
       'user-uuid': decodePlatformId(accessToken),
       'x-auth-id': 'be2',
+      ...(traceId ? { 'request-uuid': traceId } : {}),
     }
   }
 
@@ -46,32 +52,32 @@ export class AnnouncementClient {
     return r.body
   }
 
-  async listByProdOids(accessToken: string, prodOids: string[]): Promise<unknown[]> {
+  async listByProdOids(accessToken: string, prodOids: string[], traceId?: string): Promise<unknown[]> {
     const qs = new URLSearchParams({ page: '1', perPage: '100', prodOids: prodOids.join(',') })
     const r = await fetchJson(this.fetchImpl, `${this.baseUrl}/admin/product/announcement?${qs}`,
-      { method: 'GET', headers: this.headers(accessToken) }, this.timeoutMs, 'GET announcement')
+      { method: 'GET', headers: this.headers(accessToken, traceId) }, this.timeoutMs, 'GET announcement')
     const data = (this.check('GET announcement', r) as { data?: unknown }).data
     return Array.isArray(data) ? data : []
   }
 
-  async create(accessToken: string, body: Record<string, unknown>): Promise<unknown> {
+  async create(accessToken: string, body: Record<string, unknown>, traceId?: string): Promise<unknown> {
     const r = await fetchJson(this.fetchImpl, `${this.baseUrl}/admin/product/announcement`,
-      { method: 'POST', headers: this.headers(accessToken), body: JSON.stringify(body) }, this.timeoutMs, 'POST announcement')
+      { method: 'POST', headers: this.headers(accessToken, traceId), body: JSON.stringify(body) }, this.timeoutMs, 'POST announcement')
     const b = this.check('POST announcement', r)
     return (b as { data?: unknown }).data ?? b
   }
 
-  async getDetail(accessToken: string, announcementOid: number | string): Promise<unknown> {
+  async getDetail(accessToken: string, announcementOid: number | string, traceId?: string): Promise<unknown> {
     const r = await fetchJson(this.fetchImpl, `${this.baseUrl}/admin/product/announcement/${announcementOid}`,
-      { method: 'GET', headers: this.headers(accessToken) }, this.timeoutMs, 'GET announcement detail')
+      { method: 'GET', headers: this.headers(accessToken, traceId) }, this.timeoutMs, 'GET announcement detail')
     const b = this.check('GET announcement detail', r)
     return (b as { data?: unknown }).data ?? b
   }
 
   // PATCH 送整份文件（full REPLACE，§6.2）；response data 恆為 null，故不回傳 unwrap 值。
-  async patch(accessToken: string, announcementOid: number | string, body: Record<string, unknown>): Promise<void> {
+  async patch(accessToken: string, announcementOid: number | string, body: Record<string, unknown>, traceId?: string): Promise<void> {
     const r = await fetchJson(this.fetchImpl, `${this.baseUrl}/admin/product/announcement/${announcementOid}`,
-      { method: 'PATCH', headers: this.headers(accessToken), body: JSON.stringify(body) }, this.timeoutMs, 'PATCH announcement')
+      { method: 'PATCH', headers: this.headers(accessToken, traceId), body: JSON.stringify(body) }, this.timeoutMs, 'PATCH announcement')
     this.check('PATCH announcement', r)
   }
 }

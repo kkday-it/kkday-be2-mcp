@@ -239,7 +239,8 @@ export const appGetAnnouncementViewTool: AppToolDef = {
     let counts: Map<string, number> | null = null
     if (client) {
       try {
-        const items = await client.listByProdOids(ctx.accessToken, prodOids)
+        // ctx.traceId 貫穿進 svc-b2c request-uuid header，讓這筆讀取也能 join 回 MCP audit（F3）。
+        const items = await client.listByProdOids(ctx.accessToken, prodOids, ctx.traceId)
         const m = new Map<string, number>()
         let anyGroupable = false
         for (const it of items as Array<Record<string, unknown>>) {

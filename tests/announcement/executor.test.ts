@@ -36,4 +36,13 @@ describe('executeAnnouncement', () => {
     expect(results[0].status).toBe('failed')
     expect(results[0].error_code).toBe('403')
   })
+
+  // F3: request-uuid 貫穿 — client.create 收到的 traceId 必須與該筆 ItemResult.trace_id 同值
+  // （span callback 給的值，見 core/changeset/executor.ts:53-56 註解），三方 join 才不斷鏈。
+  it('passes the span traceId to client.create, matching ItemResult.trace_id', async () => {
+    const client = { create: vi.fn().mockResolvedValue({ productAnnouncementOid: 42 }) } as any
+    const results = await executeAnnouncementWith(client, ctx(), rec)
+    expect(client.create.mock.calls[0][2]).toBe('trace-1')
+    expect(results[0].trace_id).toBe('trace-1')
+  })
 })

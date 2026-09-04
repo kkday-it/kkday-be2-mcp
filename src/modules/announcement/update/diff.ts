@@ -97,7 +97,8 @@ export async function computeAnnouncementUpdateDiff(
     let current: AnnouncementCurrentSnapshot | null = null
     if (client) {
       try {
-        const raw = await client.getDetail(ctx.accessToken, it.announcementOid) as RawAnnouncementDetail
+        // ctx.traceId 貫穿進 svc-b2c request-uuid header，讓這筆 live-diff 讀取也能 join 回 MCP audit（F3）。
+        const raw = await client.getDetail(ctx.accessToken, it.announcementOid, ctx.traceId) as RawAnnouncementDetail
         current = toCurrentSnapshot(raw)
       } catch { /* leave current = null (讀取失敗/未知，不阻擋 staging) */ }
     }

@@ -52,4 +52,25 @@ describe('AnnouncementClient.getDetail / patch (cassette-backed, offline)', () =
     await expect(c.patch(TOKEN, 3084, PATCH_BODY)).rejects.toBeInstanceOf(GatewayError)
     await expect(c.patch(TOKEN, 3084, PATCH_BODY)).rejects.toMatchObject({ code: 'AU9997' })
   })
+
+  // F3: getDetail/patch 兩腿都要能貫穿 request-uuid（read-merge-write 的 read 與 write 都要 join 得回稽核）。
+  // makeCassetteFetch 本身不記錄 request headers（matchKey 只看 method/url/body），故外包一層擷取實際
+  // 送出的 init.headers，內層仍委派 cassette fetch 拿合法 replay 回應。
+  it('getDetail / patch: send request-uuid header when traceId is passed', async () => {
+    const cassetteFetch = makeCassetteFetch('replay', CASSETTE)
+    const captured: Array<{ method: string; headers: Record<string, string> }> = []
+    const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      captured.push({ method: (init?.method ?? 'GET').toUpperCase(), headers: { ...(init?.headers as Record<string, string>) } })
+      return cassetteFetch(input, init)
+    }) as typeof fetch
+    const c = new AnnouncementClient({
+      baseUrl: 'https://api-gateway.stage.kkday.com/svc-b2c/api/v1', apiKey: 'test-key', fetchImpl,
+    })
+    await c.getDetail(TOKEN, 2404, 'trace-get')
+    await c.patch(TOKEN, 3084, PATCH_BODY, 'trace-patch')
+    const getCall = captured.find(c2 => c2.method === 'GET')
+    const patchCall = captured.find(c2 => c2.method === 'PATCH')
+    expect(getCall?.headers['request-uuid']).toBe('trace-get')
+    expect(patchCall?.headers['request-uuid']).toBe('trace-patch')
+  })
 })

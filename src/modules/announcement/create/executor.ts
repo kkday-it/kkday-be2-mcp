@@ -27,7 +27,9 @@ export async function executeAnnouncementWith(
     const key = itemKey(it)
     const r = await ctx.span('changeset.execute/announcement', async (traceId): Promise<ItemResult> => {
       try {
-        const after = await client.create(ctx.accessToken, toBody(it, ctx.modifyUser))
+        // traceId 這裡是 span callback 給的值（= ctx.traceId，見 core/changeset/executor.ts:53-56 註解）；
+        // 帶進 svc-b2c request-uuid header，讓這筆下游請求能與本筆 ItemResult.trace_id join（F3）。
+        const after = await client.create(ctx.accessToken, toBody(it, ctx.modifyUser), traceId)
         return { item_key: key, status: 'done', before: null, after, trace_id: traceId }
       } catch (e) {
         const ge = e as GatewayError

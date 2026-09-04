@@ -28,4 +28,13 @@ describe('computeAnnouncementDiff', () => {
     expect(d.product_names).toEqual([])
     expect(d.existing_count).toBeNull()  // null = 讀不到（顯示層呈現「未知」）
   })
+
+  // F3: live-diff 讀取（listByProdOids）也要帶 request-uuid，讓這筆讀取能 join 回 MCP audit。
+  it('passes ctx.traceId through to client.listByProdOids', async () => {
+    const ctx = ctxWith(async (p) => p.includes('7781') ? { name: '商品A' } : { name: '商品B' })
+    ctx.traceId = 'trace-diff'
+    const client = { listByProdOids: vi.fn().mockResolvedValue([]) } as any
+    await computeAnnouncementDiff([item], ctx, client)
+    expect(client.listByProdOids.mock.calls[0][2]).toBe('trace-diff')
+  })
 })
