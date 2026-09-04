@@ -1193,7 +1193,10 @@ export function initWizard(app: WizardApp): void {
       row.appendChild(statusSpan)
 
       if (status === 'scheduled') {
-        const cancelBtn = secondaryBtn('取消排程', 'cancelBtn', async () => {
+        // onclick 參數型別是 () => void（DOM 事件槽），doCancelSchedule 抽成具名 async 函式、
+        // 呼叫端用 void 運算子明確標記 fire-and-forget（錯誤已在內部 try/catch 吞下），滿足
+        // no-misused-promises 的 checksVoidReturn——與檔內其餘 onclick 呼叫點同一慣例。
+        const doCancelSchedule = async () => {
           cancelBtn.disabled = true
           try {
             // 批准時的 nonce 已被單次消耗——取消前必須重新 view 取新鮮 nonce(scheduled 狀態
@@ -1227,7 +1230,8 @@ export function initWizard(app: WizardApp): void {
             showFallback(fallbackEl, '取消失敗:' + String(e))
             cancelBtn.disabled = false
           }
-        })
+        }
+        const cancelBtn = secondaryBtn('取消排程', 'cancelBtn', () => { void doCancelSchedule() })
         cancelBtn.style.marginLeft = '0.5rem'
         row.appendChild(cancelBtn)
       }

@@ -1,5 +1,6 @@
 import { getModule } from './registry.js'
 import '../../modules/index.js'
+import { randomTraceId } from '../../otel.js'
 import { executeChangeSet, itemKey, type ExecutorDeps } from './executor.js'
 import { AppError } from '../../errors.js'
 import type { ChangeSetRecord, ChangeSetItem, InventoryItem, InventoryPlatformItem, ShelfScheduleItem, ItemResult } from './types.js'
@@ -13,7 +14,7 @@ import type { ChangeSetRecord, ChangeSetItem, InventoryItem, InventoryPlatformIt
 // decision": that sequence is security-critical (it is what makes approval execute-exactly-once
 // and immune to a stale/replayed diff) and a copy would silently drift from the original.
 
-export interface ApproveWho { accessToken: string; userLabel: string; sessionId: string; identityId: string }
+export interface ApproveWho { accessToken: string; userLabel: string; sessionId: string; identityId: string; traceId?: string }
 
 export interface ApproveParams {
   rec: ChangeSetRecord
@@ -54,6 +55,7 @@ export interface ConfirmServiceDeps extends ExecutorDeps {
 export async function approveAndExecute(deps: ConfirmServiceDeps, params: ApproveParams): Promise<ApproveResult> {
   const { rec, who, expectedDiffVersion, confirmedKeys, channel, audit } = params
   const mod = getModule(rec.actionType)
+  const traceId = who.traceId ?? randomTraceId()
 
   // (1) confirmed_keys 校驗（面板專用；確認頁不傳此欄位、跳過本步）——見 spec §4.3:面板取消勾選
   // 某個項目後,後端不得仍全量執行整批。集合須完全一致(無多、無缺)。
@@ -73,7 +75,7 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
 
   // (2) 即時重算 diff + staleness 比對——批准的必須是「此刻仍為真」的 diff,不是使用者打開頁面/
   // 面板當下的舊 diff。
-  const diff = await mod.computeDiff({ gateway: deps.gateway, accessToken: who.accessToken, userLabel: rec.creatorLabel }, rec.items) as import('./types.js').AnyDiffItem[]
+  const diff = await mod.computeDiff({ gateway: deps.gateway.withTrace(traceId), traceId, accessToken: who.accessToken, userLabel: rec.creatorLabel }, rec.items) as import('./types.js').AnyDiffItem[]
   const version = mod.diffVersion(diff)
   if (version !== expectedDiffVersion) {
     // Final whole-branch review Important 2: without this write-back, app_get_changeset_view
@@ -84,7 +86,7 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
     // staleness) so the next read sees it. Gated on status still being pending_approval inside
     // updateDiff itself — if a concurrent approve/reject/expiry already moved this change-set on,
     // this is correctly a no-op (never resurrects/overwrites a decided change-set).
-    deps.changeSets.updateDiff(rec.id, diff, version)
+    await deps.changeSets.updateDiff(rec.id, diff, version)
     return { stale: true }
   }
 
@@ -112,17 +114,25 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
     if (rec.schedule.executeAtUtc <= deps.now()) {
       throw new AppError('SCHEDULE_IN_PAST', 'scheduled time has passed — cancel and re-create with a new time', 409)
     }
-    const won = deps.changeSets.setScheduled(rec.id, {
-      identityId: who.identityId, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId,
+    // F4：把批准當下的 traceId 一併存進 executor 快照——scheduler 之後重建 who 時帶出，執行 trace
+    // 就接得上這筆批准 trace（spec §3.5 三方 join）。同一個 traceId 也用在下面的 approve audit。
+    const won = await deps.changeSets.setScheduled(rec.id, {
+      identityId: who.identityId, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId, traceId,
     }, deps.now())
     if (!won) return { casFailed: true }
-    deps.audit.record({
-      userLabel: who.userLabel, sessionId: who.sessionId,
-      clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
-      tool: 'changeset.approve',
-      params: { changeset_id: rec.id, ip: audit?.ip, channel, scheduled_for: rec.schedule.executeAtUtc },
-      status: 'ok', traceId: 'n/a', durationMs: 0,
-    })
+    // F2（spec 98 行）：CAS 已成功（status=scheduled、憑證已落庫），audit 失敗一律不得回擋——
+    // 否則 throw 外拋會讓「已排程」回 500、change-set 卡在 scheduled 卻讓呼叫端以為失敗。
+    try {
+      await deps.audit.record({
+        userLabel: who.userLabel, sessionId: who.sessionId,
+        clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
+        tool: 'changeset.approve',
+        params: { changeset_id: rec.id, ip: audit?.ip, channel, scheduled_for: rec.schedule.executeAtUtc },
+        status: 'ok',
+        eventType: 'approval', severity: 'INFO',
+        traceId, durationMs: 0,
+      })
+    } catch (err) { console.error('changeset.approve (scheduled) audit failed:', err) }
     return { scheduled: true }
   }
 
@@ -130,7 +140,7 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
   // transition may proceed to executeChangeSet. This is what guarantees execute-exactly-once
   // under concurrent approvals — including the cross-channel case now possible post-Task-11 (one
   // approval via the confirm page, another via the panel, for the same change-set).
-  const wonCas = deps.changeSets.casStatus(rec.id, 'pending_approval', 'approved', deps.now())
+  const wonCas = await deps.changeSets.casStatus(rec.id, 'pending_approval', 'approved', deps.now())
   if (!wonCas) return { casFailed: true }
 
   // Audit the human DECISION itself (governance event "human approved change-set X at T via
@@ -138,16 +148,23 @@ export async function approveAndExecute(deps: ConfirmServiceDeps, params: Approv
   // tool='changeset.execute'. Preserves the confirm-page's original ip/clientInfo audit fields
   // (params.audit) verbatim — dropping IP audit here was an explicitly called-out regression risk
   // during this extraction.
-  deps.audit.record({
-    userLabel: who.userLabel, sessionId: who.sessionId,
-    clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
-    tool: 'changeset.approve',
-    params: { changeset_id: rec.id, ip: audit?.ip, channel },
-    status: 'ok', traceId: 'n/a', durationMs: 0,
-  })
+  // F2（spec 98 行）：CAS 已把 pending_approval→approved（業務狀態已變更），接著必須走完 execute。
+  // approve audit 失敗一律不得回擋——否則 throw 外拋會跳過下面的 executeChangeSet，change-set 卡在
+  // 'approved' 永不執行（正是 spec 禁止的「audit 擋業務流程」）。
+  try {
+    await deps.audit.record({
+      userLabel: who.userLabel, sessionId: who.sessionId,
+      clientInfo: `${clientInfoPrefix}:${String(audit?.clientInfo ?? '').slice(0, 80)}`,
+      tool: 'changeset.approve',
+      params: { changeset_id: rec.id, ip: audit?.ip, channel },
+      status: 'ok',
+      eventType: 'approval', severity: 'INFO',
+      traceId, durationMs: 0,
+    })
+  } catch (err) { console.error('changeset.approve audit failed:', err) }
 
   // (4) execute.
-  const out = await executeChangeSet(deps, rec.id, { accessToken: who.accessToken, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId, channel })
+  const out = await executeChangeSet(deps, rec.id, { accessToken: who.accessToken, userLabel: who.userLabel, modifyUser, sessionId: who.sessionId, channel, traceId })
   if (!out) return { casFailed: true }
   return { status: out.status, results: out.results }
 }

@@ -4,13 +4,13 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server'
 import { buildApp } from '../src/server/app.js'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { randomUUID } from 'node:crypto'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import type { Config } from '../src/config.js'
-import type Database from 'better-sqlite3'
+import type { Db } from '../src/store/dbTypes.js'
 
 function fakeJwt(expSec: number): string {
   const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url')
@@ -20,29 +20,29 @@ function fakeJwt(expSec: number): string {
 // Task 5: enrolls a bearer directly via IdentityStore + CredentialStore (no TokenStore adapter
 // left to route through). Returns the identityId so tests can mint a SECOND credential pointing
 // at the SAME identity (the sessionOwner-by-identity test below needs exactly that).
-function enrollBearer(db: Database.Database, bearer: string, userLabel: string, identityId = randomUUID()): string {
-  new IdentityStore(db).upsert({
+async function enrollBearer(db: Db, bearer: string, userLabel: string, identityId = randomUUID()): Promise<string> {
+  await new IdentityStore(db).upsert({
     identityId, userLabel,
     accessToken: fakeJwt(Math.floor(Date.now() / 1000) + 3600), refreshToken: 'r', businessList: [],
     accessExpiresAt: Date.now() + 3600_000, updatedAt: Date.now(),
   })
-  new CredentialStore(db).insert({
+  await new CredentialStore(db).insert({
     credHash: CredentialStore.hash(bearer), identityId, kind: 'static_bearer', expiresAt: null, updatedAt: Date.now(),
   })
   return identityId
 }
 
-let http: Server, base: string, db: Database.Database
+let http: Server, base: string, db: Db
 const BEARER = 'be2mcp_' + 'a'.repeat(48)
 const BEARER_B = 'be2mcp_' + 'b'.repeat(48)
 
 beforeAll(async () => {
-  db = openDb(':memory:')
-  enrollBearer(db, BEARER, 'pilot@kkday.com')
-  enrollBearer(db, BEARER_B, 'other@kkday.com')
+  db = await openTestDb()
+  await enrollBearer(db, BEARER, 'pilot@kkday.com')
+  await enrollBearer(db, BEARER_B, 'other@kkday.com')
   const config: Config = {
     authsvcUrl: 'https://auth.invalid', gatewayUrl: 'https://gw.invalid',
-    serviceKey: 'sk', port: 0, dbPath: ':memory:', otelMode: 'off', scheduleTz: 'Asia/Taipei',
+    serviceKey: 'sk', port: 0, db: { host: 'localhost', ssl: false }, schedulerMode: 'poller', auditStdout: false, otelMode: 'off', scheduleTz: 'Asia/Taipei',
     bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
   }
   const app = buildApp({ config, db })
@@ -120,7 +120,7 @@ describe('MCP server integration', () => {
     const text = (res.content as Array<{ type: string; text: string }>)[0].text
     const env = JSON.parse(text)
     expect(env.errors?.[0]?.key ?? env.error).toBeDefined() // gw.invalid is unreachable
-    const audit = new AuditLog(db).recent()
+    const audit = await new AuditLog(db).recent()
     expect(audit[0]).toMatchObject({ tool: 'be2_find_products', userLabel: 'pilot@kkday.com' })
     expect(audit[0].traceId).toBeTruthy()
     await client.close()
@@ -163,9 +163,9 @@ describe('MCP server integration', () => {
     const sharedIdentityId = randomUUID()
     const BEARER_SHARED = 'be2mcp_' + 'c'.repeat(48)
     const BEARER_ROTATED = 'be2mcp_' + 'd'.repeat(48)
-    enrollBearer(db, BEARER_SHARED, 'shared@kkday.com', sharedIdentityId)
+    await enrollBearer(db, BEARER_SHARED, 'shared@kkday.com', sharedIdentityId)
     // Second credential, deliberately a different kind (oauth_access) — same identity.
-    new CredentialStore(db).insert({
+    await new CredentialStore(db).insert({
       credHash: CredentialStore.hash(BEARER_ROTATED),
       identityId: sharedIdentityId, kind: 'oauth_access', expiresAt: null, updatedAt: Date.now(),
     })

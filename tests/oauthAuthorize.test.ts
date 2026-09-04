@@ -4,13 +4,13 @@ import { createServer, type Server } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { buildApp } from '../src/server/app.js'
 import { buildAuthorizeRouter } from '../src/oauth/authorizeRoutes.js'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { OAuthStore } from '../src/oauth/oauthStore.js'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 import type { Config } from '../src/config.js'
-import type Database from 'better-sqlite3'
+import type { Db } from '../src/store/dbTypes.js'
 import { runLauncherScript } from './launcherHarness.js'
 
 function fakeJwt(claims: object): string {
@@ -18,8 +18,9 @@ function fakeJwt(claims: object): string {
   return `${b64({ alg: 'HS256' })}.${b64(claims)}.sig`
 }
 
-function authCodeCount(db: Database.Database): number {
-  return (db.prepare('SELECT COUNT(*) c FROM oauth_auth_codes').get() as { c: number }).c
+async function authCodeCount(db: Db): Promise<number> {
+  const r = await db.query<{ c: number }>('SELECT COUNT(*) c FROM oauth_auth_codes')
+  return Number(r.rows[0].c)
 }
 
 // Task 9：/oauth/authorize 驗證測試——用 buildApp 跑真實的 discovery/register/authorize 三支
@@ -27,14 +28,14 @@ function authCodeCount(db: Database.Database): number {
 // 手法）。這一組全部只測「驗證失敗一律 400、不鑄 code」，不需要真的走 be2-auth 登入，所以可以
 // 安心用 buildApp 的真實 AuthServiceClient（永遠不會被呼叫到）。
 describe('GET /oauth/authorize — 參數驗證（失敗一律 400，不鑄 code）', () => {
-  let http: Server, base: string, db: Database.Database, oauthStore: OAuthStore
+  let http: Server, base: string, db: Db, oauthStore: OAuthStore
 
   beforeAll(async () => {
-    db = openDb(':memory:')
+    db = await openTestDb()
     oauthStore = new OAuthStore(db)
     const config: Config = {
       authsvcUrl: 'https://auth.invalid', gatewayUrl: 'https://gw.invalid',
-      serviceKey: 'sk', port: 0, dbPath: ':memory:', otelMode: 'off', scheduleTz: 'Asia/Taipei',
+      serviceKey: 'sk', port: 0, db: { host: 'localhost', ssl: false }, schedulerMode: 'poller', auditStdout: false, otelMode: 'off', scheduleTz: 'Asia/Taipei',
       bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
     }
     const app = buildApp({ config, db })
@@ -54,61 +55,61 @@ describe('GET /oauth/authorize — 參數驗證（失敗一律 400，不鑄 code
 
   it('缺 code_challenge → 400，且沒有 auth code 落地', async () => {
     const clientId = await registerClient(['http://127.0.0.1:5/callback'])
-    const before = authCodeCount(db)
+    const before = await authCodeCount(db)
     const url = `${base}/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent('http://127.0.0.1:5/callback')}&response_type=code&code_challenge_method=S256&state=st-a`
     const r = await fetch(url, { redirect: 'manual' })
     expect(r.status).toBe(400)
-    expect(authCodeCount(db)).toBe(before)
+    expect(await authCodeCount(db)).toBe(before)
   })
 
   it('redirect_uri 不在該 client 註冊清單 → 400（不 redirect 到該 uri），且沒有 auth code 落地', async () => {
     const clientId = await registerClient(['http://127.0.0.1:5/callback'])
-    const before = authCodeCount(db)
+    const before = await authCodeCount(db)
     // 這個 redirect_uri 本身形狀合法（isAllowedRedirectUri 會過），但不在這個 client 的註冊清單裡。
     const badUri = 'http://127.0.0.1:6/callback'
     const url = `${base}/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(badUri)}&response_type=code&code_challenge=chal&code_challenge_method=S256&state=st-b`
     const r = await fetch(url, { redirect: 'manual' })
     expect(r.status).toBe(400)
     expect(r.status).not.toBe(302)
-    expect(authCodeCount(db)).toBe(before)
+    expect(await authCodeCount(db)).toBe(before)
   })
 
   it('redirect_uri 在清單裡但未過 isAllowedRedirectUri（雙重防線）→ 400', async () => {
     // 直接繞過 /oauth/register 自己的驗證，插入一個帶不合格 redirect_uri 的 client——
     // 驗證這條防線不是只靠「register 時檢查過一次」，authorize 自己也要重新驗一次。
     const clientId = randomUUID()
-    oauthStore.insertClient({ clientId, redirectUris: ['http://evil.example.com/callback'], createdAt: Date.now() })
-    const before = authCodeCount(db)
+    await oauthStore.insertClient({ clientId, redirectUris: ['http://evil.example.com/callback'], createdAt: Date.now() })
+    const before = await authCodeCount(db)
     const url = `${base}/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent('http://evil.example.com/callback')}&response_type=code&code_challenge=chal&code_challenge_method=S256&state=st-c`
     const r = await fetch(url, { redirect: 'manual' })
     expect(r.status).toBe(400)
-    expect(authCodeCount(db)).toBe(before)
+    expect(await authCodeCount(db)).toBe(before)
   })
 
   it('code_challenge_method 不是 S256 → 400', async () => {
     const clientId = await registerClient(['http://127.0.0.1:5/callback'])
-    const before = authCodeCount(db)
+    const before = await authCodeCount(db)
     const url = `${base}/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent('http://127.0.0.1:5/callback')}&response_type=code&code_challenge=chal&code_challenge_method=plain&state=st-d`
     const r = await fetch(url, { redirect: 'manual' })
     expect(r.status).toBe(400)
-    expect(authCodeCount(db)).toBe(before)
+    expect(await authCodeCount(db)).toBe(before)
   })
 
   it('缺 state → 400', async () => {
     const clientId = await registerClient(['http://127.0.0.1:5/callback'])
-    const before = authCodeCount(db)
+    const before = await authCodeCount(db)
     const url = `${base}/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent('http://127.0.0.1:5/callback')}&response_type=code&code_challenge=chal&code_challenge_method=S256`
     const r = await fetch(url, { redirect: 'manual' })
     expect(r.status).toBe(400)
-    expect(authCodeCount(db)).toBe(before)
+    expect(await authCodeCount(db)).toBe(before)
   })
 
   it('未知 client_id → 400', async () => {
-    const before = authCodeCount(db)
+    const before = await authCodeCount(db)
     const url = `${base}/oauth/authorize?client_id=does-not-exist&redirect_uri=${encodeURIComponent('http://127.0.0.1:5/callback')}&response_type=code&code_challenge=chal&code_challenge_method=S256&state=st-e`
     const r = await fetch(url, { redirect: 'manual' })
     expect(r.status).toBe(400)
-    expect(authCodeCount(db)).toBe(before)
+    expect(await authCodeCount(db)).toBe(before)
   })
 })
 
@@ -117,19 +118,19 @@ describe('GET /oauth/authorize — 參數驗證（失敗一律 400，不鑄 code
 // buildApp，直接組一個只掛 buildAuthorizeRouter 的最小 app——與 tests/ssoRoutes.test.ts
 // 測 buildSsoRouter 的手法完全一致。
 describe('POST /oauth/authorize/complete — happy path（假 be2-auth 登入）', () => {
-  let server: Server, base: string, db: Database.Database
+  let server: Server, base: string, db: Db
   let oauthStore: OAuthStore, identities: IdentityStore, credentials: CredentialStore, webSessions: WebSessionStore
   let clientId: string
   const REDIRECT_URI = 'http://127.0.0.1:5/callback'
 
   beforeEach(async () => {
-    db = openDb(':memory:')
+    db = await openTestDb()
     oauthStore = new OAuthStore(db)
     identities = new IdentityStore(db)
     credentials = new CredentialStore(db)
     webSessions = new WebSessionStore(db, { now: () => 1000 })
     clientId = randomUUID()
-    oauthStore.insertClient({ clientId, redirectUris: [REDIRECT_URI], createdAt: 1000 })
+    await oauthStore.insertClient({ clientId, redirectUris: [REDIRECT_URI], createdAt: 1000 })
 
     const jwt = fakeJwt({ authKey: 'pilot@kkday.com', exp: Math.floor(Date.now() / 1000) + 3000 })
     const authServiceClient = { exchangeCode: async (_c: string) => ({ accessToken: jwt, refreshToken: 'r', businessList: [] }) } as never
@@ -141,7 +142,7 @@ describe('POST /oauth/authorize/complete — happy path（假 be2-auth 登入）
     server = app.listen(0); await new Promise(r => server.on('listening', r as () => void))
     base = `http://127.0.0.1:${(server.address() as { port: number }).port}`
   })
-  afterEach(() => new Promise<void>(r => server.close(() => { db.close(); r() })))
+  afterEach(() => new Promise<void>(r => server.close(() => { void db.close().then(() => r()) })))
 
   // 同 tests/ssoRoutes.test.ts 的握手測試：be2-auth popup 發 AUTH_LOGIN_READY 後，authorize
   // 過場頁（opener）必須回 CONFIRM_LOGIN_DOMAIN，否則 be2-auth 500ms 後 client-route /404。
@@ -169,7 +170,7 @@ describe('POST /oauth/authorize/complete — happy path（假 be2-auth 登入）
     expect(setCookie).toContain('be2mcp_sid=')
     expect(setCookie).toContain('HttpOnly')
     const sid = /be2mcp_sid=([^;]+)/.exec(setCookie)![1]
-    const session = webSessions.get(sid)!
+    const session = (await webSessions.get(sid))!
     expect(session).toBeDefined()
 
     // (iv) 導向 redirect_uri，帶 code & state
@@ -180,7 +181,7 @@ describe('POST /oauth/authorize/complete — happy path（假 be2-auth 登入）
 
     // (ii) authz code 綁對 clientId/codeChallenge/identityId
     const codeHash = CredentialStore.hash(rawCode)
-    const rec = oauthStore.getAuthCode(codeHash)!
+    const rec = (await oauthStore.getAuthCode(codeHash))!
     expect(rec).toBeDefined()
     expect(rec.clientId).toBe(clientId)
     expect(rec.redirectUri).toBe(REDIRECT_URI)
@@ -194,7 +195,7 @@ describe('POST /oauth/authorize/complete — happy path（假 be2-auth 登入）
   })
 
   it('client_id/redirect_uri 對不上 → 400，不鑄 code、不設 cookie', async () => {
-    const before = authCodeCount(db)
+    const before = await authCodeCount(db)
     const r = await fetch(`${base}/oauth/authorize/complete`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -204,6 +205,6 @@ describe('POST /oauth/authorize/complete — happy path（假 be2-auth 登入）
     })
     expect(r.status).toBe(400)
     expect(r.headers.get('set-cookie')).toBeNull()
-    expect(authCodeCount(db)).toBe(before)
+    expect(await authCodeCount(db)).toBe(before)
   })
 })

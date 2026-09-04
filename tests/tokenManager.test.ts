@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { TokenManager } from '../src/auth/tokenManager.js'
@@ -10,18 +10,18 @@ function fakeJwt(expSec: number): string {
   return `${b64({ alg: 'HS256' })}.${b64({ exp: expSec })}.sig`
 }
 
-function setup(expiresInMs: number, opts: { onReauthRequired?: (identityId: string) => void } = {}) {
-  const db = openDb(':memory:')
+async function setup(expiresInMs: number, opts: { onReauthRequired?: (identityId: string) => void } = {}) {
+  const db = await openTestDb()
   const identities = new IdentityStore(db)
   const credentials = new CredentialStore(db)
   const now = 1_000_000_000_000
   const identityId = 'ident-b1'
-  identities.upsert({
+  await identities.upsert({
     identityId, userLabel: 'pilot@kkday.com',
     accessToken: 'old-access', refreshToken: 'old-refresh', businessList: [],
     accessExpiresAt: now + expiresInMs, updatedAt: now,
   })
-  credentials.insert({ credHash: CredentialStore.hash('b1'), identityId, kind: 'static_bearer', expiresAt: null, updatedAt: now })
+  await credentials.insert({ credHash: CredentialStore.hash('b1'), identityId, kind: 'static_bearer', expiresAt: null, updatedAt: now })
   const freshJwt = fakeJwt(Math.floor((now + 50 * 60_000) / 1000))
   let calls = 0
   const auth = {
@@ -37,52 +37,52 @@ function setup(expiresInMs: number, opts: { onReauthRequired?: (identityId: stri
 
 describe('TokenManager', () => {
   it('returns stored token when far from expiry, without refreshing', async () => {
-    const { mgr, auth } = setup(30 * 60_000)
+    const { mgr, auth } = await setup(30 * 60_000)
     const ctx = await mgr.getFreshAccessToken('b1')
     expect(ctx.accessToken).toBe('old-access')
     expect(auth.refresh).not.toHaveBeenCalled()
   })
   it('refreshes when within skew, persists rotated tokens + fresh businessList', async () => {
-    const { mgr, identities, identityId, auth, freshJwt } = setup(60_000) // 1min left < 5min skew
+    const { mgr, identities, identityId, auth, freshJwt } = await setup(60_000) // 1min left < 5min skew
     const ctx = await mgr.getFreshAccessToken('b1')
     expect(auth.refresh).toHaveBeenCalledWith('old-refresh')
     expect(ctx.accessToken).toBe(freshJwt)
-    const rec = identities.get(identityId)!
+    const rec = (await identities.get(identityId))!
     expect(rec.refreshToken).toBe('r-1')
     expect(rec.businessList).toEqual([{ fresh: true }])
   })
   it('single-flight: 5 concurrent calls -> exactly 1 refresh', async () => {
-    const { mgr, auth } = setup(60_000)
+    const { mgr, auth } = await setup(60_000)
     const results = await Promise.all(Array.from({ length: 5 }, () => mgr.getFreshAccessToken('b1')))
     expect(auth.refresh).toHaveBeenCalledTimes(1)
     expect(new Set(results.map(r => r.accessToken)).size).toBe(1)
   })
   it('unknown bearer -> AuthError UNKNOWN_BEARER 401', async () => {
-    const { mgr } = setup(0)
+    const { mgr } = await setup(0)
     await expect(mgr.getFreshAccessToken('nope')).rejects.toSatisfy(
       (e: unknown) => e instanceof AuthError && e.code === 'UNKNOWN_BEARER' && e.status === 401)
   })
   it('definitive 4xx refresh rejection -> AuthError REAUTH_REQUIRED 401', async () => {
-    const { mgr, auth } = setup(60_000)
+    const { mgr, auth } = await setup(60_000)
     auth.refresh.mockRejectedValueOnce(new AuthError('ENTRY_TOKEN_IS_EXPIRED', 'expired', 401))
     await expect(mgr.getFreshAccessToken('b1')).rejects.toSatisfy(
       (e: unknown) => e instanceof AuthError && e.code === 'REAUTH_REQUIRED')
   })
   it('transient refresh failure with still-valid token -> serves stored token, no throw', async () => {
-    const { mgr, auth } = setup(60_000) // 1min left: inside skew but NOT expired
+    const { mgr, auth } = await setup(60_000) // 1min left: inside skew but NOT expired
     auth.refresh.mockRejectedValueOnce(new TypeError('fetch failed'))
     const ctx = await mgr.getFreshAccessToken('b1')
     expect(ctx.accessToken).toBe('old-access')
   })
   it('transient refresh failure with expired token -> 503 AUTH_SERVICE_UNAVAILABLE (not REAUTH_REQUIRED)', async () => {
-    const { mgr, auth } = setup(-1) // already expired
+    const { mgr, auth } = await setup(-1) // already expired
     auth.refresh.mockRejectedValueOnce(new AuthError('HTTP_503', 'upstream down', 503))
     await expect(mgr.getFreshAccessToken('b1')).rejects.toSatisfy(
       (e: unknown) => e instanceof AppError && e.code === 'AUTH_SERVICE_UNAVAILABLE' && e.status === 503)
   })
   it('definitive 4xx -> onReauthRequired 以 identityId 被呼叫一次', async () => {
     const onReauthRequired = vi.fn()
-    const { mgr, auth, identityId } = setup(60_000, { onReauthRequired })
+    const { mgr, auth, identityId } = await setup(60_000, { onReauthRequired })
     auth.refresh.mockRejectedValueOnce(new AuthError('ENTRY_TOKEN_IS_EXPIRED', 'expired', 401))
     await expect(mgr.getFreshAccessToken('b1')).rejects.toSatisfy(
       (e: unknown) => e instanceof AuthError && e.code === 'REAUTH_REQUIRED')
@@ -91,7 +91,7 @@ describe('TokenManager', () => {
   })
   it('transient 5xx（access 已過期）-> onReauthRequired 不被呼叫', async () => {
     const onReauthRequired = vi.fn()
-    const { mgr, auth } = setup(-1, { onReauthRequired }) // already expired
+    const { mgr, auth } = await setup(-1, { onReauthRequired }) // already expired
     auth.refresh.mockRejectedValueOnce(new AuthError('HTTP_503', 'upstream down', 503))
     await expect(mgr.getFreshAccessToken('b1')).rejects.toSatisfy(
       (e: unknown) => e instanceof AppError && e.code === 'AUTH_SERVICE_UNAVAILABLE' && e.status === 503)
@@ -99,7 +99,7 @@ describe('TokenManager', () => {
   })
   it('onReauthRequired 自身 throw -> 原始 REAUTH_REQUIRED 仍照拋', async () => {
     const onReauthRequired = vi.fn(() => { throw new Error('callback error') })
-    const { mgr, auth } = setup(60_000, { onReauthRequired })
+    const { mgr, auth } = await setup(60_000, { onReauthRequired })
     auth.refresh.mockRejectedValueOnce(new AuthError('ENTRY_TOKEN_IS_EXPIRED', 'expired', 401))
     await expect(mgr.getFreshAccessToken('b1')).rejects.toSatisfy(
       (e: unknown) => e instanceof AuthError && e.code === 'REAUTH_REQUIRED')

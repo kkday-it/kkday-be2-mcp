@@ -80,7 +80,7 @@ export async function executeInventorySetting(ctx: ExecCtx, rec: ChangeSetRecord
       execInventory({ gateway: ctx.gateway }, ctx.accessToken, ctx.modifyUser, it, tid)
     ).catch(e => ({
       item_key: `${it.item_oid}:${it.supplier_oid}`, status: 'failed' as const,
-      error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: 'n/a',
+      error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: ctx.traceId,
     }))
     results.push(r)
   }

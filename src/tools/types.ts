@@ -4,6 +4,7 @@ import type { Envelope } from './envelope.js'
 
 export interface ToolContext {
   gateway: GatewayClient
+  traceId: string
   accessToken: string
   userLabel: string
 }

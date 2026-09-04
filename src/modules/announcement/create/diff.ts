@@ -24,7 +24,8 @@ export async function computeAnnouncementDiff(
     let existing: number | null = null
     if (client) {
       try {
-        existing = (await client.listByProdOids(ctx.accessToken, it.prod_oids)).length
+        // ctx.traceId 貫穿進 svc-b2c request-uuid header，讓這筆 live-diff 讀取也能 join 回 MCP audit（F3）。
+        existing = (await client.listByProdOids(ctx.accessToken, it.prod_oids, ctx.traceId)).length
       } catch { /* leave existing = null (未知) */ }
     }
     out.push({

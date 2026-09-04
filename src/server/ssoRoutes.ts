@@ -12,6 +12,7 @@ import type { TokenManager } from '../auth/tokenManager.js'
 import { requireSession } from './sessionGate.js'
 import { revokeGrant } from '../oauth/revocation.js'
 import { esc } from '../core/changeset/html.js'
+import { randomTraceId } from '../otel.js'
 
 export interface SsoDeps {
   authServiceClient: AuthServiceClient; identities: IdentityStore; credentials: CredentialStore; webSessions: WebSessionStore
@@ -33,7 +34,7 @@ export async function exchangeCodeToIdentity(
   const userLabel = String(decodeJwtClaims(tokens.accessToken).authKey ?? '')
   if (!userLabel) return undefined
   const identityId = randomUUID()
-  identities.upsert({
+  await identities.upsert({
     identityId, userLabel,
     accessToken: tokens.accessToken, refreshToken: tokens.refreshToken, businessList: tokens.businessList,
     accessExpiresAt: decodeJwtExpMs(tokens.accessToken), updatedAt: now,
@@ -109,34 +110,46 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
     // requireSession gates on this kind, which is the structural reason an agent cannot
     // self-approve its own change-set by replaying its own MCP bearer as this cookie: even a
     // stolen/relayed secret only ever resolves to a credential of the WRONG kind.
-    deps.credentials.insert({
+    await deps.credentials.insert({
       credHash: CredentialStore.hash(sessionId), identityId: identity.identityId, kind: 'web_session',
       expiresAt: null, updatedAt: deps.now(),
     })
-    deps.webSessions.create(sessionId, identity.identityId)
+    await deps.webSessions.create(sessionId, identity.identityId)
+    // audit 失敗不擋登入（spec §4）：session/credential 已建，audit throw 若外拋會讓成功登入
+    // 變 500 且 Set-Cookie 不送——使用者卡死、憑證卻已落庫。
+    try {
+      await deps.audit.record({
+        userLabel: identity.userLabel, sessionId: '-', clientInfo: 'confirm-sso',
+        tool: 'sso.login', params: {}, status: 'ok',
+        eventType: 'authn.login', severity: 'INFO', traceId: randomTraceId(), durationMs: 0,
+      })
+    } catch (err) { console.error('sso.login audit failed:', err) }
     res.setHeader('Set-Cookie', serializeSetCookie('be2mcp_sid', sessionId, { httpOnly: true, sameSite: 'Lax', path: '/confirm' }))
     res.status(200).json({ ok: true })
   }))
 
   r.post('/confirm/logout', h(async (req, res) => {
     const sid = parseCookies(req.header('cookie'))['be2mcp_sid']
-    if (sid) deps.webSessions.delete(sid)
+    if (sid) await deps.webSessions.delete(sid)
     res.setHeader('Set-Cookie', serializeSetCookie('be2mcp_sid', '', { httpOnly: true, sameSite: 'Lax', path: '/confirm', maxAgeSec: 0 }))
     res.status(200).send('logged out')
   }))
 
   const gateDeps = { webSessions: deps.webSessions, credentials: deps.credentials, tokenManager: deps.tokenManager }
   // 「Claude 連線」定義(spec §6.1):有至少一顆 oauth_access 或至少一列 oauth_refresh 的 identity。
-  const isConnection = (identityId: string): boolean =>
-    deps.oauthStore.countRefreshByIdentity(identityId) > 0 ||
-    deps.credentials.countByIdentityAndKind(identityId, 'oauth_access') > 0
-  const listConnections = (userLabel: string) =>
-    deps.identities.listByUserLabel(userLabel).filter(i => isConnection(i.identityId))
+  const isConnection = async (identityId: string): Promise<boolean> =>
+    (await deps.oauthStore.countRefreshByIdentity(identityId)) > 0 ||
+    (await deps.credentials.countByIdentityAndKind(identityId, 'oauth_access')) > 0
+  const listConnections = async (userLabel: string) => {
+    const all = await deps.identities.listByUserLabel(userLabel)
+    const flags = await Promise.all(all.map(i => isConnection(i.identityId)))
+    return all.filter((_, idx) => flags[idx])
+  }
 
   r.get('/confirm/connections', h(async (req, res) => {
     const who = await requireSession(gateDeps, req)
     if (!who) { res.redirect(302, `/confirm/login?next=${encodeURIComponent('/confirm/connections')}`); return }
-    const conns = listConnections(who.userLabel)
+    const conns = await listConnections(who.userLabel)
     const revokedRaw = String(req.query.revoked ?? '')
     const notice = /^\d{1,4}$/.test(revokedRaw) ? `<p style="color:green">已斷開 ${revokedRaw} 條 Claude 連線。</p>` : ''
     const wallFmt = new Intl.DateTimeFormat('zh-TW', {
@@ -162,13 +175,19 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
     const who = await requireSession(gateDeps, req)
     if (!who) { res.status(403).send('forbidden'); return }
     let n = 0
-    for (const conn of listConnections(who.userLabel)) {
-      revokeGrant(deps, conn.identityId)
-      deps.audit.record({
-        userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-connections',
-        tool: 'confirm_connections_revoke_all', params: { identity_id: conn.identityId },
-        status: 'ok', traceId: '-', durationMs: 0,
-      })
+    for (const conn of await listConnections(who.userLabel)) {
+      await revokeGrant(deps, conn.identityId)
+      // F2（spec 98 行）：grant 已撤（業務狀態已變更），audit 失敗不得中斷整批 revoke——否則
+      // throw 外拋會讓已撤的連線得不到回應、後續連線也停撤。吞掉、續撤下一條。
+      try {
+        await deps.audit.record({
+          userLabel: who.userLabel, sessionId: who.sessionId, clientInfo: 'confirm-connections',
+          tool: 'confirm_connections_revoke_all', params: { identity_id: conn.identityId },
+          status: 'ok',
+          eventType: 'security.token_revoked', severity: 'CRITICAL',
+          traceId: '-', durationMs: 0,
+        })
+      } catch (err) { console.error('confirm_connections_revoke_all audit failed:', err) }
       n++
     }
     res.redirect(303, `/confirm/connections?revoked=${n}`)

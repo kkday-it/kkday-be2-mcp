@@ -6,6 +6,7 @@ export type DiffCtx = ToolContext
 
 export interface ExecCtx {
   gateway: import('../../gateway/client.js').GatewayClient
+  traceId: string
   accessToken: string
   modifyUser: string
   userLabel: string

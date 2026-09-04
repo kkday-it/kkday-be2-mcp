@@ -45,12 +45,12 @@ export function buildAuthorizeRouter(deps: AuthorizeDeps): express.Router {
   // 單一驗證函式，GET /oauth/authorize（query）與 POST /oauth/authorize/complete（body 回傳的
   // 同一組參數）都呼叫它——後者不是信任前端 JS 沒被竄改，而是把它當獨立、可被任何人直接
   // POST 的公開端點重新驗證一次（defense in depth；見下方 complete handler 的註解）。
-  function validateParams(p: {
+  async function validateParams(p: {
     client_id?: unknown; redirect_uri?: unknown; response_type?: unknown
     code_challenge?: unknown; code_challenge_method?: unknown; state?: unknown
-  }): { ok: true; params: ValidParams } | { ok: false } {
+  }): Promise<{ ok: true; params: ValidParams } | { ok: false }> {
     const clientId = typeof p.client_id === 'string' ? p.client_id : ''
-    const client = clientId ? deps.oauthStore.getClient(clientId) : undefined
+    const client = clientId ? await deps.oauthStore.getClient(clientId) : undefined
     if (!client) return { ok: false }
     const redirectUri = typeof p.redirect_uri === 'string' ? p.redirect_uri : ''
     // 兩道檢查缺一不可：必須在「這個 client 註冊時登記的 redirect_uris」裡，且獨立通過
@@ -69,8 +69,8 @@ export function buildAuthorizeRouter(deps: AuthorizeDeps): express.Router {
   // GET /oauth/authorize — 驗證失敗一律 400（絕不 redirect 到未經驗證的 redirect_uri，即使
   // query 裡帶了看起來合理的 redirect_uri：驗證沒過就沒有「可信的導向目標」）。驗證通過才渲染
   // POPUP 登入過場頁，把已驗證過的參數原封嵌入頁面，供登入成功後回傳給 complete 端點。
-  r.get('/oauth/authorize', (req, res) => {
-    const v = validateParams(req.query as Record<string, unknown>)
+  r.get('/oauth/authorize', h(async (req, res) => {
+    const v = await validateParams(req.query as Record<string, unknown>)
     if (!v.ok) { res.status(400).send('invalid_request'); return }
     const { clientId, redirectUri, codeChallenge, state } = v.params
     // NOTE: be2-web 的登入頁 NOT set no-referrer；be2-auth 登入 SPA 疑似檢查 document.referrer，
@@ -271,14 +271,14 @@ export function buildAuthorizeRouter(deps: AuthorizeDeps): express.Router {
   } catch (e) {}
 </script>
 </html>`)
-  })
+  }))
 
   // POST /oauth/authorize/complete — 這是一個公開端點（如 /confirm/session），任何人都能直接
   // POST 到這裡而不經過上面的 GET 頁面，所以必須把 client_id/redirect_uri/PKCE 參數重新驗證
   // 一遍（不能只信任「這是我們自己頁面送出的」）。驗證失敗：不鑄 code、不建 session/cookie。
   r.post('/oauth/authorize/complete', express.json(), h(async (req, res) => {
     const body = (req.body ?? {}) as Record<string, unknown>
-    const v = validateParams(body)
+    const v = await validateParams(body)
     if (!v.ok) { res.status(400).json({ error: { code: 'INVALID_REQUEST', message: 'invalid authorize params' } }); return }
     const code = typeof body.code === 'string' ? body.code : ''
     if (!code) { res.status(400).json({ error: { code: 'NO_CODE', message: 'missing authorization code' } }); return }
@@ -290,18 +290,18 @@ export function buildAuthorizeRouter(deps: AuthorizeDeps): express.Router {
     // credential 模型、同一個 Path=/confirm，讓使用者在 authorize 這步登入後，稍後開確認頁
     // 也是免登入的靜默體驗。
     const sessionId = WebSessionStore.newSessionId()
-    deps.credentials.insert({
+    await deps.credentials.insert({
       credHash: CredentialStore.hash(sessionId), identityId: identity.identityId, kind: 'web_session',
       expiresAt: null, updatedAt: deps.now(),
     })
-    deps.webSessions.create(sessionId, identity.identityId)
+    await deps.webSessions.create(sessionId, identity.identityId)
     res.setHeader('Set-Cookie', serializeSetCookie('be2mcp_sid', sessionId, { httpOnly: true, sameSite: 'Lax', path: '/confirm' }))
 
     // 一次性 authz code：明文只活在這個 JSON 回應（給前端 JS 組回 redirect_uri 用）與瀏覽器
     // 之後導向 redirect_uri 的那個 URL 裡，store 裡永遠只有 sha256 雜湊——與 credentials/
     // web_sessions 的明文永不落地原則一致。
     const rawCode = genCode()
-    deps.oauthStore.insertAuthCode({
+    await deps.oauthStore.insertAuthCode({
       codeHash: CredentialStore.hash(rawCode), clientId: v.params.clientId, redirectUri: v.params.redirectUri,
       codeChallenge: v.params.codeChallenge, identityId: identity.identityId,
       exp: deps.now() + codeTtlMs, consumed: 0,

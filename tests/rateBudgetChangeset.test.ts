@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { RateBudget } from '../src/limits/rateBudget.js'
 import { RateError } from '../src/errors.js'
 describe('RateBudget.consumeChangeset', () => {
-  it('throws RATE_CHANGESET_DAY over the daily cap', () => {
-    const rb = new RateBudget(openDb(':memory:'))
-    for (let i = 0; i < 3; i++) rb.consumeChangeset('u', 3)
-    expect(() => rb.consumeChangeset('u', 3)).toThrowError(RateError)
+  it('throws RATE_CHANGESET_DAY over the daily cap', async () => {
+    const db = await openTestDb()
+    const rb = new RateBudget(db)
+    for (let i = 0; i < 3; i++) await rb.consumeChangeset('u', 3)
+    await expect(rb.consumeChangeset('u', 3)).rejects.toThrow(RateError)
+    await db.close()
   })
 })

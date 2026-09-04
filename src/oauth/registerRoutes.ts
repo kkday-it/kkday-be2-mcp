@@ -15,27 +15,29 @@ import type { OAuthStore } from './oauthStore.js'
 export function buildRegisterRouter({ oauthStore, genId }: { oauthStore: OAuthStore; genId: () => string }): express.Router {
   const r = express.Router()
   r.post('/oauth/register', (req, res) => {
-    const body = req.body as { redirect_uris?: unknown } | undefined
-    const redirectUris = body?.redirect_uris
-    if (!Array.isArray(redirectUris) || redirectUris.length === 0 || !redirectUris.every(u => typeof u === 'string')) {
-      res.status(400).json({ error: 'invalid_client_metadata', error_description: 'redirect_uris must be a non-empty array of strings' })
-      return
-    }
-    const uris = redirectUris as string[]
-    if (!uris.every(isAllowedRedirectUri)) {
-      res.status(400).json({ error: 'invalid_redirect_uri', error_description: 'one or more redirect_uris are not allowlisted' })
-      return
-    }
-    const clientId = genId()
-    oauthStore.insertClient({ clientId, redirectUris: uris, createdAt: Date.now() })
-    // 物件字面量：沒有 client_secret 這個 key，'client_secret' in response 恆為 false。
-    res.status(200).json({
-      client_id: clientId,
-      redirect_uris: uris,
-      token_endpoint_auth_method: 'none',
-      grant_types: ['authorization_code', 'refresh_token'],
-      response_types: ['code'],
-    })
+    void (async () => {
+      const body = req.body as { redirect_uris?: unknown } | undefined
+      const redirectUris = body?.redirect_uris
+      if (!Array.isArray(redirectUris) || redirectUris.length === 0 || !redirectUris.every(u => typeof u === 'string')) {
+        res.status(400).json({ error: 'invalid_client_metadata', error_description: 'redirect_uris must be a non-empty array of strings' })
+        return
+      }
+      const uris = redirectUris as string[]
+      if (!uris.every(isAllowedRedirectUri)) {
+        res.status(400).json({ error: 'invalid_redirect_uri', error_description: 'one or more redirect_uris are not allowlisted' })
+        return
+      }
+      const clientId = genId()
+      await oauthStore.insertClient({ clientId, redirectUris: uris, createdAt: Date.now() })
+      // 物件字面量：沒有 client_secret 這個 key，'client_secret' in response 恆為 false。
+      res.status(200).json({
+        client_id: clientId,
+        redirect_uris: uris,
+        token_endpoint_auth_method: 'none',
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+      })
+    })().catch(() => { if (!res.headersSent) res.status(500).json({ error: 'server_error' }) })
   })
   return r
 }

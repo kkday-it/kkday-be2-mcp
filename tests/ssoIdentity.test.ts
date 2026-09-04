@@ -1,12 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import express from 'express'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { WebSessionStore } from '../src/server/webSessionStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { buildConfirmRouter } from '../src/server/confirmRoutes.js'
 import type { Server } from 'node:http'
+import type { Db } from '../src/store/dbTypes.js'
 
 // Task 4: requireSession's credential-kind gate is the structural half of "an agent cannot
 // self-approve its own change-set" (鐵則 #4). The confirm page's be2mcp_sid cookie must resolve
@@ -33,10 +34,10 @@ const SID_OAUTH = 'tok-agents-own-mcp-bearer' // secret behind a kind='oauth_acc
 const IDENTITY = 'ident-shared-1'
 const USER_LABEL = 'owner@kkday.com'
 
-let server: Server, base: string, store: ChangeSetStore, db: ReturnType<typeof openDb>
+let server: Server, base: string, store: ChangeSetStore, db: Db
 
-function seed(id: string) {
-  store.create({
+async function seed(id: string) {
+  await store.create({
     id, creatorLabel: USER_LABEL, creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_product',
     items: [{ prod_oid: 'p1', target_is_active: false }],
     diff: [{ prod_oid: 'p1', name: 'Prod A', current_is_active: true, target_is_active: false, no_op: false }],
@@ -45,19 +46,19 @@ function seed(id: string) {
 }
 
 beforeEach(async () => {
-  db = openDb(':memory:')
+  db = await openTestDb()
   store = new ChangeSetStore(db, { now: () => 1000 })
   const webSessions = new WebSessionStore(db, { now: () => 1000 })
   const credentials = new CredentialStore(db)
 
-  credentials.insert({ credHash: CredentialStore.hash(SID_WEB), identityId: IDENTITY, kind: 'web_session', expiresAt: null, updatedAt: 1000 })
-  credentials.insert({ credHash: CredentialStore.hash(SID_OAUTH), identityId: IDENTITY, kind: 'oauth_access', expiresAt: null, updatedAt: 1000 })
+  await credentials.insert({ credHash: CredentialStore.hash(SID_WEB), identityId: IDENTITY, kind: 'web_session', expiresAt: null, updatedAt: 1000 })
+  await credentials.insert({ credHash: CredentialStore.hash(SID_OAUTH), identityId: IDENTITY, kind: 'oauth_access', expiresAt: null, updatedAt: 1000 })
   // A web_sessions row is seeded for BOTH secrets — including the oauth one, which would never
   // happen for a real agent bearer in production (nothing ever calls webSessions.create for an
   // MCP token). This decoy row rules out "no web_sessions row" as the reason SID_OAUTH gets
   // rejected below, isolating the credential-kind check as the actual, only, mechanism at work.
-  webSessions.create(SID_WEB, IDENTITY)
-  webSessions.create(SID_OAUTH, IDENTITY)
+  await webSessions.create(SID_WEB, IDENTITY)
+  await webSessions.create(SID_OAUTH, IDENTITY)
 
   const tokenManager = {
     getFreshByCredHash: async (hash: string) => {
@@ -69,6 +70,7 @@ beforeEach(async () => {
   } as never
 
   const gateway = {
+    withTrace() { return this },
     get: async (p: string) => (p.includes('/info') ? { name: 'Prod A' } : { is_active: true }),
     put: async () => ({}),
   } as never
@@ -84,14 +86,14 @@ beforeEach(async () => {
 
 describe('requireSession — credential kind gate (Task 4)', () => {
   it('a real web_session credential (be2-auth SSO login) is let through', async () => {
-    seed('cs1')
+    await seed('cs1')
     const res = await http(base, 'GET', '/confirm/cs1', undefined, `be2mcp_sid=${SID_WEB}`)
     expect(res.status).toBe(200)
     expect(res.text).toContain('Prod A')
   })
 
   it('the SAME identity\'s oauth_access credential, sent AS the cookie, is denied — proves the kind gate, not just IDOR', async () => {
-    seed('cs2')
+    await seed('cs2')
     const res = await http(base, 'GET', '/confirm/cs2', undefined, `be2mcp_sid=${SID_OAUTH}`)
     // Not 404 (that's the creator/IDOR check further down the handler) — a 302 to login:
     // requireSession itself returned undefined because cred.kind !== 'web_session', so the
@@ -101,6 +103,6 @@ describe('requireSession — credential kind gate (Task 4)', () => {
     // tokenManager stub answer) — so this assertion fails without the kind gate in place.
     expect(res.status).toBe(302)
     expect(res.headers.get('location')).toBe('/confirm/login?next=%2Fconfirm%2Fcs2')
-    expect(store.get('cs2')!.status).toBe('pending_approval')
+    expect((await store.get('cs2'))!.status).toBe('pending_approval')
   })
 })

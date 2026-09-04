@@ -8,10 +8,10 @@ export interface RevocationDeps { oauthStore: OAuthStore; credentials: Credentia
 // 憑證即等於 RFC 7009「same authorization grant」語義。web_session / static_bearer 刻意不碰
 // (與 tokenRoutes 的 refresh-reuse family revoke 同形狀);identity 列存真實 be2 token,
 // 沒有任何 credential 引用時一併清掉(否則成 oauth-purge 要掃的 ghost)。
-export function revokeGrant(deps: RevocationDeps, identityId: string): { userLabel: string } | undefined {
-  const identity = deps.identities.get(identityId)
-  deps.oauthStore.deleteRefreshByIdentity(identityId)
-  deps.credentials.deleteByIdentityAndKind(identityId, 'oauth_access')
-  if (identity && deps.credentials.countByIdentity(identityId) === 0) deps.identities.delete(identityId)
+export async function revokeGrant(deps: RevocationDeps, identityId: string): Promise<{ userLabel: string } | undefined> {
+  const identity = await deps.identities.get(identityId)
+  await deps.oauthStore.deleteRefreshByIdentity(identityId)
+  await deps.credentials.deleteByIdentityAndKind(identityId, 'oauth_access')
+  if (identity && (await deps.credentials.countByIdentity(identityId)) === 0) await deps.identities.delete(identityId)
   return identity ? { userLabel: identity.userLabel } : undefined
 }

@@ -1,4 +1,5 @@
 import { trace, SpanStatusCode } from '@opentelemetry/api'
+import { ensureTraceId } from '../otel.js'
 import { requestContext } from './requestContext.js'
 import type { TokenManager } from '../auth/tokenManager.js'
 import type { AuditLog } from '../audit/auditLog.js'
@@ -54,6 +55,7 @@ export interface AppToolContext {
   // structural superset of L2ToolContext.
   emitConfirmUrl: (changesetId: string, url: string) => void
   scheduleTz: string
+  traceId: string
 }
 
 export interface AppToolDef {
@@ -102,7 +104,7 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
     const reqCtx = requestContext.getStore()
     if (!reqCtx) return errResult('NO_AUTH_CONTEXT', 'missing request auth context')
     return tracer.startActiveSpan(`mcp.apptool/${tool.name}`, async span => {
-      const started = Date.now(); const traceId = span.spanContext().traceId
+      const started = Date.now(); const traceId = ensureTraceId(span.spanContext().traceId)
       span.setAttribute('mcp.apptool', tool.name); span.setAttribute('mcp.session_id', reqCtx.sessionId)
       let userLabel = 'unknown'
       let status: 'ok' | 'error' | 'denied_rate' | 'denied_auth' = 'ok'
@@ -112,7 +114,7 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
         userLabel = user.userLabel; span.setAttribute('user_id', userLabel)
         deps.appRateBudget.consume(reqCtx.sessionId)   // 獨立限流，不碰 RateBudget
         const envelope = await tool.handler(args, {
-          gateway: deps.gateway, accessToken: user.accessToken, userLabel,
+          gateway: deps.gateway.withTrace(traceId), traceId, accessToken: user.accessToken, userLabel,
           sessionId: reqCtx.sessionId, bearerHash: CredentialStore.hash(reqCtx.bearer),
           businessList: user.businessList, readOids: deps.readOids, rateBudget: deps.rateBudget,
           changeSets: deps.changeSets, nonces: deps.nonces,
@@ -126,14 +128,14 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
           // — or fail on — modify_user resolution.
           approveAndExecute: p => approveAndExecuteService(
             { changeSets: deps.changeSets, gateway: deps.gateway, audit: deps.audit, now: deps.now, modifyUserFrom: deps.modifyUserFrom },
-            { ...p, who: { accessToken: user.accessToken, userLabel, sessionId: reqCtx.sessionId, identityId: user.identityId } },
+            { ...p, who: { accessToken: user.accessToken, userLabel, sessionId: reqCtx.sessionId, identityId: user.identityId, traceId } },
           ),
         })
         // Task 5: mirrors toolPipeline.ts's runWrapped — same substrate, same generic recording —
         // so app_get_batch_view's oids land in the identical session-scoped store
         // be2_create_changeset's SCOPE_NOT_READ gate reads from. Harmless no-op for the other app
         // tools (view/confirm-link/confirm), which never populate envelope.read_oids.
-        if (envelope.read_oids.length) deps.readOids.record(reqCtx.sessionId, envelope.read_oids)
+        if (envelope.read_oids.length) await deps.readOids.record(reqCtx.sessionId, envelope.read_oids)
         // Task 6: mirrors toolPipeline.ts's runWrapped exactly (was previously out of sync — see
         // carry-forward from Task 2 review). Fully failed (no items) => audited as error. Items +
         // errors => status stays ok but the first error entry is STILL recorded into audit
@@ -160,10 +162,15 @@ export function wrapAppTool(tool: AppToolDef, deps: AppPipelineDeps) {
         // comment above at the envelope.errors branch) — record it as-is, matching
         // toolPipeline.ts's runWrapped, so the audit trail shows warn-and-proceed outcomes too,
         // not only hard failures.
-        deps.audit.record({ userLabel, sessionId: reqCtx.sessionId, clientInfo: reqCtx.clientInfo,
+        try {
+          await deps.audit.record({ userLabel, sessionId: reqCtx.sessionId, clientInfo: reqCtx.clientInfo,
           tool: `app/${tool.name}`, params: auditParams, status, errorMessage: message,
+          eventType: 'tool_call', severity: status === 'ok' ? 'INFO' : 'ERROR',
           traceId, durationMs: Date.now() - started })
-        span.end()
+        // F2（spec 98 行）：同 toolPipeline——audit 失敗不得把已算好的 app-tool 結果換成 throw。
+        } catch (err) { console.error(`app tool_call audit failed (${tool.name}):`, err) } finally {
+          span.end()
+        }
       }
       return result
     })

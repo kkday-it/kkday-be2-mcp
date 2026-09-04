@@ -4,7 +4,7 @@ import { buildBatchView } from '../src/tools/batchView.js'
 import { appGetBatchViewTool } from '../src/tools/appTools.js'
 import { wrapAppTool, type AppPipelineDeps } from '../src/server/appPipeline.js'
 import { requestContext } from '../src/server/requestContext.js'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { ReadOidStore } from '../src/store/readOidStore.js'
 import { RateBudget } from '../src/limits/rateBudget.js'
 import { AppRateBudget } from '../src/limits/appRateBudget.js'
@@ -64,6 +64,7 @@ function fakeGateway(overrides: Record<string, unknown> = {}) {
     ...overrides,
   }
   return {
+    withTrace() { return this },
     get: async (path: string) => {
       const v = routes[path]
       if (v === undefined) throw new Error(`no fixture for GET ${path}`)
@@ -202,8 +203,8 @@ describe('app_get_batch_view — inputShape 邊界', () => {
 
 // 全鏈路（透過 wrapAppTool，真實 ReadOidStore + RateBudget）：Step 1 (b)(d)。
 describe('app_get_batch_view — 全鏈路：read-oids 登記 + budget 計數', () => {
-  function realDeps(): { deps: AppPipelineDeps; readOids: ReadOidStore; rateBudget: RateBudget } {
-    const db = openDb(':memory:')
+  async function realDeps(): Promise<{ deps: AppPipelineDeps; readOids: ReadOidStore; rateBudget: RateBudget }> {
+    const db = await openTestDb()
     const readOids = new ReadOidStore(db)
     const rateBudget = new RateBudget(db, { perSession: 5, perUserDay: 100 })
     const deps: AppPipelineDeps = {
@@ -224,7 +225,7 @@ describe('app_get_batch_view — 全鏈路：read-oids 登記 + budget 計數', 
   }
 
   it('(b) 呼叫後 prod_oid/pkg_oid/item_oid 三層全被記入 readOidStore（供 be2_create_changeset scope-gate 讀）', async () => {
-    const { deps, readOids } = realDeps()
+    const { deps, readOids } = await realDeps()
     const wrapped = wrapAppTool(appGetBatchViewTool, deps)
     const out = await requestContext.run(
       { bearer: 'b', sessionId: 's1', clientInfo: 'test' },
@@ -232,13 +233,13 @@ describe('app_get_batch_view — 全鏈路：read-oids 登記 + budget 計數', 
     )
     expect(out.isError).toBeUndefined()
     for (const oid of ['34133', '1936562', '1682339', '1936563', '1682340']) {
-      expect(readOids.has('s1', oid)).toBe(true)
+      expect(await readOids.has('s1', oid)).toBe(true)
     }
   })
 
   it('(d) 每次呼叫對全域 RateBudget 計一次讀取額度（超額回 denied_rate）', async () => {
-    const { deps } = realDeps()
-    deps.rateBudget = new RateBudget(openDb(':memory:'), { perSession: 1, perUserDay: 100 })
+    const { deps } = await realDeps()
+    deps.rateBudget = new RateBudget(await openTestDb(), { perSession: 1, perUserDay: 100 })
     const wrapped = wrapAppTool(appGetBatchViewTool, deps)
     const call = () => requestContext.run(
       { bearer: 'b', sessionId: 's2', clientInfo: 'test' },
@@ -252,7 +253,7 @@ describe('app_get_batch_view — 全鏈路：read-oids 登記 + budget 計數', 
   })
 
   it('成功路徑：structuredContent.items[0].products 與 text 同源', async () => {
-    const { deps } = realDeps()
+    const { deps } = await realDeps()
     const wrapped = wrapAppTool(appGetBatchViewTool, deps)
     const out = await requestContext.run(
       { bearer: 'b', sessionId: 's3', clientInfo: 'test' },

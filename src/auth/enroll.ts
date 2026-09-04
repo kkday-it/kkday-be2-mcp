@@ -32,7 +32,7 @@ export async function enrollUser(
   const authKey = typeof claims.authKey === 'string' && claims.authKey ? claims.authKey : undefined
   const userLabel = authKey ?? input.userLabel
   const identityId = randomUUID()
-  deps.identities.upsert({
+  await deps.identities.upsert({
     identityId,
     userLabel,
     accessToken: tokens.accessToken,
@@ -42,7 +42,7 @@ export async function enrollUser(
     updatedAt: now(),
   })
   const bearer = generateBearer()
-  deps.credentials.insert({
+  await deps.credentials.insert({
     credHash: CredentialStore.hash(bearer),
     identityId,
     kind: 'static_bearer',

@@ -6,7 +6,7 @@ import { inventoryPlatformModule } from '../src/modules/product/inventoryPlatfor
 const diffVersionHash = inventoryPlatformModule.diffVersion as (d: unknown[]) => string
 import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import type { ChangeSetRecord, InventoryPlatformItem } from '../src/core/changeset/types.js'
 
 const pkgs = [{ prod_oid: 'p1', pkg_oid: 'k1', pkg_name: 'A' }]
@@ -83,33 +83,33 @@ describe('execInventoryPlatform', () => {
 describe('itemKeysOf — inventory_platform key rule (Task 3 review pin)', () => {
   const WHO = { accessToken: 'tok', userLabel: 'owner@kkday.com', sessionId: 's1', identityId: 'id-test' }
 
-  function makeDeps(gateway: { get: Function; put: Function }): { store: ChangeSetStore; deps: ConfirmServiceDeps } {
-    const db = openDb(':memory:')
+  async function makeDeps(gateway: { get: Function; put: Function }): Promise<{ store: ChangeSetStore; deps: ConfirmServiceDeps }> {
+    const db = await openTestDb()
     const store = new ChangeSetStore(db, { now: () => 1000 })
     const audit = new AuditLog(db, () => 1000)
     const deps: ConfirmServiceDeps = {
-      changeSets: store, gateway: gateway as never, audit, now: () => 1000,
+      changeSets: store, gateway: Object.assign(Object.create(gateway), { withTrace() { return this } }) as never, audit, now: () => 1000,
       modifyUserFrom: (at: string) => 'U:' + at,
     }
     return { store, deps }
   }
-  function seedPlatform(store: ChangeSetStore, id: string, items: InventoryPlatformItem[]): ChangeSetRecord {
-    store.create({
+  async function seedPlatform(store: ChangeSetStore, id: string, items: InventoryPlatformItem[]): Promise<ChangeSetRecord> {
+    await store.create({
       id, creatorLabel: WHO.userLabel, creatorBearerHash: 'bh', sessionId: 's', actionType: 'inventory_platform',
       items, diff: [], diffVersion: 'seed', status: 'pending_approval', createdAt: 1000,
     })
-    return store.get(id)!
+    return (await store.get(id))!
   }
   async function realVersion(rec: ChangeSetRecord, gw: { get: Function; put: Function }): Promise<string> {
-    const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel })
+    const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel, traceId: 't'.repeat(32) })
     return diffVersionHash(diff)
   }
 
   it('confirmedKeys = ["item_oid:supplier_oid"] passes the gate (reaches execution)', async () => {
     const items: InventoryPlatformItem[] = [{ item_oid: 'i1', supplier_oid: 's1', target: 'BE2_SCM', affected_pkgs: pkgs }]
     const gw = fakeGw({ i1: configs([{ supplier_oid: 's1', is_external_inventory: false, is_inventory_mgmt: false }]) })
-    const { store, deps } = makeDeps(gw)
-    const rec = seedPlatform(store, 'cs-p1', items)
+    const { store, deps } = await makeDeps(gw)
+    const rec = await seedPlatform(store, 'cs-p1', items)
     const version = await realVersion(rec, gw)
     const out = await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: ['i1:s1'], channel: 'panel' })
     expect(out.stale).toBeUndefined()
@@ -120,11 +120,11 @@ describe('itemKeysOf — inventory_platform key rule (Task 3 review pin)', () =>
   it('confirmedKeys missing the key throws CONFIRMED_KEYS_MISMATCH, never executes', async () => {
     const items: InventoryPlatformItem[] = [{ item_oid: 'i1', supplier_oid: 's1', target: 'BE2_SCM', affected_pkgs: pkgs }]
     const gw = fakeGw({ i1: configs([{ supplier_oid: 's1', is_external_inventory: false, is_inventory_mgmt: false }]) })
-    const { store, deps } = makeDeps(gw)
-    const rec = seedPlatform(store, 'cs-p2', items)
+    const { store, deps } = await makeDeps(gw)
+    const rec = await seedPlatform(store, 'cs-p2', items)
     const version = await realVersion(rec, gw)
     await expect(approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: [], channel: 'panel' }))
       .rejects.toMatchObject({ code: 'CONFIRMED_KEYS_MISMATCH' })
-    expect(store.get('cs-p2')!.status).toBe('pending_approval')
+    expect((await store.get('cs-p2'))!.status).toBe('pending_approval')
   })
 })

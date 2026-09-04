@@ -48,7 +48,10 @@ export function backoffPoll(
     const r = await tick().catch(() => 'rate' as const)
     if (r === 'stop') return
     delay = r === 'rate' ? Math.min(delay * 2, cap) : base
-    timer = setTimeout(loop, delay)
+    // setTimeout 的 callback 型別要求 void 回傳；loop 是 async（回 Promise<void>）。loop 內部已
+    // 用 .catch 吞下 tick() 的錯誤，這裡用 void 運算子明確標記刻意不 await（poll loop 本就該
+    // fire-and-forget 排下一輪，不阻塞呼叫端），滿足 no-misused-promises 的 checksVoidReturn。
+    timer = setTimeout(() => { void loop() }, delay)
   }
   void loop()
   return () => { stopped = true; clearTimeout(timer) }

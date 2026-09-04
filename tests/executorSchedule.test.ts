@@ -6,7 +6,7 @@ import { shelfScheduleModule } from '../src/modules/product/shelfSchedule/module
 const diffVersionHash = shelfScheduleModule.diffVersion as (d: unknown[]) => string
 import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import type { ChangeSetRecord, ShelfScheduleItem } from '../src/core/changeset/types.js'
 
 // Task 4 定案 read/write endpoints (design doc §4.1):
@@ -115,33 +115,33 @@ describe('execShelfSchedule', () => {
 describe('itemKeysOf — shelf_schedule key rule (Task 4)', () => {
   const WHO = { accessToken: 'tok', userLabel: 'owner@kkday.com', sessionId: 's1', identityId: 'id-test' }
 
-  function makeDeps(gateway: { get: Function; put: Function }): { store: ChangeSetStore; deps: ConfirmServiceDeps } {
-    const db = openDb(':memory:')
+  async function makeDeps(gateway: { get: Function; put: Function }): Promise<{ store: ChangeSetStore; deps: ConfirmServiceDeps }> {
+    const db = await openTestDb()
     const store = new ChangeSetStore(db, { now: () => 1000 })
     const audit = new AuditLog(db, () => 1000)
     const deps: ConfirmServiceDeps = {
-      changeSets: store, gateway: gateway as never, audit, now: () => 1000,
+      changeSets: store, gateway: Object.assign(Object.create(gateway), { withTrace() { return this } }) as never, audit, now: () => 1000,
       modifyUserFrom: (at: string) => 'U:' + at,
     }
     return { store, deps }
   }
-  function seedSchedule(store: ChangeSetStore, id: string, items: ShelfScheduleItem[]): ChangeSetRecord {
-    store.create({
+  async function seedSchedule(store: ChangeSetStore, id: string, items: ShelfScheduleItem[]): Promise<ChangeSetRecord> {
+    await store.create({
       id, creatorLabel: WHO.userLabel, creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_schedule',
       items, diff: [], diffVersion: 'seed', status: 'pending_approval', createdAt: 1000,
     })
-    return store.get(id)!
+    return (await store.get(id))!
   }
   async function realVersion(rec: ChangeSetRecord, gw: { get: Function; put: Function }): Promise<string> {
-    const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel })
+    const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel, traceId: 't'.repeat(32) })
     return diffVersionHash(diff)
   }
 
   it('confirmedKeys = ["prod_oid:pkg_oid"] passes the gate (reaches execution)', async () => {
     const items: ShelfScheduleItem[] = [{ prod_oid: 'p1', pkg_oid: 'k1', queue: [{ reserve_date_utc: '2027-01-01 00:00:00', reserve_status: true }] }]
     const gw = fakeGw({ p1: [row('k1')] })
-    const { store, deps } = makeDeps(gw)
-    const rec = seedSchedule(store, 'cs-s1', items)
+    const { store, deps } = await makeDeps(gw)
+    const rec = await seedSchedule(store, 'cs-s1', items)
     const version = await realVersion(rec, gw)
     const out = await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: ['p1:k1'], channel: 'panel' })
     expect(out.stale).toBeUndefined()
@@ -152,11 +152,11 @@ describe('itemKeysOf — shelf_schedule key rule (Task 4)', () => {
   it('confirmedKeys missing the key throws CONFIRMED_KEYS_MISMATCH, never executes', async () => {
     const items: ShelfScheduleItem[] = [{ prod_oid: 'p1', pkg_oid: 'k1', queue: [{ reserve_date_utc: '2027-01-01 00:00:00', reserve_status: true }] }]
     const gw = fakeGw({ p1: [row('k1')] })
-    const { store, deps } = makeDeps(gw)
-    const rec = seedSchedule(store, 'cs-s2', items)
+    const { store, deps } = await makeDeps(gw)
+    const rec = await seedSchedule(store, 'cs-s2', items)
     const version = await realVersion(rec, gw)
     await expect(approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: [], channel: 'panel' }))
       .rejects.toMatchObject({ code: 'CONFIRMED_KEYS_MISMATCH' })
-    expect(store.get('cs-s2')!.status).toBe('pending_approval')
+    expect((await store.get('cs-s2'))!.status).toBe('pending_approval')
   })
 })

@@ -1,7 +1,7 @@
 import express from 'express'
 import { join } from 'node:path'
 import { readFileSync, existsSync } from 'node:fs'
-import type Database from 'better-sqlite3'
+import type { Db } from '../store/dbTypes.js'
 import type { AppPipelineDeps } from './appPipeline.js'
 import { wrapAppTool } from './appPipeline.js'
 import { APP_TOOLS } from '../tools/appTools.js'
@@ -9,7 +9,7 @@ import { requestContext } from './requestContext.js'
 import { CredentialStore } from '../store/credentialStore.js'
 
 export interface DevPanelDeps {
-  db: Database.Database
+  db: Db
   appDeps: AppPipelineDeps
 }
 
@@ -57,7 +57,10 @@ export function buildDevPanelRouter(deps: DevPanelDeps): express.Router {
       }
 
       // Identity: reuse the newest identity in IdentityStore
-      const identity = deps.db.prepare('SELECT identity_id FROM be2_identities ORDER BY updated_at DESC LIMIT 1').get() as { identity_id: string } | undefined
+      const identityRows = (await deps.db.query<{ identity_id: string }>(
+        'SELECT identity_id FROM be2_identities ORDER BY updated_at DESC LIMIT 1'
+      )).rows
+      const identity = identityRows[0]
       if (!identity) {
         res.status(400).json({ error: { message: 'No identities found. Run bootstrap-user first.' } })
         return
@@ -67,9 +70,11 @@ export function buildDevPanelRouter(deps: DevPanelDeps): express.Router {
       // dev 憑證永遠綁第一次執行時的 identity，identity 過期重登（bootstrap-user）後 harness
       // 仍拿舊的 → 永遠 REAUTH_REQUIRED（live 2026-08-16 踩到）。
       const credHash = CredentialStore.hash(DEV_SECRET)
-      deps.db.prepare(`INSERT INTO credentials (cred_hash, identity_id, kind, expires_at, updated_at) VALUES (?, ?, ?, null, ?)
-        ON CONFLICT(cred_hash) DO UPDATE SET identity_id = excluded.identity_id, updated_at = excluded.updated_at`)
-        .run(credHash, identity.identity_id, 'static_bearer', Date.now())
+      await deps.db.query(
+        `INSERT INTO credentials (cred_hash, identity_id, kind, expires_at, updated_at) VALUES ($1, $2, $3, null, $4)
+        ON CONFLICT (cred_hash) DO UPDATE SET identity_id = EXCLUDED.identity_id, updated_at = EXCLUDED.updated_at`,
+        [credHash, identity.identity_id, 'static_bearer', Date.now()]
+      )
 
       const handler = wrapAppTool(tool, deps.appDeps)
       const ctx = {

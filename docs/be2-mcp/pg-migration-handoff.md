@@ -1,5 +1,7 @@
 # Handoff：SQLite→PostgreSQL 遷移（cloud-ready 第一階段核心）— 2026-09-03
 
+> ✅ 已由 spec+plan+feat/pg-migration 分支實作完成（2026-09-03）——本檔僅存檔。
+
 > 給新 session 的交接。流程照 CLAUDE.md 主管線：`superpowers:brainstorming` →
 > spec 寫進 `docs/superpowers/specs/`（過 agy-peer-review 到 APPROVED）→ `writing-plans`（再過 agy）→
 > `subagent-driven-development` + TDD。實作分工照 memory `agy-work-allocation`（實作外包 agy，Claude 編排/review/commit）。

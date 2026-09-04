@@ -23,9 +23,9 @@ export const appGetChangesetViewTool: AppToolDef = {
     openWorldHint: true,
   },
   async handler(args, ctx: AppToolContext) {
-    const rec = ctx.changeSets.get(args.changeset_id)
+    const rec = await ctx.changeSets.get(args.changeset_id)
     if (!rec || rec.creatorLabel !== ctx.userLabel) return NOT_FOUND(args.changeset_id)
-    const results = ['pending_approval', 'approved', 'scheduled'].includes(rec.status) ? undefined : ctx.changeSets.getResults(rec.id)
+    const results = ['pending_approval', 'approved', 'scheduled'].includes(rec.status) ? undefined : await ctx.changeSets.getResults(rec.id)
     const view: Record<string, unknown> = { changeset_id: rec.id, status: rec.status, action_type: rec.actionType, note: rec.note, diff: { items: rec.diff } }
     // schedule 是 change-set 不可變部分:rec.schedule 存在即回、不限 status(Task 10 review
     // Critical 1——pending_approval 不回會讓面板批准少帶 expected_execute_at_utc 回聲,server
@@ -57,7 +57,7 @@ export const appGetConfirmLinkTool: AppToolDef = {
     openWorldHint: true,
   },
   async handler(args, ctx: AppToolContext) {
-    const rec = ctx.changeSets.get(args.changeset_id)
+    const rec = await ctx.changeSets.get(args.changeset_id)
     if (!rec || rec.creatorLabel !== ctx.userLabel) return NOT_FOUND(args.changeset_id)
     return makeEnvelope([{ confirm_url: `${ctx.baseUrl}/confirm/${rec.id}` }])
   },
@@ -93,13 +93,13 @@ export const appConfirmChangesetTool: AppToolDef = {
     openWorldHint: true,
   },
   async handler(args, ctx: AppToolContext) {
-    const rec = ctx.changeSets.get(args.changeset_id)
+    const rec = await ctx.changeSets.get(args.changeset_id)
     if (!rec || rec.creatorLabel !== ctx.userLabel) return NOT_FOUND(args.changeset_id)
     // nonce 先驗（單次消耗）—— 這是防 model 自我批准的主防線。
     const ok = ctx.nonces.verifyAndConsume(args.nonce, { changesetId: rec.id, diffVersion: args.diff_version, sessionId: ctx.sessionId })
     if (!ok) return makeEnvelope([], [{ key: rec.id, code: 'NONCE_INVALID', message: 'Approval token invalid/expired; reopen the panel to refresh.' }])
     if (args.decision === 'cancel') {
-      const won = ctx.changeSets.casStatus(rec.id, 'scheduled', 'cancelled', ctx.now())
+      const won = await ctx.changeSets.casStatus(rec.id, 'scheduled', 'cancelled', ctx.now())
       if (!won) return makeEnvelope([], [{ key: rec.id, code: 'NOT_CANCELLABLE', message: 'Only a scheduled change-set can be cancelled.' }])
       return makeEnvelope([{ changeset_id: rec.id, status: 'cancelled' }])
     }
@@ -108,7 +108,7 @@ export const appConfirmChangesetTool: AppToolDef = {
       // page)以外的路徑批准/執行完畢,面板帶著仍有效的 nonce 按「拒絕」會把已執行結果覆寫成
       // rejected(status-integrity 破洞)。改用 casStatus,只有仍是 pending_approval 才轉態成功;
       // 否則回 ALREADY_PROCESSED,不覆寫。與 confirmRoutes.ts 的 reject 路徑同一套紀律。
-      const won = ctx.changeSets.casStatus(rec.id, 'pending_approval', 'rejected', ctx.now())
+      const won = await ctx.changeSets.casStatus(rec.id, 'pending_approval', 'rejected', ctx.now())
       if (!won) return makeEnvelope([], [{ key: rec.id, code: 'ALREADY_PROCESSED', message: 'This change-set was already approved/executed or is no longer pending.' }])
       return makeEnvelope([{ changeset_id: rec.id, status: 'rejected' }])
     }
@@ -150,7 +150,7 @@ export const appGetBatchViewTool: AppToolDef = {
   async handler(args, ctx: AppToolContext) {
     // 沿用既有 L0/L2 讀取工具慣例：view 每次呼叫做真實 gateway 讀取，計一次讀取 budget（與
     // appRateBudget 的面板輪詢節流是兩個獨立額度，見 appPipeline.ts AppToolContext 註解）。
-    ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId)
+    await ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId)
     // Combined cap: each array has max(10) but without a joint limit the tool could feed up to 20 oids
     // into buildBatchView — double the documented ≤10 and the gateway burst assumption. Fail fast.
     if ((args.prod_mids?.length ?? 0) + (args.prod_oids?.length ?? 0) > 10) {
@@ -212,7 +212,7 @@ export const appGetAnnouncementViewTool: AppToolDef = {
   } as never,
   annotations: { title: 'Get announcement view', readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   async handler(args, ctx: AppToolContext) {
-    ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId)
+    await ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId)
     // Combined cap: each array has max(10) but without a joint limit the tool could read up to 20 oids —
     // double the documented ≤10 and the gateway burst assumption. Fail fast.
     if ((args.prod_mids?.length ?? 0) + (args.prod_oids?.length ?? 0) > 10) {
@@ -239,7 +239,8 @@ export const appGetAnnouncementViewTool: AppToolDef = {
     let counts: Map<string, number> | null = null
     if (client) {
       try {
-        const items = await client.listByProdOids(ctx.accessToken, prodOids)
+        // ctx.traceId 貫穿進 svc-b2c request-uuid header，讓這筆讀取也能 join 回 MCP audit（F3）。
+        const items = await client.listByProdOids(ctx.accessToken, prodOids, ctx.traceId)
         const m = new Map<string, number>()
         let anyGroupable = false
         for (const it of items as Array<Record<string, unknown>>) {

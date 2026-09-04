@@ -8,12 +8,12 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { registerAppTool } from '@modelcontextprotocol/ext-apps/server'
 import { z } from 'zod'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { randomUUID } from 'node:crypto'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import type { Config } from '../src/config.js'
-import type Database from 'better-sqlite3'
+import type { Db } from '../src/store/dbTypes.js'
 
 describe('hostSupportsApps', () => {
   it('宣告 ui extension + 支援 mime → true', () => {
@@ -56,23 +56,23 @@ describe('app-only tools 的 capability-gate（透過真實 buildApp /mcp path�
     return `${b64({ alg: 'HS256' })}.${b64({ exp: expSec })}.sig`
   }
 
-  let http: Server, base: string, db: Database.Database
+  let http: Server, base: string, db: Db
   const BEARER = 'be2mcp_' + 'c'.repeat(48)
 
   beforeAll(async () => {
-    db = openDb(':memory:')
+    db = await openTestDb()
     const identityId = randomUUID()
-    new IdentityStore(db).upsert({
+    await new IdentityStore(db).upsert({
       identityId, userLabel: 'pilot@kkday.com',
       accessToken: fakeJwt(Math.floor(Date.now() / 1000) + 3600), refreshToken: 'r', businessList: [],
       accessExpiresAt: Date.now() + 3600_000, updatedAt: Date.now(),
     })
-    new CredentialStore(db).insert({
+    await new CredentialStore(db).insert({
       credHash: CredentialStore.hash(BEARER), identityId, kind: 'static_bearer', expiresAt: null, updatedAt: Date.now(),
     })
     const config: Config = {
       authsvcUrl: 'https://auth.invalid', gatewayUrl: 'https://gw.invalid',
-      serviceKey: 'sk', port: 0, dbPath: ':memory:', otelMode: 'off', scheduleTz: 'Asia/Taipei',
+      serviceKey: 'sk', port: 0, db: { host: 'localhost', ssl: false }, schedulerMode: 'poller', auditStdout: false, otelMode: 'off', scheduleTz: 'Asia/Taipei',
       bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
     }
     const app = buildApp({ config, db })

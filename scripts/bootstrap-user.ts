@@ -1,5 +1,5 @@
-import { loadConfig } from '../src/config.js'
-import { openDb } from '../src/store/db.js'
+import { loadConfig, resolveDbConnection } from '../src/config.js'
+import { createPgDb } from '../src/store/pgDb.js'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import { AuthServiceClient } from '../src/auth/authServiceClient.js'
@@ -13,21 +13,28 @@ import { parseArgs } from 'node:util'
 //        from https://auth-220.sit.kkday.com/auth/be2/login?loginFlow=POPUP if REST login is CSRF-blocked)
 // Prints the static bearer ONCE. It is stored only as a sha256 hash.
 
-const { values } = parseArgs({ options: { otp: { type: 'string' }, code: { type: 'string' }, label: { type: 'string' } } })
-const cfg = loadConfig()
-const db = openDb(cfg.dbPath)
-const identities = new IdentityStore(db)
-const credentials = new CredentialStore(db)
-const auth = new AuthServiceClient({ baseUrl: cfg.authsvcUrl, serviceKey: cfg.serviceKey })
-const userLabel = values.label ?? process.env.AUTH_email ?? 'unknown-pilot'
+async function main(): Promise<void> {
+  const { values } = parseArgs({ options: { otp: { type: 'string' }, code: { type: 'string' }, label: { type: 'string' } } })
+  const cfg = loadConfig()
+  const db = createPgDb(resolveDbConnection(process.env))
+  try {
+    const identities = new IdentityStore(db)
+    const credentials = new CredentialStore(db)
+    const auth = new AuthServiceClient({ baseUrl: cfg.authsvcUrl, serviceKey: cfg.serviceKey })
+    const userLabel = values.label ?? process.env.AUTH_email ?? 'unknown-pilot'
 
-const input = values.code
-  ? { userLabel, code: values.code }
-  : { userLabel, account: process.env.AUTH_email!, password: process.env.AUTH_pwd!, otp: values.otp }
+    const input = values.code
+      ? { userLabel, code: values.code }
+      : { userLabel, account: process.env.AUTH_email!, password: process.env.AUTH_pwd!, otp: values.otp }
 
-enrollUser({ identities, credentials, auth }, input).then(({ bearer }) => {
-  console.log(`Enrolled ${userLabel}.`)
-  console.log('Static bearer (shown once, store it in your Claude Code MCP config):')
-  console.log(bearer)
-  console.log(`\nClaude Code: claude mcp add be2-mcp --transport http http://127.0.0.1:${cfg.port}/mcp --header "Authorization: Bearer ${bearer}"`)
-}).catch(e => { console.error('enroll failed:', e.code ?? '', e.message); process.exit(1) })
+    const { bearer } = await enrollUser({ identities, credentials, auth }, input)
+    console.log(`Enrolled ${userLabel}.`)
+    console.log('Static bearer (shown once, store it in your Claude Code MCP config):')
+    console.log(bearer)
+    console.log(`\nClaude Code: claude mcp add be2-mcp --transport http http://127.0.0.1:${cfg.port}/mcp --header "Authorization: Bearer ${bearer}"`)
+  } finally {
+    await db.close()
+  }
+}
+
+main().catch(e => { console.error('enroll failed:', e.code ?? '', e.message); process.exit(1) })

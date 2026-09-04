@@ -1,8 +1,11 @@
 import { randomUUID, createHash } from 'node:crypto'
+import { PGlite } from '@electric-sql/pglite'
 import { loadConfig } from '../src/config.js'
 import { AuthServiceClient } from '../src/auth/authServiceClient.js'
 import { GatewayClient } from '../src/gateway/client.js'
-import { openDb } from '../src/store/db.js'
+import type { Db } from '../src/store/dbTypes.js'
+import { wrapPgliteDb } from '../src/store/pgliteDb.js'
+import { runMigrations } from '../src/store/migrate.js'
 import { ReadOidStore } from '../src/store/readOidStore.js'
 import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { RateBudget } from '../src/limits/rateBudget.js'
@@ -14,6 +17,22 @@ import { sanitizeQueue } from '../src/modules/product/shelfSchedule/validate.js'
 import { queuesEqual, sortQueue } from '../src/modules/product/shelfSchedule/diff.js'
 import type { L2ToolContext } from '../src/server/l2Context.js'
 import type { ScheduleEntry, ShelfScheduleDiffItem } from '../src/core/changeset/types.js'
+
+// In-memory PGlite + migrations, built from src-internal modules only (never tests/support/testDb.ts —
+// this is a script that could in principle be run outside a test runner). Mirrors the isolation
+// semantics the old openDb(':memory:') gave this script: a fresh, throwaway DB per run, never a real
+// PG connection (this script must NEVER touch real PG — see header comment below).
+async function createIsolatedDb(): Promise<Db> {
+  const pg = new PGlite()
+  await runMigrations({
+    query: async (sql, params) => {
+      const r = await pg.query<Record<string, unknown>>(sql, params as never[])
+      return { rows: r.rows }
+    },
+    exec: async (sql) => { await pg.exec(sql) },
+  })
+  return wrapPgliteDb(pg)
+}
 
 // Phase 4a Task 8 live acceptance — NEVER run in CI, manual only, fully reversible.
 // Run: npx tsx --env-file=.env scripts/live-4a-acceptance.ts [prodOid]   (default prodOid: 34133)
@@ -105,7 +124,7 @@ async function runShelfScheduleRoundTrip(
 
   // Scope-gate substrate: mirrors what a real caller establishes via be2_get_product_plans /
   // app_get_batch_view before be2_create_changeset's SCOPE_NOT_READ gate will allow this oid.
-  ctx.readOids.record(ctx.sessionId, [prodOid, pkgOid])
+  await ctx.readOids.record(ctx.sessionId, [prodOid, pkgOid])
 
   const FAR_FUTURE = '2027-01-01 00:00:00' // UTC — far enough out that be2's native scheduler
   // cannot have fired this during the run window of this script.
@@ -123,7 +142,7 @@ async function runShelfScheduleRoundTrip(
   console.log(`    OK: changeset_id=${created1.changeset_id}`)
 
   console.log('  step 2/4: approve + execute (same shared service the confirm page / wizard panel call)')
-  const rec1 = ctx.changeSets.get(created1.changeset_id)!
+  const rec1 = (await ctx.changeSets.get(created1.changeset_id))!
   const out1 = await approveAndExecute(confirmDeps, {
     rec: rec1, who: { accessToken: at, userLabel: ctx.userLabel, sessionId: ctx.sessionId, identityId: 'live-acceptance-script' },   // 佔位:本腳本只走立即批准;若擴充排程測試需換真實 identityId(store 查無此 id 會炸 getFreshByIdentityId)
     expectedDiffVersion: rec1.diffVersion, channel: 'confirm_page',
@@ -154,7 +173,7 @@ async function runShelfScheduleRoundTrip(
   }
 
   console.log('  step 4/4: restore — create + approve + execute a change-set back to the ORIGINAL queue, then verify')
-  ctx.readOids.record(ctx.sessionId, [prodOid, pkgOid])
+  await ctx.readOids.record(ctx.sessionId, [prodOid, pkgOid])
   const createEnv2 = await createChangesetCore(
     { action_type: 'shelf_schedule', items: [{ prod_oid: prodOid, pkg_oid: pkgOid, queue: originalQueue }] },
     ctx,
@@ -165,7 +184,7 @@ async function runShelfScheduleRoundTrip(
     return false
   }
   const created2 = createEnv2.items[0] as { changeset_id: string }
-  const rec2 = ctx.changeSets.get(created2.changeset_id)!
+  const rec2 = (await ctx.changeSets.get(created2.changeset_id))!
   const out2 = await approveAndExecute(confirmDeps, {
     rec: rec2, who: { accessToken: at, userLabel: ctx.userLabel, sessionId: ctx.sessionId, identityId: 'live-acceptance-script' },   // 佔位:本腳本只走立即批准;若擴充排程測試需換真實 identityId(store 查無此 id 會炸 getFreshByIdentityId)
     expectedDiffVersion: rec2.diffVersion, channel: 'confirm_page',
@@ -199,7 +218,7 @@ async function runInventoryPlatformExpectBlocked(
 ): Promise<void> {
   const target = await pickInventoryPlatformTarget(gateway, at, prodOid)
   console.log(`  target: item_oid=${target.item_oid} supplier_oid=${target.supplier_oid} (pkg_oid=${target.pkg_oid} "${target.pkg_name}")`)
-  ctx.readOids.record(ctx.sessionId, [target.item_oid])
+  await ctx.readOids.record(ctx.sessionId, [target.item_oid])
   const env = await createChangesetCore(
     {
       action_type: 'inventory_platform',
@@ -231,7 +250,8 @@ async function main() {
   console.log(`login+exchange OK; businessList entries: ${tokens.businessList.length}`)
 
   const gateway = new GatewayClient({ baseUrl: cfg.gatewayUrl })
-  const db = openDb(':memory:')
+  // Deliberately isolated in-memory PGlite — NEVER a real PG connection (see createIsolatedDb above).
+  const db = await createIsolatedDb()
   const readOids = new ReadOidStore(db)
   const changeSets = new ChangeSetStore(db)
   const rateBudget = new RateBudget(db)
@@ -240,10 +260,9 @@ async function main() {
   const userLabel = process.env.AUTH_email!
 
   const ctx: L2ToolContext = {
-    gateway, accessToken, userLabel, sessionId,
+    gateway, accessToken, userLabel, sessionId, traceId: 'live4a'.padEnd(32, '0'),
     bearerHash: createHash('sha256').update(accessToken).digest('hex'),
     businessList: tokens.businessList,
-    scheduleTz: 'Asia/Taipei',
     readOids, changeSets, rateBudget,
     baseUrl: `http://127.0.0.1:${cfg.port}`,
     genId: () => randomUUID(),
@@ -253,6 +272,7 @@ async function main() {
     // would normally emit out-of-band is unused; just log it for visibility into what a real
     // caller would have received.
     emitConfirmUrl: (id, url) => console.log(`  (confirm_url would have been: ${url} — this script approves directly instead)`),
+    scheduleTz: cfg.scheduleTz,
   }
   const confirmDeps: ConfirmServiceDeps = { changeSets, gateway, audit, now: Date.now, modifyUserFrom: modifyUserFromToken }
 
@@ -272,12 +292,14 @@ async function main() {
   }
 
   console.log('\n=== audit_log summary (sanitized: ts/tool/status/user only — no tokens) ===')
-  for (const e of audit.recent(30).reverse()) {
+  for (const e of (await audit.recent(30)).reverse()) {
     console.log(`  ${new Date(e.ts).toISOString()}  ${e.tool.padEnd(24)} status=${e.status}  user=${e.userLabel}`)
   }
 
   console.log(`\nRESULT=${shelfScheduleOk ? 'SHELF_SCHEDULE_LIVE_OK' : 'SHELF_SCHEDULE_LIVE_FAILED'}`)
   console.log('RESULT=INVENTORY_PLATFORM_DIFF_BLOCKED_AS_EXPECTED (see docs/be2-mcp/sit-write-contracts.md)')
+
+  await db.close()
 }
 
 main().catch(e => { console.error('live-4a-acceptance failed:', shortErr(e)); process.exit(1) })

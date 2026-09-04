@@ -36,9 +36,12 @@ export async function executeAnnouncementUpdateWith(
       // step 1: read current (read-merge-write). itemSchema already requires the full target
       // document, so a read failure here degrades (current = undefined) rather than blocking the
       // write — target alone is enough to build a complete, correct body.
+      // traceId 這裡是 span callback 給的值（= ctx.traceId，見 core/changeset/executor.ts:53-56 註解）；
+      // 帶進 svc-b2c request-uuid header（read 與 write 兩腿都帶），讓這筆下游請求能與本筆
+      // ItemResult.trace_id join（F3）。
       let current: RawAnnouncementDetail | undefined
       try {
-        current = await client.getDetail(ctx.accessToken, it.announcementOid) as RawAnnouncementDetail
+        current = await client.getDetail(ctx.accessToken, it.announcementOid, traceId) as RawAnnouncementDetail
       } catch { current = undefined }
       // no-op guard (9b review): if the target is equivalent to the live current, skip the PATCH
       // entirely — re-sending identical content still fires a back-end cache-clear + front-end
@@ -52,7 +55,7 @@ export async function executeAnnouncementUpdateWith(
       try {
         // step 2: write the merged full document. announcementOid is validated (zod z.number()
         // .int().positive() in module.ts) before reaching here — no raw/unvalidated URL interpolation.
-        await client.patch(ctx.accessToken, it.announcementOid, body)
+        await client.patch(ctx.accessToken, it.announcementOid, body, traceId)
         return { item_key: key, status: 'done', before: current ?? null, after: body, trace_id: traceId }
       } catch (e) {
         const ge = e as GatewayError
@@ -79,7 +82,7 @@ export async function executeAnnouncementUpdate(ctx: ExecCtx, rec: ChangeSetReco
     return (rec.items as AnnouncementUpdateItem[]).map(it => ({
       item_key: itemKey(it),
       status: 'failed' as const,
-      trace_id: '',
+      trace_id: ctx.traceId,
       error_code: (ge?.code as string) ?? 'ANNOUNCE_CLIENT_UNAVAILABLE',
       error_message: (e as Error)?.message ?? 'announcement client unavailable',
     }))

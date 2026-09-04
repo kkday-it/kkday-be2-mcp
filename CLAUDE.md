@@ -9,7 +9,7 @@
 @docs/be2-mcp/phase0-inventory.md
 
 - **主設計 spec**（canonical，較長、未 @import，需要時開來讀）：`docs/superpowers/specs/2026-08-07-be2-mcp-design.md`（已過 agy-peer-review）。
-- **上雲硬約束**（未 @import、開發前必讀）：`docs/be2-mcp/vibe-cloud-ready-spec.md`（來源 kkday-vibe-framework）。本專案最終容器化部署於公司內部 **AWS EKS**——任何設計須符合其 12 條約束（禁 SQLite/檔案型 DB、DB=外部 PostgreSQL、完全無狀態可多副本、排程走 HTTP endpoint 非 in-process timer、runtime 不做 DDL、綁 0.0.0.0、log 只走 stdout、平台能力包 adapter）。現況差距與遷移方向見 `docs/be2-mcp/stage-eks-migration-devops.md` §8。
+- **上雲硬約束**（未 @import、開發前必讀）：`docs/be2-mcp/vibe-cloud-ready-spec.md`（來源 kkday-vibe-framework）。本專案最終容器化部署於公司內部 **AWS EKS**——任何設計須符合其 12 條約束（禁 SQLite/檔案型 DB、DB=外部 PostgreSQL、完全無狀態可多副本、排程走 HTTP endpoint 非 in-process timer、runtime 不做 DDL、綁 0.0.0.0、log 只走 stdout、平台能力包 adapter）。**#4/#5/#6/#7/#8 已由 `feat/pg-migration` 關閉**（store 換 PostgreSQL、runtime 零 DDL、排程改 HTTP endpoint）；#3（in-process 鎖／session）留待多副本 HA 階段。現況差距與遷移方向見 `docs/be2-mcp/stage-eks-migration-devops.md` §8。
 
 ## 開發環境錨定：SIT `be2-220`
 
@@ -41,13 +41,17 @@
 
 ## 開發指令（Phase 1a，`npm run <script>`）
 
-- `dev` — 啟動 MCP server（Streamable HTTP，`/mcp` + `/healthz`），監聽 `$APP_BIND_HOST:$APP_PORT`（本地預設 `127.0.0.1:8787`）。
-- `test` — 跑 vitest 單元/整合測試。
-- `ci` — `typecheck` + `test`，本地重現 CI gate。
+- `dev` — 啟動 MCP server（Streamable HTTP，`/mcp` + `/healthz`），監聽 `$APP_BIND_HOST:$APP_PORT`（本地預設 `127.0.0.1:8787`）。store 為外部 PostgreSQL（`DATABASE_URL` 或 `DB_HOST/PORT/USER/PASSWORD/NAME`），啟動前需 `npm run db:migrate` 建好 schema。
+- `test` — 跑 vitest 單元/整合測試（PGlite in-memory backend，天然 per-file 隔離，免 docker）。
+- `test:pg` — 跑真 PostgreSQL 併發測試（6 個 CAS 原語×雙連線搶）。需 `TEST_PG_URL`（未設 SKIP，不算失敗）；本地跑法：`docker compose -f docker/pg-test.yml up -d` → 設 `TEST_PG_URL` → `npm run test:pg` → `docker compose -f docker/pg-test.yml down`。
+- `lint:async` — ESLint（`no-floating-promises` + `no-misused-promises`），抓漏 `await` 的 Promise；已掛進 `ci`。
+- `ci` — `build` + `typecheck` + `lint:async` + `test`，本地重現 CI gate。
+- `db:migrate` — 對 `DATABASE_URL`/`DB_*` 指向的 PostgreSQL 套用 `db/migrations/*.sql`（forward-only、字典序、`schema_migrations` 記錄、advisory lock 防並行套用）。重跑安全（已套用檔案略過）。部署序：CI/k8s Job 先跑此指令成功才 rollout。
 - `eval` — 跑 agent-eval 案例（需 `ANTHROPIC_API_KEY`；沒設會 SKIP，不算失敗）。
 - **OAuth 接入（首選）** — Claude Code / Desktop 直接 `claude mcp add be2-mcp --transport http http://127.0.0.1:8787/mcp`（不帶 `--header`），瀏覽器跳轉 be2-auth POPUP 登入，免手貼 bearer。步驟、與 static bearer 的關係、SSO-seamless 確認頁行為，見 `docs/be2-mcp/oauth-runbook.md`。
-- `bootstrap-user` — **headless/過渡 fallback**（無瀏覽器環境、CI、或 OAuth 外殼故障時的應急通道）：pilot 使用者登入 auth-service 換 be2 token，存進 server 端 SQLite store，印出一次性的 static bearer 供 `claude mcp add --header` 用（見 `docs/be2-mcp/phase1a-runbook.md`）。
-- `oauth-purge` — 硬刪過期 `oauth_auth_codes`/`oauth_refresh` + 無 credential 引用的 ghost `be2_identities`（見 `docs/be2-mcp/oauth-runbook.md`「Token 生命週期治理」）。建議排程每日跑一次。
+- `bootstrap-user` — **headless/過渡 fallback**（無瀏覽器環境、CI、或 OAuth 外殼故障時的應急通道）：pilot 使用者登入 auth-service 換 be2 token，存進 server 端 PostgreSQL store，印出一次性的 static bearer 供 `claude mcp add --header` 用（見 `docs/be2-mcp/phase1a-runbook.md`）。
+- `oauth-purge` — 硬刪過期 `oauth_auth_codes`/`oauth_refresh` + 無 credential 引用的 ghost `be2_identities`（見 `docs/be2-mcp/oauth-runbook.md`「Token 生命週期治理」）。CLI 用法不變；**現也是 HTTP endpoint** `POST /api/jobs/oauth-purge`（`Authorization: Bearer $CRON_SECRET`，idempotent），部署後由外部 CronJob 每日觸發一次。
+- **排程 HTTP endpoint** — `POST /api/jobs/scheduler-tick`（同 `CRON_SECRET` bearer）包現有 `scheduler.tick()`，idempotent、CAS 保 at-most-once。由 `SCHEDULER_MODE` 切換：`poller`（預設，本地/單實例，app 進程內 in-process tick）／`http`（EKS 部署，`index.ts` 不啟動內建 poller，改由外部 CronJob/dkron 每分鐘打此 endpoint）。
 - `probe-sit` — 手動打 SIT `be2-220` 抓真實 endpoint 回應形狀，寫成 sanitized fixtures（絕不寫入 token）。
 - `probe-sit-write` — 手動、可逆地打 SIT `be2-220` 的 write endpoint（`scripts/probe-sit-write.ts`），解 `modify_user` 來源、merge-vs-replace、必填欄位；結果見 `docs/be2-mcp/sit-write-contracts.md`。**永不進 CI**，且需可寫帳號才能跑到底（目前 `.env` 帳號在寫入端點回 403，見該文件 blocker）。
 - `probe-sit-bm` — 手動打 blueMountain 工單讀取 API（經 gateway `/bluemountain`，`scripts/probe-sit-bluemountain.ts`），驗 endpoint 形狀／授權／PII；`discover` 模式可在該環境撈任一工單。搭配 `./scripts/env-for.sh <stage|prod> <cmd…>` 可切環境（憑證一律讀 `.env`、不印值）。結果見 `docs/be2-mcp/sit-bluemountain-contract.md`。**永不進 CI。**

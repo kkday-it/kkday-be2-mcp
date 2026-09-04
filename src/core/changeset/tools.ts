@@ -55,7 +55,11 @@ export async function createChangesetCore(args: Record<string, unknown>, ctx: L2
   const bad = mod.validate(items, ctx.now())
   if (bad) return makeEnvelope([], [{ key: bad.key, code: 'INVALID_ITEMS', message: bad.message }])
   // §6.2 scope-binding gate
-  const notRead = items.filter(i => mod.scopeOids(i).some(oid => !ctx.readOids.has(ctx.sessionId, oid)))
+  const notRead: AnyChangeSetItem[] = []
+  for (const i of items) {
+    const flags = await Promise.all(mod.scopeOids(i).map(oid => ctx.readOids.has(ctx.sessionId, oid)))
+    if (flags.some(read => !read)) notRead.push(i)
+  }
   if (notRead.length) {
     return makeEnvelope([], [{
       key: notRead.map(i => mod.scopeErrorKey(i)).join(','),
@@ -98,11 +102,11 @@ export async function createChangesetCore(args: Record<string, unknown>, ctx: L2
   }
 
   try {
-    ctx.rateBudget.consumeChangeset(ctx.userLabel)
-    const diff = await mod.computeDiff({ gateway: ctx.gateway, accessToken: ctx.accessToken, userLabel: ctx.userLabel }, items)
+    await ctx.rateBudget.consumeChangeset(ctx.userLabel)
+    const diff = await mod.computeDiff({ gateway: ctx.gateway, traceId: ctx.traceId, accessToken: ctx.accessToken, userLabel: ctx.userLabel }, items)
     const diffVersion = mod.diffVersion(diff)
     const id = ctx.genId()
-    ctx.changeSets.create({
+    await ctx.changeSets.create({
       id,
       creatorLabel: ctx.userLabel,
       creatorBearerHash: ctx.bearerHash,
@@ -175,9 +179,9 @@ export const getChangesetStatusTool: L2ToolDef = {
     openWorldHint: true,
   },
   async handler(args, ctx) {
-    const rec = ctx.changeSets.get(args.changeset_id as string)
+    const rec = await ctx.changeSets.get(args.changeset_id as string)
     if (!rec || rec.creatorLabel !== ctx.userLabel) return makeEnvelope([], [{ key: args.changeset_id as string, code: 'NOT_FOUND', message: 'No such change-set for this user.' }])
-    const results = ['pending_approval', 'approved', 'scheduled'].includes(rec.status) ? undefined : ctx.changeSets.getResults(rec.id)
+    const results = ['pending_approval', 'approved', 'scheduled'].includes(rec.status) ? undefined : await ctx.changeSets.getResults(rec.id)
     return makeEnvelope([{ changeset_id: rec.id, status: rec.status, action_type: rec.actionType, note: rec.note,
       ...(rec.schedule ? { schedule: { execute_at_utc: rec.schedule.executeAtUtc, wall: rec.schedule.wall, tz: rec.schedule.tz } } : {}),
       diff: { items: rec.diff }, ...(results ? { results } : {}) }])

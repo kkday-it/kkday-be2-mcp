@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { createServer, type Server, request as httpRequest } from 'node:http'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { buildApp } from '../src/server/app.js'
 import type { Config } from '../src/config.js'
 
@@ -54,13 +54,14 @@ describe('DNS-Rebinding and Host Header Guard', () => {
   let port: number
 
   beforeAll(async () => {
-    const db = openDb(':memory:')
+    const db = await openTestDb()
     const config: Config = {
       authsvcUrl: 'https://auth.invalid',
       gatewayUrl: 'https://gw.invalid',
       serviceKey: 'sk',
       port: 0,
-      dbPath: ':memory:',
+      db: { host: 'localhost', ssl: false },
+      schedulerMode: 'poller', auditStdout: false,
       otelMode: 'off', scheduleTz: 'Asia/Taipei',
       bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
     }
@@ -138,13 +139,14 @@ describe('DNS-Rebinding and Host Header Guard', () => {
   })
 
   it('supports custom allowed hosts via APP_ALLOWED_HOSTS env', async () => {
-    const db = openDb(':memory:')
+    const db = await openTestDb()
     const config: Config = {
       authsvcUrl: 'https://auth.invalid',
       gatewayUrl: 'https://gw.invalid',
       serviceKey: 'sk',
       port: 0,
-      dbPath: ':memory:',
+      db: { host: 'localhost', ssl: false },
+      schedulerMode: 'poller', auditStdout: false,
       otelMode: 'off', scheduleTz: 'Asia/Taipei',
       bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
     }

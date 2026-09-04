@@ -157,7 +157,9 @@ export interface ItemResult {
 }
 
 export interface ScheduleInfo { executeAtUtc: number; wall: string; tz: string }
-export interface ExecutorRef { identityId: string; userLabel: string; modifyUser: string; sessionId: string }
+// traceId：批准當下的 trace，隨快照存起、scheduler 重建 who 時帶出，讓批准↔執行↔be2 request-uuid
+// 三方可 join（spec §3.5）。optional：migration 前既存的 scheduled 件無此值（executor 端 fallback）。
+export interface ExecutorRef { identityId: string; userLabel: string; modifyUser: string; sessionId: string; traceId?: string }
 
 export interface ChangeSetRecord {
   id: string

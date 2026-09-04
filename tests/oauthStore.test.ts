@@ -1,42 +1,50 @@
 import { describe, it, expect } from 'vitest'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { OAuthStore } from '../src/oauth/oauthStore.js'
 
-function db() { return openDb(':memory:') }
-
 describe('OAuthStore', () => {
-  it('client insert/get round-trip；redirect_uris 存成 JSON', () => {
-    const s = new OAuthStore(db())
-    s.insertClient({ clientId: 'c1', redirectUris: ['https://claude.ai/api/mcp/auth_callback'], createdAt: 1 })
-    expect(s.getClient('c1')).toEqual({ clientId: 'c1', redirectUris: ['https://claude.ai/api/mcp/auth_callback'], createdAt: 1 })
-    expect(s.getClient('nope')).toBeUndefined()
+  it('client insert/get round-trip；redirect_uris 存成 JSON', async () => {
+    const db = await openTestDb()
+    const s = new OAuthStore(db)
+    await s.insertClient({ clientId: 'c1', redirectUris: ['https://claude.ai/api/mcp/auth_callback'], createdAt: 1 })
+    expect(await s.getClient('c1')).toEqual({ clientId: 'c1', redirectUris: ['https://claude.ai/api/mcp/auth_callback'], createdAt: 1 })
+    expect(await s.getClient('nope')).toBeUndefined()
+    await db.close()
   })
 
-  it('auth code：只存 hash，get/consume 正常，未知 hash 回 undefined', () => {
-    const d = db(); const s = new OAuthStore(d)
-    s.insertAuthCode({ codeHash: 'h1', clientId: 'c1', redirectUri: 'https://x/callback', codeChallenge: 'ch1', identityId: 'I1', exp: 100, consumed: 0 })
-    expect(s.getAuthCode('h1')).toMatchObject({ codeHash: 'h1', clientId: 'c1', identityId: 'I1', consumed: 0 })
-    s.consumeAuthCode('h1')
-    expect(s.getAuthCode('h1')!.consumed).toBe(1)
-    expect(s.getAuthCode('missing')).toBeUndefined()
+  it('auth code：只存 hash，get/consume 正常，未知 hash 回 undefined', async () => {
+    const d = await openTestDb(); const s = new OAuthStore(d)
+    await s.insertAuthCode({ codeHash: 'h1', clientId: 'c1', redirectUri: 'https://x/callback', codeChallenge: 'ch1', identityId: 'I1', exp: 100, consumed: 0 })
+    expect(await s.getAuthCode('h1')).toMatchObject({ codeHash: 'h1', clientId: 'c1', identityId: 'I1', consumed: 0 })
+    // 條件式一次性消費：第一次搶贏回 true，第二次（已 consumed）回 false → caller 據此 fail-closed
+    expect(await s.consumeAuthCode('h1')).toBe(true)
+    expect((await s.getAuthCode('h1'))!.consumed).toBe(1)
+    expect(await s.consumeAuthCode('h1')).toBe(false)
+    // 不存在的 hash 也回 false（沒有可翻轉的 row）
+    expect(await s.consumeAuthCode('missing')).toBe(false)
+    expect(await s.getAuthCode('missing')).toBeUndefined()
     // 明文絕不落地：DB 只查得到 hash 欄位，查不到任何原始 code
-    const raw = (d.prepare('SELECT code_hash FROM oauth_auth_codes').all() as { code_hash: string }[]).map(r => r.code_hash)
+    const raw = (await d.query<{ code_hash: string }>('SELECT code_hash FROM oauth_auth_codes')).rows.map(r => r.code_hash)
     expect(raw).toEqual(['h1'])
+    await d.close()
   })
 
-  it('refresh：只存 hash，get/markConsumed/deleteByIdentity 正常', () => {
-    const d = db(); const s = new OAuthStore(d)
-    s.insertRefresh({ refreshHash: 'r1', identityId: 'I1', clientId: 'c1', exp: 200, consumed: 0 })
-    s.insertRefresh({ refreshHash: 'r2', identityId: 'I1', clientId: 'c1', exp: 200, consumed: 0 })
-    expect(s.getRefresh('r1')).toMatchObject({ refreshHash: 'r1', identityId: 'I1', clientId: 'c1', consumed: 0 })
-    s.markRefreshConsumed('r1')
-    expect(s.getRefresh('r1')!.consumed).toBe(1)
+  it('refresh：只存 hash，get/markConsumed/deleteByIdentity 正常', async () => {
+    const d = await openTestDb(); const s = new OAuthStore(d)
+    await s.insertRefresh({ refreshHash: 'r1', identityId: 'I1', clientId: 'c1', exp: 200, consumed: 0 })
+    await s.insertRefresh({ refreshHash: 'r2', identityId: 'I1', clientId: 'c1', exp: 200, consumed: 0 })
+    expect(await s.getRefresh('r1')).toMatchObject({ refreshHash: 'r1', identityId: 'I1', clientId: 'c1', consumed: 0 })
+    // 條件式一次性消費：第一次搶贏回 true，第二次（已 consumed）回 false → 並發雙用訊號
+    expect(await s.markRefreshConsumed('r1')).toBe(true)
+    expect((await s.getRefresh('r1'))!.consumed).toBe(1)
+    expect(await s.markRefreshConsumed('r1')).toBe(false)
     // rotation 語意：consumed 標記而非刪除（供 Task 10 的 reuse 偵測 / family revoke）
-    expect(s.getRefresh('r1')).toBeDefined()
-    s.deleteRefreshByIdentity('I1')
-    expect(s.getRefresh('r1')).toBeUndefined()
-    expect(s.getRefresh('r2')).toBeUndefined()
-    const raw = (d.prepare('SELECT refresh_hash FROM oauth_refresh').all() as { refresh_hash: string }[]).map(r => r.refresh_hash)
+    expect(await s.getRefresh('r1')).toBeDefined()
+    await s.deleteRefreshByIdentity('I1')
+    expect(await s.getRefresh('r1')).toBeUndefined()
+    expect(await s.getRefresh('r2')).toBeUndefined()
+    const raw = (await d.query<{ refresh_hash: string }>('SELECT refresh_hash FROM oauth_refresh')).rows.map(r => r.refresh_hash)
     expect(raw).toEqual([])
+    await d.close()
   })
 })

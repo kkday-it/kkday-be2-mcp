@@ -70,4 +70,18 @@ describe('computeAnnouncementUpdateDiff', () => {
     expect(d.current).toBeNull()
     expect(d.noop).toBe(false)
   })
+
+  // F3: live-diff 讀取（getDetail）也要帶 request-uuid，讓這筆讀取能 join 回 MCP audit。
+  it('passes ctx.traceId through to client.getDetail', async () => {
+    const ctx = ctxWith(async () => ({ name: '商品A' }))
+    ctx.traceId = 'trace-update-diff'
+    const client = {
+      getDetail: vi.fn().mockResolvedValue({
+        name: '公告(舊)', isEnabled: true, prodOids: '[765928]', startTime: '2026-08-28 00:00:00', endTime: null,
+        langs: [{ langCode: 'zh-tw', content: 'old' }],
+      }),
+    } as any
+    await computeAnnouncementUpdateDiff([item], ctx, client)
+    expect(client.getDetail.mock.calls[0][2]).toBe('trace-update-diff')
+  })
 })

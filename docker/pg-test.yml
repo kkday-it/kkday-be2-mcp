@@ -1,0 +1,6 @@
+# docker/pg-test.yml — 本地跑 test:pg 用：docker compose -f docker/pg-test.yml up -d
+services:
+  pg:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: test, POSTGRES_PASSWORD: test, POSTGRES_DB: be2mcp_test }
+    ports: ["55432:5432"]

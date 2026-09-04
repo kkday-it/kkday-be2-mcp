@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { getUiCapability, registerAppTool, RESOURCE_MIME_TYPE } from '@modelcontextprotocol/ext-apps/server'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import type Database from 'better-sqlite3'
+import type { Db } from '../store/dbTypes.js'
 import type { Config } from '../config.js'
 import { IdentityStore } from '../store/identityStore.js'
 import { CredentialStore } from '../store/credentialStore.js'
@@ -12,6 +12,9 @@ import { TokenManager } from '../auth/tokenManager.js'
 import { AuthServiceClient } from '../auth/authServiceClient.js'
 import { GatewayClient } from '../gateway/client.js'
 import { AuditLog } from '../audit/auditLog.js'
+import { buildOnReauthRequired } from '../auth/reauthAudit.js'
+import { randomTraceId } from '../otel.js'
+import { UnauthThrottle } from './unauthThrottle.js'
 import { RateBudget } from '../limits/rateBudget.js'
 import { AppRateBudget } from '../limits/appRateBudget.js'
 import { ChangeSetStore } from '../core/changeset/store.js'
@@ -40,9 +43,11 @@ import { APP_TOOLS } from '../tools/appTools.js'
 import type { ToolDef } from '../tools/types.js'
 import type { L2ToolDef } from './l2Context.js'
 import { buildHostGuard } from './hostGuard.js'
+import { buildJobRoutes } from './jobRoutes.js'
+import { runOAuthPurge } from '../../scripts/oauth-purge.js'
 import { AppError } from '../errors.js'
 
-export interface ServerDeps { config: Config; db: Database.Database }
+export interface ServerDeps { config: Config; db: Db }
 
 // host 在 initialize 的 capabilities.extensions 宣告 MCP Apps 支援才回 true。
 // 用途：capability-gate —— 只對支援 Apps 的 host 註冊 app-only tools（否則非 Apps host
@@ -81,6 +86,7 @@ export function modifyUserFromToken(accessToken: string): string {
 }
 
 export function buildApp({ config, db }: ServerDeps): express.Express {
+  const unauthThrottle = new UnauthThrottle()
   // Task 5：identities/credentials 直接對映 db 兩張表（無內部狀態的薄包裝），不再經
   // TokenStore 扁平相容 adapter——該 adapter 已隨 Task 1-4 的呼叫端遷移完畢，此任務刪除。
   const identities = new IdentityStore(db)
@@ -89,11 +95,11 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // 否則保留（同一 identity 常見同時掛 static_bearer + web_session 兩個 credential 並存）。
   // 供下方 WebSessionStore 的 onDelete 使用（session 登出/idle-expiry/dead-session 皆需回收
   // 它所擁有的 be2 token，見 Fix 2）。
-  function purgeCredential(hash: string): void {
-    const cred = credentials.get(hash)
+  async function purgeCredential(hash: string): Promise<void> {
+    const cred = await credentials.get(hash)
     if (!cred) return
-    credentials.delete(hash)
-    if (credentials.countByIdentity(cred.identityId) === 0) identities.delete(cred.identityId)
+    await credentials.delete(hash)
+    if (await credentials.countByIdentity(cred.identityId) === 0) await identities.delete(cred.identityId)
   }
   // Shared across the tool pipeline (TokenManager) and the SSO router (Task 6): both need to
   // exchange/refresh be2 tokens against the same auth-service client, and reusing one instance
@@ -103,17 +109,13 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // client 註冊；authorization_code/refresh 由 Task 8/9 接續使用同一個 OAuthStore 實例的
   // 其他方法。
   const oauthStore = new OAuthStore(db)
+  const audit = new AuditLog(db, Date.now, { stdout: config.auditStdout, env: config.appEnv })
   // Task 2: TokenManager 直接操作 identity 層（be2 refresh 只在 identity 這格 rotate 一次，
   // 多個 credential 共用同一 identity 時不會互撞）。
   const tokenManager = new TokenManager({ identities, credentials }, authServiceClient, {
-    onReauthRequired: (identityId) => {
-      // identity 列刻意留下（oauth-purge 會清 ghost），web_session/static_bearer 一併撤銷是刻意的——同一 identity 的 be2 refresh 死了，所有面向的憑證都已無法服務。
-      credentials.deleteByIdentity(identityId)
-      oauthStore.deleteRefreshByIdentity(identityId)
-    }
+    onReauthRequired: buildOnReauthRequired({ credentials, oauthStore, identities, audit })
   })
   const rateBudget = new RateBudget(db)
-  const audit = new AuditLog(db)
   const gateway = new GatewayClient({ baseUrl: config.gatewayUrl })
   const readOids = new ReadOidStore(db)
   const changeSets = new ChangeSetStore(db)
@@ -173,6 +175,12 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     modifyUserFrom: modifyUserFromToken,
     scheduleTz: config.scheduleTz,
   }
+
+  // Task 10: created here (rather than at the bottom of buildApp, its previous home) so
+  // `scheduler.tick`/`scheduler.auditStranded` are available for the /api/jobs/* router below —
+  // jobRoutes must call the SAME tick the in-process poller uses (SCHEDULER_MODE=http just
+  // swaps who calls it: an external cron via HTTP instead of index.ts's setTimeout loop).
+  const scheduler = makeScheduler({ changeSets, gateway, audit, now: Date.now, tokenManager })
 
   const transports = new Map<string, StreamableHTTPServerTransport>()
   // Binds a session-id to the IDENTITY the creating bearer resolved to (spec §6.2) — not to the
@@ -241,17 +249,39 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   }
 
   const app = express()
+  // spec §3.4：EKS ingress/ALB 後方 req.ip 需取信任邊界外第一 IP。不用 `true`（盲信 XFF 可偽造）。
+  if (config.trustProxy !== undefined) {
+    app.set('trust proxy', /^\d+$/.test(config.trustProxy) ? Number(config.trustProxy) : config.trustProxy)
+  }
   app.use(express.json())
   app.get('/healthz', (_req, res) => { res.status(200).send('ok') })
   app.get('/readyz', (_req, res) => {
-    try {
-      db.prepare('SELECT 1').get()
-      res.status(200).json({ status: 'ready' })
-    } catch {
-      res.status(503).json({ status: 'not-ready' })
-    }
+    void (async () => {
+      try {
+        await db.query('SELECT 1')
+        res.status(200).json({ status: 'ready' })
+      } catch {
+        res.status(503).json({ status: 'not-ready' })
+      }
+    })()
   })
   app.use(buildHostGuard())
+  // Task 10：cron HTTP endpoints（/api/jobs/oauth-purge、/api/jobs/scheduler-tick）——掛在
+  // hostGuard 之後、MCP bearer 驗證（/mcp handler 內）之前；它自帶獨立的 CRON_SECRET bearer
+  // 驗證（常數時間比對），與 be2 credential 體系無關，呼叫方是叢集內的 cron controller。
+  // runTick 打的就是上面 scheduler.tick——SCHEDULER_MODE=http 時外部 cron 驅動的 tick跟
+  // poller 模式下 in-process setTimeout 迴圈驅動的是同一顆函式，行為完全一致。
+  app.use(buildJobRoutes({
+    cronSecret: config.cronSecret,
+    // Fresh object literal (not the OAuthPurgeResult-typed value itself) so it structurally
+    // satisfies buildJobRoutes' Record<string, number> return type without a cast — OAuthPurgeResult
+    // is a closed interface (no index signature) and isn't assignable to Record<string, number> as-is.
+    runPurge: async () => {
+      const result = await runOAuthPurge(db, Date.now())
+      return { expiredAuthCodes: result.expiredAuthCodes, expiredRefresh: result.expiredRefresh, ghostIdentities: result.ghostIdentities }
+    },
+    runTick: scheduler.tick,
+  }))
   // Task 6：OAuth discovery（RFC 9728 + RFC 8414）——公開端點，Claude 的 OAuth client
   // 用它找到 authorize/token/register 端點與 PKCE/public-client 能力，無需 bearer。
   // Task 2: baseUrl now driven by config.publicBaseUrl (set during config loading / initialization).
@@ -268,7 +298,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // Task 10：token——authorize 鑄的 code 換不透明 access+refresh 的地方（PKCE S256 驗證、
   // code 一次性、refresh rotation + reuse-detection family revoke）。公開端點（OAuth 2.1
   // public client 用 PKCE 取代 client secret 作身分驗證，不掛 bearer middleware）。
-  app.use(buildTokenRouter({ oauthStore, credentials, identities, now: Date.now }))
+  app.use(buildTokenRouter({ oauthStore, credentials, identities, audit, now: Date.now }))
   // A2:RFC 7009 revocation——公開端點,與 token endpoint 同姿態(public client 持有 token 即授權)。
   app.use(buildRevokeRouter({ oauthStore, credentials, identities, audit }))
   // CRITICAL route order (agy T4 finding): buildSsoRouter registers GET /confirm/login (+ POST
@@ -298,8 +328,19 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
       // static bearer both resolve here — CredentialStore doesn't distinguish them by shape).
       const auth = req.header('authorization') ?? ''
       const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : ''
-      const cred = bearer ? credentials.getBySecret(bearer) : undefined
+      const cred = bearer ? await credentials.getBySecret(bearer) : undefined
       if (!cred) {
+        const verdict = unauthThrottle.admit(req.ip ?? 'unknown')
+        if (verdict.admit) {
+          // fire-and-forget：audit 失敗不得影響 401 回應（spec §3.4）
+          void audit.record({
+            userLabel: 'unknown', sessionId: '-', clientInfo: (req.header('user-agent') ?? '-').slice(0, 80),
+            tool: 'mcp.gate', params: { ip: req.ip, bearer_hash_prefix: bearer ? CredentialStore.hash(bearer).slice(0, 8) : undefined },
+            status: 'denied_auth', errorMessage: verdict.note,
+            eventType: 'authn.unauthorized_attempt', severity: 'WARN',
+            traceId: randomTraceId(), durationMs: 0,
+          }).catch(() => {})
+        }
         // Task 10: RFC 9728 — an unauthenticated/unknown-bearer request to a protected resource
         // should point the client at protected-resource discovery so an OAuth-aware client (the
         // whole point of the Task 6-10 shell) can find /oauth/authorize and /oauth/token on its
@@ -354,8 +395,11 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
     })
   })
 
-  const scheduler = makeScheduler({ changeSets, gateway, audit, now: Date.now, tokenManager })
   app.locals.startScheduler = scheduler.start
+  // Task 10: exposed so index.ts's SCHEDULER_MODE=http branch can run the startup stranded-audit
+  // once without starting the in-process poller loop (poller mode gets this for free — start()
+  // fires it internally before entering the setTimeout loop, see scheduler.ts).
+  app.locals.auditStranded = scheduler.auditStranded
 
   return app
 }

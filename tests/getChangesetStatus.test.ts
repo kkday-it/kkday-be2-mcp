@@ -1,12 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { ReadOidStore } from '../src/store/readOidStore.js'
 import { getChangesetStatusTool } from '../src/core/changeset/tools.js'
 import type { L2ToolContext } from '../src/server/l2Context.js'
 
 function ctxFor(store: ChangeSetStore, userLabel: string): L2ToolContext {
-  return { gateway: {} as never, accessToken: 'x', userLabel, sessionId: 's', bearerHash: 'bh',
+  return { gateway: {} as never, accessToken: 'x', userLabel, sessionId: 's', bearerHash: 'bh', traceId: 't'.repeat(32),
     businessList: [], readOids: {} as unknown as ReadOidStore, changeSets: store, rateBudget: {} as never,
     baseUrl: 'http://x', genId: () => 'id', now: () => 1000, emitConfirmUrl: () => {}, scheduleTz: 'Asia/Taipei' }
 }
@@ -18,20 +18,20 @@ function seed(store: ChangeSetStore) {
 }
 describe('be2_get_changeset_status', () => {
   it('creator sees status + results', async () => {
-    const store = new ChangeSetStore(openDb(':memory:'), { now: () => 1000 }); seed(store)
+    const store = new ChangeSetStore(await openTestDb(), { now: () => 1000 }); seed(store)
     const env = await getChangesetStatusTool.handler({ changeset_id: 'cs1' }, ctxFor(store, 'owner@kkday.com'))
     const item = env.items[0] as Record<string, unknown>
     expect(item.status).toBe('done')
     expect((item.results as unknown[])).toHaveLength(1)
   })
   it('non-creator gets NOT_FOUND (no existence leak)', async () => {
-    const store = new ChangeSetStore(openDb(':memory:'), { now: () => 1000 }); seed(store)
+    const store = new ChangeSetStore(await openTestDb(), { now: () => 1000 }); seed(store)
     const env = await getChangesetStatusTool.handler({ changeset_id: 'cs1' }, ctxFor(store, 'someone-else@kkday.com'))
     expect(env.items).toEqual([])
     expect(env.errors[0]?.code).toBe('NOT_FOUND')
   })
   it('scheduled change-set returns schedule info and omits results', async () => {
-    const store = new ChangeSetStore(openDb(':memory:'), { now: () => 1000 })
+    const store = new ChangeSetStore(await openTestDb(), { now: () => 1000 })
     store.create({ id: 'cs2', creatorLabel: 'owner@kkday.com', creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_product',
       items: [{ prod_oid: '1', target_is_active: false }], diff: [{ prod_oid: '1', target_is_active: false, no_op: false, current_is_active: true }],
       diffVersion: 'v1', status: 'scheduled', createdAt: 1000,
@@ -44,7 +44,7 @@ describe('be2_get_changeset_status', () => {
     expect(item.results).toBeUndefined()
   })
   it('cancelled change-set returns cancelled status', async () => {
-    const store = new ChangeSetStore(openDb(':memory:'), { now: () => 1000 })
+    const store = new ChangeSetStore(await openTestDb(), { now: () => 1000 })
     store.create({ id: 'cs3', creatorLabel: 'owner@kkday.com', creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_product',
       items: [{ prod_oid: '1', target_is_active: false }], diff: [{ prod_oid: '1', target_is_active: false, no_op: false, current_is_active: true }],
       diffVersion: 'v1', status: 'cancelled', createdAt: 1000 })

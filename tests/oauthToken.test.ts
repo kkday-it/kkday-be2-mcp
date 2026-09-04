@@ -1,13 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import express from 'express'
 import { createServer, type Server } from 'node:http'
 import { createHash, randomBytes } from 'node:crypto'
 import { buildApp } from '../src/server/app.js'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { IdentityStore } from '../src/store/identityStore.js'
 import { OAuthStore } from '../src/oauth/oauthStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
+import { buildTokenRouter } from '../src/oauth/tokenRoutes.js'
 import type { Config } from '../src/config.js'
-import type Database from 'better-sqlite3'
+import type { Db } from '../src/store/dbTypes.js'
+import { AuditLog } from '../src/audit/auditLog.js'
 
 // Task 10：POST /oauth/token 是 OAuth 外殼的認證核心——PKCE 驗證、code 一次性、refresh
 // rotation + reuse-detection family revoke。這是「認證繞過」影響面最大的一支端點，測試需
@@ -25,23 +28,23 @@ const CLIENT_ID = 'C'
 
 const CONFIG: Config = {
   authsvcUrl: 'https://auth.invalid', gatewayUrl: 'https://gw.invalid',
-  serviceKey: 'sk', port: 0, dbPath: ':memory:', otelMode: 'off', scheduleTz: 'Asia/Taipei',
+  serviceKey: 'sk', port: 0, db: { host: 'localhost', ssl: false }, schedulerMode: 'poller', auditStdout: false, otelMode: 'off', scheduleTz: 'Asia/Taipei',
   bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
 }
 
 // 每個測試前：db + 一個已登入 identity + 一個 client C + 一個 authz code 綁 (C, redirect, challenge, identity)。
 // exp 預設給很長的 TTL（Date.now() + 60_000），除非測試自己要驗過期案例才覆寫。
-function seedCode(db: Database.Database, opts: { verifier: string; identityId?: string; exp?: number }): { rawCode: string; identityId: string } {
+async function seedCode(db: Db, opts: { verifier: string; identityId?: string; exp?: number }): Promise<{ rawCode: string; identityId: string }> {
   const identityId = opts.identityId ?? 'I1'
   const identities = new IdentityStore(db)
   const oauth = new OAuthStore(db)
-  identities.upsert({
+  await identities.upsert({
     identityId, userLabel: 'u', accessToken: fakeJwt(Math.floor(Date.now() / 1000) + 3600),
     refreshToken: 'R', businessList: [], accessExpiresAt: Date.now() + 3600_000, updatedAt: 1,
   })
-  if (!oauth.getClient(CLIENT_ID)) oauth.insertClient({ clientId: CLIENT_ID, redirectUris: [REDIRECT_URI], createdAt: 1 })
+  if (!(await oauth.getClient(CLIENT_ID))) await oauth.insertClient({ clientId: CLIENT_ID, redirectUris: [REDIRECT_URI], createdAt: 1 })
   const rawCode = randomBytes(16).toString('hex')
-  oauth.insertAuthCode({
+  await oauth.insertAuthCode({
     codeHash: CredentialStore.hash(rawCode), clientId: CLIENT_ID, redirectUri: REDIRECT_URI,
     codeChallenge: s256(opts.verifier), identityId, exp: opts.exp ?? Date.now() + 60_000, consumed: 0,
   })
@@ -49,16 +52,16 @@ function seedCode(db: Database.Database, opts: { verifier: string; identityId?: 
 }
 
 describe('POST /oauth/token', () => {
-  let http: Server, base: string, db: Database.Database
+  let http: Server, base: string, db: Db
 
   beforeEach(async () => {
-    db = openDb(':memory:')
+    db = await openTestDb()
     const app = buildApp({ config: CONFIG, db })
     http = createServer(app)
     await new Promise<void>(r => http.listen(0, () => r()))
     base = `http://127.0.0.1:${(http.address() as { port: number }).port}`
   })
-  afterEach(() => new Promise<void>(r => http.close(() => { db.close(); r() })))
+  afterEach(() => new Promise<void>(r => http.close(() => { void db.close().then(() => r()) })))
 
   async function post(path: string, body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
     const r = await fetch(`${base}${path}`, {
@@ -83,7 +86,7 @@ describe('POST /oauth/token', () => {
   }
 
   it('正確 verifier → 發 token 且該 access 能過 /mcp；同一個 code 事後用錯 verifier 重放 → invalid_grant', async () => {
-    const { rawCode } = seedCode(db, { verifier: 'VER' })
+    const { rawCode } = await seedCode(db, { verifier: 'VER' })
     const ok = await post('/oauth/token', {
       grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER',
       client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
@@ -111,7 +114,7 @@ describe('POST /oauth/token', () => {
   // 有效。這裡用一支全新、尚未被消費的 code 單獨驗證 PKCE mismatch 會被擋下——是 PKCE 檢查本身
   // 在擋，不是一次性檢查順便擋住。
   it('PKCE 單獨驗證：全新未消費的 code + 錯誤 verifier → invalid_grant，且 code 未被消費（可用正確 verifier 換到）', async () => {
-    const { rawCode } = seedCode(db, { verifier: 'RIGHT' })
+    const { rawCode } = await seedCode(db, { verifier: 'RIGHT' })
     const bad = await post('/oauth/token', {
       grant_type: 'authorization_code', code: rawCode, code_verifier: 'WRONG',
       client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
@@ -129,7 +132,7 @@ describe('POST /oauth/token', () => {
   })
 
   it('code 一次性：同 code 換兩次 → 第二次 invalid_grant', async () => {
-    const { rawCode } = seedCode(db, { verifier: 'VER' })
+    const { rawCode } = await seedCode(db, { verifier: 'VER' })
     const first = await post('/oauth/token', {
       grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER',
       client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
@@ -144,7 +147,7 @@ describe('POST /oauth/token', () => {
   })
 
   it('client_id / redirect_uri 對不上綁定的 code → invalid_grant', async () => {
-    const { rawCode } = seedCode(db, { verifier: 'VER' })
+    const { rawCode } = await seedCode(db, { verifier: 'VER' })
     const wrongClient = await post('/oauth/token', {
       grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER',
       client_id: 'someone-else', redirect_uri: REDIRECT_URI,
@@ -161,7 +164,7 @@ describe('POST /oauth/token', () => {
   })
 
   it('過期的 code → invalid_grant', async () => {
-    const { rawCode } = seedCode(db, { verifier: 'VER', exp: Date.now() - 1000 })
+    const { rawCode } = await seedCode(db, { verifier: 'VER', exp: Date.now() - 1000 })
     const r = await post('/oauth/token', {
       grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER',
       client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
@@ -184,7 +187,7 @@ describe('POST /oauth/token', () => {
 
   it('refresh rotation：舊 access 立即失效、舊 refresh 再用觸發 family revoke（撤銷整個 token family）', async () => {
     // 換到 {access1, refresh1}
-    const { rawCode } = seedCode(db, { verifier: 'VER' })
+    const { rawCode } = await seedCode(db, { verifier: 'VER' })
     const first = await post('/oauth/token', {
       grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER',
       client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
@@ -213,12 +216,67 @@ describe('POST /oauth/token', () => {
     expect(reused.status).toBe(400)
     expect(reused.body.error).toBe('invalid_grant')
 
+    // final review Important 2：family revoke 必留 security.token_revoked 稽核（token 遭竊訊號），
+    // 只記 hash 前 8 碼、不落 refresh 明文
+    const revokedRow = (await new AuditLog(db).recent()).find(r => r.tool === 'oauth_refresh_reuse')
+    expect(revokedRow).toBeDefined()
+    expect(revokedRow!.eventType).toBe('security.token_revoked')
+    expect(revokedRow!.severity).toBe('CRITICAL')
+    expect(JSON.stringify(revokedRow!.params)).not.toContain(refresh1)
+
     // family revoke：access2（本應仍合法的新 access）也立即失效
     expect((await mcpInitialize(access2)).status).toBe(401)
     // family revoke：refresh2 也被撤銷，之後連它自己都無法再拿來 rotate
     const refresh2AfterRevoke = await post('/oauth/token', { grant_type: 'refresh_token', refresh_token: refresh2, client_id: CLIENT_ID })
     expect(refresh2AfterRevoke.status).toBe(400)
     expect(refresh2AfterRevoke.body.error).toBe('invalid_grant')
+  })
+
+  // F1：refresh 消費是條件式 CAS。真正的並發雙用要在 tests-pg（雙連線）證明；這裡用注入一個
+  // 「markRefreshConsumed 永遠輸掉 race（回 false）」的 store，deterministic 地驗證：即使 getRefresh
+  // 仍讀到 consumed=0，只要 CAS 翻轉失敗（= 有並發請求搶先消費），也要走 family revoke，不是靜默雙發。
+  it('refresh CAS 輸掉 race（markRefreshConsumed 回 false）→ family revoke（reuse-detection 不漏接）', async () => {
+    // 先用正規流程換到一組合法的 {access, refresh}
+    const { rawCode } = await seedCode(db, { verifier: 'VER' })
+    const first = await post('/oauth/token', {
+      grant_type: 'authorization_code', code: rawCode, code_verifier: 'VER',
+      client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
+    })
+    expect(first.status).toBe(200)
+    const refresh1 = first.body.refresh_token as string
+    const access1 = first.body.access_token as string
+
+    // 包一層 store：getRefresh 照實回（consumed=0，通過前面所有檢查），但 markRefreshConsumed
+    // 一律回 false，模擬「讀到 0 之後、翻轉之前被並發請求搶先消費」的 TOCTOU 輸家。
+    const realStore = new OAuthStore(db)
+    const racingStore = Object.assign(Object.create(OAuthStore.prototype) as OAuthStore, realStore, {
+      markRefreshConsumed: async () => false,
+    })
+    const raceApp = express()
+    raceApp.use(express.json())  // 主 app.ts 全域掛了 json 中介層，這個 mini app 要自己補
+    raceApp.use(buildTokenRouter({
+      oauthStore: racingStore, credentials: new CredentialStore(db),
+      identities: new IdentityStore(db), audit: new AuditLog(db), now: Date.now,
+    }))
+    const raceHttp = createServer(raceApp)
+    await new Promise<void>(r => raceHttp.listen(0, () => r()))
+    const racePort = (raceHttp.address() as { port: number }).port
+
+    const lost = await (await fetch(`http://127.0.0.1:${racePort}/oauth/token`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: refresh1, client_id: CLIENT_ID }),
+    })).json() as Record<string, unknown>
+    await new Promise<void>(r => raceHttp.close(() => r()))
+
+    expect(lost.error).toBe('invalid_grant')
+    // family revoke 真的跑了：security 稽核留痕 + identity 的 refresh/access 全被撤
+    const revokedRow = (await new AuditLog(db).recent()).find(r => r.tool === 'oauth_refresh_reuse')
+    expect(revokedRow).toBeDefined()
+    expect(revokedRow!.eventType).toBe('security.token_revoked')
+    expect(revokedRow!.severity).toBe('CRITICAL')
+    expect(await realStore.getRefresh(CredentialStore.hash(refresh1))).toBeUndefined()
+    // 原本合法的 access1 也一併失效（整個 family 撤）
+    expect((await mcpInitialize(access1)).status).toBe(401)
   })
 
   it('/mcp 401 帶 WWW-Authenticate 指向 protected-resource', async () => {

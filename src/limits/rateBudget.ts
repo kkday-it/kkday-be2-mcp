@@ -1,4 +1,4 @@
-import type Database from 'better-sqlite3'
+import type { Db } from '../store/dbTypes.js'
 import { RateError } from '../errors.js'
 
 const RETENTION_MS = 3 * 24 * 3600_000
@@ -8,7 +8,7 @@ export class RateBudget {
   private perUserDay: number
   private now: () => number
 
-  constructor(private db: Database.Database,
+  constructor(private db: Db,
     opts: { perSession?: number; perUserDay?: number; now?: () => number } = {}) {
     this.perSession = opts.perSession ?? 100
     this.perUserDay = opts.perUserDay ?? 500
@@ -17,20 +17,20 @@ export class RateBudget {
 
   // Keys are naturally single-window (session ids never recur; day keys embed the date),
   // so window_start records creation time for retention purposes only.
-  private bump(key: string): number {
-    this.db.prepare(`
-      INSERT INTO rate_counters (counter_key, count, window_start) VALUES (?, 1, ?)
-      ON CONFLICT(counter_key) DO UPDATE SET count = count + 1
-    `).run(key, this.now())
-    return (this.db.prepare('SELECT count FROM rate_counters WHERE counter_key = ?').get(key) as { count: number }).count
+  private async bump(key: string): Promise<number> {
+    const r = await this.db.query<{ count: number }>(`
+      INSERT INTO rate_counters (counter_key, count, window_start) VALUES ($1, 1, $2)
+      ON CONFLICT (counter_key) DO UPDATE SET count = rate_counters.count + 1
+      RETURNING count`, [key, this.now()])
+    return r.rows[0].count
   }
 
-  consume(userLabel: string, sessionId: string): void {
+  async consume(userLabel: string, sessionId: string): Promise<void> {
     // Bounded table: drop counters past retention (sessions long gone; day keys stale).
-    this.db.prepare('DELETE FROM rate_counters WHERE window_start < ?').run(this.now() - RETENTION_MS)
+    await this.db.query('DELETE FROM rate_counters WHERE window_start < $1', [this.now() - RETENTION_MS])
     const day = new Date(this.now()).toISOString().slice(0, 10)
-    const sessionCount = this.bump(`session:${sessionId}`)
-    const dayCount = this.bump(`user:${userLabel}:${day}`)
+    const sessionCount = await this.bump(`session:${sessionId}`)
+    const dayCount = await this.bump(`user:${userLabel}:${day}`)
     if (sessionCount > this.perSession) {
       throw new RateError('RATE_SESSION',
         `Session read budget exhausted (${this.perSession}/session). Start a new session, or narrow the query (batch oids into fewer calls).`, 429)
@@ -41,11 +41,11 @@ export class RateBudget {
     }
   }
 
-  consumeChangeset(userLabel: string, perDay = 10): void {
-    this.db.prepare('DELETE FROM rate_counters WHERE window_start < ?').run(this.now() - RETENTION_MS)
+  async consumeChangeset(userLabel: string, perDay = 10): Promise<void> {
+    await this.db.query('DELETE FROM rate_counters WHERE window_start < $1', [this.now() - RETENTION_MS])
     const day = new Date(this.now()).toISOString().slice(0, 10)
     const key = `changeset:${userLabel}:${day}`
-    const n = this.bump(key)
+    const n = await this.bump(key)
     if (n > perDay) {
       throw new RateError('RATE_CHANGESET_DAY',
         `Daily change-set budget exhausted (${perDay}/day). Try again tomorrow.`, 429)

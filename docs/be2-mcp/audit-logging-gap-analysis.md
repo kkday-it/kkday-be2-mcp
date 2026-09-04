@@ -26,14 +26,16 @@
 | 缺口 ID | 缺口描述 / 出處 | 為何企業標準需要 (風險) | 建議事件名 (Event Type) | 優先級 |
 |---|---|---|---|---|
 | **G1** | **authn 生命週期無稽核**<br>包含 DCR 註冊、`/oauth/authorize` complete (登入成功/失敗)、`/oauth/token` 換發與 L1 refresh (含 refresh-reuse family revoke)、`bootstrap-user` enroll、web session 登入/登出。 | 登入與憑證換發是存取的第一道門戶。漏記 L1 refresh-reuse 將無法於 SIEM 觸發 Token 遭竊的攻擊告警。 | `authn.login`<br>`authn.token_refresh`<br>`authn.revoke` | P1 |
-| **G2** | **REAUTH_REQUIRED 與憑證家族撤銷無稽核**<br>於 `src/auth/tokenManager.ts` 的 `onReauthRequired` 發生時未留痕。 | 憑證遭撤銷、降權或到期被強制登出屬重大安全事件，SIEM 需依靠此事件追蹤帳號風險。 | `security.reauth_required`<br>`security.token_revoked` | P0 |
-| **G3** | **`/mcp` 401 Gate 拒絕無稽核**<br>未知或無效的 bearer token 嘗試未被記錄。 | 無法偵測外部惡意掃描、暴力猜測 token 或已撤銷 token 的異常重試，為基礎的防護盲區。 | `authn.unauthorized_attempt` | P0 |
+| **G2** | **✅ 已落地（2026-09-04）** **REAUTH_REQUIRED 與憑證家族撤銷無稽核**<br>於 `src/auth/tokenManager.ts` 的 `onReauthRequired` 發生時未留痕。 | 憑證遭撤銷、降權或到期被強制登出屬重大安全事件，SIEM 需依靠此事件追蹤帳號風險。 | `security.reauth_required`<br>`security.token_revoked` | P0 |
+| **G3** | **✅ 已落地（2026-09-04）** **`/mcp` 401 Gate 拒絕無稽核**<br>未知或無效的 bearer token 嘗試未被記錄。 | 無法偵測外部惡意掃描、暴力猜測 token 或已撤銷 token 的異常重試，為基礎的防護盲區。 | `authn.unauthorized_attempt` | P0 |
 | **G4** | **Rate Budget 超額混在 error_message**<br>Pipeline (`src/server/appPipeline.ts`) 在 partial degrade 時 `status='ok'`，限流與錯誤僅記於 `error_message`。 | 狀態碼為 `ok` 但實質發生限流，導致 SIEM 無法依賴狀態碼寫告警規則，限流異常無法被有效監控。 | `tool.rate_limit_exceeded` | P1 |
 | **G5** | **授權拒絕類無法統一篩選**<br>如 `SCOPE_NOT_READ`, `ACTION_NOT_ALLOWED`, `CONFIRMED_KEYS_MISMATCH`, `DIFF_STALE` 等，無統一 `event_type`。 | 資安分析需快速篩選出「越權嘗試」，若僅混雜於 `tool` error 中，分析成本極高。 | `authz.denial` | P1 |
-| **G6** | **Schema 缺乏 `event_type` 與 `severity` 欄位**<br>現有稽核表缺乏事件分類，將各類事件硬塞入 `tool` 欄位。 | `event_type` 與 `severity` (INFO, WARN, ERROR, CRITICAL) 是 SIEM 分類與告警規則的地基。無此欄位無法做有效聚合分析。 | N/A (需 Schema 改動) | P0 |
+| **G6** | **✅ 已落地（2026-09-04）** **Schema 缺乏 `event_type` 與 `severity` 欄位**<br>現有稽核表缺乏事件分類，將各類事件硬塞入 `tool` 欄位。 | `event_type` 與 `severity` (INFO, WARN, ERROR, CRITICAL) 是 SIEM 分類與告警規則的地基。無此欄位無法做有效聚合分析。 | N/A (需 Schema 改動) | P0 |
 | **G7** | **L2 refresh 輪替成功事件未留痕**<br>`src/auth/tokenManager.ts` 成功 refresh 未記錄。 | 無法追查內部憑證輪替軌跡，影響 authn 事件完整性。 | `authn.l2_refresh_success` | P2 |
 | **G8** | **oauth-purge 執行結果未留痕**<br>清理過期憑證的治理作業未寫入 audit。 | 內部維運治理作業必須留存紀錄，以備查核資料庫清理合法性。 | `governance.oauth_purge` | P2 |
-| **G9** | **導出能力不足**<br>日誌只存在本地 SQLite，無串接 SIEM 或送出管道；OTel Logs 亦未啟用。 | 單機 SQLite 損毀即遺失軌跡，無法納入公司級集中監控 (Kibana) 與即時告警體系。 | N/A (見第三章設計) | P0 |
+| **G9** | **✅ 已落地（2026-09-04）** **導出能力不足**<br>日誌只存在本地 SQLite，無串接 SIEM 或送出管道；OTel Logs 亦未啟用。 | 單機 SQLite 損毀即遺失軌跡，無法納入公司級集中監控 (Kibana) 與即時告警體系。 | N/A (見第三章設計) | P0 |
+
+已定案事件名（2026-09-04 實作）：`tool_call` / `approval` / `rejection` / `execution` / `governance.scheduler` / `authn.login`（Task 4 用）/ `security.token_revoked` / `security.reauth_required` / `authn.unauthorized_attempt`。
 
 ---
 
@@ -90,7 +92,7 @@
 
 基於風險評估，排定以下修補與實作順序（純疊加治理層記錄機制，不改變任何現有業務邏輯）：
 
-- **P0 階段 (基礎防護與可視化)**
+- **P0 階段（基礎防護與可視化）——✅ 已全數落地（2026-09-04，feat 分支）**
   - 修復 **G2**：在 `tokenManager.ts` (憑證撤銷) 觸發點補上記錄。
   - 修復 **G3**：在 MCP 路由進入點前攔截未知的 Bearer 嘗試並記錄。
   - 修復 **G6**：擴充 `AuditEntry` Schema，寫入 `event_type` (如 `security`, `approval`) 與 `severity`。

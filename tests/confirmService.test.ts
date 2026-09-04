@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { ChangeSetStore } from '../src/core/changeset/store.js'
 import { AuditLog } from '../src/audit/auditLog.js'
 import { approveAndExecute, type ConfirmServiceDeps } from '../src/core/changeset/confirmService.js'
@@ -17,12 +17,12 @@ import type { ChangeSetRecord, InventoryItem } from '../src/core/changeset/types
 
 const WHO = { accessToken: 'tok', userLabel: 'owner@kkday.com', sessionId: 's1', identityId: 'id-test' }
 
-function makeDeps(gateway: { get: Function; put: Function; post?: Function }): { store: ChangeSetStore; audit: AuditLog; deps: ConfirmServiceDeps } {
-  const db = openDb(':memory:')
+async function makeDeps(gateway: { get: Function; put: Function; post?: Function }): Promise<{ store: ChangeSetStore; audit: AuditLog; deps: ConfirmServiceDeps }> {
+  const db = await openTestDb()
   const store = new ChangeSetStore(db, { now: () => 1000 })
   const audit = new AuditLog(db, () => 1000)
   const deps: ConfirmServiceDeps = {
-    changeSets: store, gateway: gateway as never, audit, now: () => 1000,
+    changeSets: store, gateway: Object.assign(Object.create(gateway), { withTrace() { return this } }) as never, audit, now: () => 1000,
     modifyUserFrom: (at: string) => 'U:' + at,
   }
   return { store, audit, deps }
@@ -30,14 +30,14 @@ function makeDeps(gateway: { get: Function; put: Function; post?: Function }): {
 
 // --- shelf fixtures -------------------------------------------------------------------------
 
-function seedShelf(store: ChangeSetStore, id: string): ChangeSetRecord {
-  store.create({
+async function seedShelf(store: ChangeSetStore, id: string): Promise<ChangeSetRecord> {
+  await store.create({
     id, creatorLabel: WHO.userLabel, creatorBearerHash: 'bh', sessionId: 's', actionType: 'shelf_toggle_product',
     items: [{ prod_oid: 'p1', target_is_active: false }],
     // diff/diffVersion are placeholders — approveAndExecute always recomputes live (spec §4).
     diff: [], diffVersion: 'seed', status: 'pending_approval', createdAt: 1000,
   })
-  return store.get(id)!
+  return (await store.get(id))!
 }
 
 function shelfGateway(live: { is_active: boolean } = { is_active: true }) {
@@ -55,18 +55,18 @@ function shelfGateway(live: { is_active: boolean } = { is_active: true }) {
 }
 
 async function realShelfDiffVersion(rec: ChangeSetRecord, gw: ReturnType<typeof shelfGateway>): Promise<string> {
-  const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel })
+  const diff = await computeChangesetDiff(rec.actionType, rec.items, { traceId: 'test-trace', gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel })
   return getModule(rec.actionType).diffVersion(diff)
 }
 
 // --- inventory fixtures ----------------------------------------------------------------------
 
-function seedInventory(store: ChangeSetStore, id: string, items: InventoryItem[]): ChangeSetRecord {
-  store.create({
+async function seedInventory(store: ChangeSetStore, id: string, items: InventoryItem[]): Promise<ChangeSetRecord> {
+  await store.create({
     id, creatorLabel: WHO.userLabel, creatorBearerHash: 'bh', sessionId: 's', actionType: 'inventory_setting',
     items, diff: [], diffVersion: 'seed', status: 'pending_approval', createdAt: 1000,
   })
-  return store.get(id)!
+  return (await store.get(id))!
 }
 
 // fullday-SET contract (塊 A): keyed by `item:supplier` -> fullday number. get serves
@@ -95,15 +95,15 @@ function invGateway(qty: Record<string, number>) {
 }
 
 async function realInventoryDiffVersion(rec: ChangeSetRecord, gw: ReturnType<typeof invGateway>): Promise<string> {
-  const diff = await computeChangesetDiff(rec.actionType, rec.items, { gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel })
+  const diff = await computeChangesetDiff(rec.actionType, rec.items, { traceId: 'test-trace', gateway: gw as never, accessToken: WHO.accessToken, userLabel: rec.creatorLabel })
   return getModule(rec.actionType).diffVersion(diff)
 }
 
 describe('approveAndExecute — real confirmed_keys validation (Task 11 Finding 1)', () => {
   it('(a) confirmedKeys exactly matching the item-key set passes the gate (no CONFIRMED_KEYS_MISMATCH)', async () => {
     const gw = shelfGateway()
-    const { store, deps } = makeDeps(gw)
-    const rec = seedShelf(store, 'cs-a')
+    const { store, deps } = await makeDeps(gw)
+    const rec = await seedShelf(store, 'cs-a')
     const version = await realShelfDiffVersion(rec, gw)
     const out = await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: ['p1'], channel: 'panel' })
     expect(out.stale).toBeUndefined()
@@ -113,22 +113,22 @@ describe('approveAndExecute — real confirmed_keys validation (Task 11 Finding 
 
   it('(b) confirmedKeys with an EXTRA key not in the set throws CONFIRMED_KEYS_MISMATCH, does not execute', async () => {
     const gw = shelfGateway()
-    const { store, deps } = makeDeps(gw)
-    const rec = seedShelf(store, 'cs-b')
+    const { store, deps } = await makeDeps(gw)
+    const rec = await seedShelf(store, 'cs-b')
     const version = await realShelfDiffVersion(rec, gw)
     await expect(approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: ['p1', 'p-extra'], channel: 'panel' }))
       .rejects.toMatchObject({ code: 'CONFIRMED_KEYS_MISMATCH' })
-    expect(store.get('cs-b')!.status).toBe('pending_approval')   // untouched — never reached CAS
+    expect((await store.get('cs-b'))!.status).toBe('pending_approval')   // untouched — never reached CAS
   })
 
   it('(c) confirmedKeys MISSING a key (user unchecked a high-risk item) throws CONFIRMED_KEYS_MISMATCH, does not execute', async () => {
     const gw = shelfGateway()
-    const { store, deps } = makeDeps(gw)
-    const rec = seedShelf(store, 'cs-c')
+    const { store, deps } = await makeDeps(gw)
+    const rec = await seedShelf(store, 'cs-c')
     const version = await realShelfDiffVersion(rec, gw)
     await expect(approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: [], channel: 'panel' }))
       .rejects.toMatchObject({ code: 'CONFIRMED_KEYS_MISMATCH' })
-    expect(store.get('cs-c')!.status).toBe('pending_approval')   // unchecking must NOT silently execute
+    expect((await store.get('cs-c'))!.status).toBe('pending_approval')   // unchecking must NOT silently execute
   })
 
   it('(d) inventory change-set: item×supplier key rule — missing one of two keys throws, both present passes', async () => {
@@ -141,19 +141,19 @@ describe('approveAndExecute — real confirmed_keys validation (Task 11 Finding 
     // missing key: only i1's key present
     {
       const gw = invGateway(structuredClone(qty))
-      const { store, deps } = makeDeps(gw)
-      const rec = seedInventory(store, 'cs-d-missing', items)
+      const { store, deps } = await makeDeps(gw)
+      const rec = await seedInventory(store, 'cs-d-missing', items)
       const version = await realInventoryDiffVersion(rec, gw)
       await expect(approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: ['i1:s1'], channel: 'panel' }))
         .rejects.toMatchObject({ code: 'CONFIRMED_KEYS_MISMATCH' })
-      expect(store.get('cs-d-missing')!.status).toBe('pending_approval')
+      expect((await store.get('cs-d-missing'))!.status).toBe('pending_approval')
     }
 
     // both keys present: passes the gate
     {
       const gw = invGateway(structuredClone(qty))
-      const { store, deps } = makeDeps(gw)
-      const rec = seedInventory(store, 'cs-d-full', items)
+      const { store, deps } = await makeDeps(gw)
+      const rec = await seedInventory(store, 'cs-d-full', items)
       const version = await realInventoryDiffVersion(rec, gw)
       const out = await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: ['i1:s1', 'i2:s2'], channel: 'panel' })
       expect(out.stale).toBeUndefined()
@@ -179,8 +179,8 @@ describe('approveAndExecute — real confirmed_keys validation (Task 11 Finding 
     // (a) confirmed_keys = both keys ['i1:s1','i1:s1'] (both rows still checked) — passes the gate.
     {
       const gw = invGateway(structuredClone(qty))
-      const { store, deps } = makeDeps(gw)
-      const rec = seedInventory(store, 'cs-f-both', items)
+      const { store, deps } = await makeDeps(gw)
+      const rec = await seedInventory(store, 'cs-f-both', items)
       const version = await realInventoryDiffVersion(rec, gw)
       const out = await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: ['i1:s1', 'i1:s1'], channel: 'panel' })
       expect(out.stale).toBeUndefined()
@@ -192,19 +192,19 @@ describe('approveAndExecute — real confirmed_keys validation (Task 11 Finding 
     // throw CONFIRMED_KEYS_MISMATCH (reject the whole batch), not silently execute it.
     {
       const gw = invGateway(structuredClone(qty))
-      const { store, deps } = makeDeps(gw)
-      const rec = seedInventory(store, 'cs-f-one', items)
+      const { store, deps } = await makeDeps(gw)
+      const rec = await seedInventory(store, 'cs-f-one', items)
       const version = await realInventoryDiffVersion(rec, gw)
       await expect(approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: ['i1:s1'], channel: 'panel' }))
         .rejects.toMatchObject({ code: 'CONFIRMED_KEYS_MISMATCH' })
-      expect(store.get('cs-f-one')!.status).toBe('pending_approval')   // untouched — never reached CAS
+      expect((await store.get('cs-f-one'))!.status).toBe('pending_approval')   // untouched — never reached CAS
     }
   })
 
   it('(e) confirm_page channel never sends confirmedKeys — validation is skipped (existing whole-batch behavior)', async () => {
     const gw = shelfGateway()
-    const { store, deps } = makeDeps(gw)
-    const rec = seedShelf(store, 'cs-e')
+    const { store, deps } = await makeDeps(gw)
+    const rec = await seedShelf(store, 'cs-e')
     const version = await realShelfDiffVersion(rec, gw)
     // no confirmedKeys field at all — must not throw CONFIRMED_KEYS_MISMATCH regardless of items.
     const out = await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, channel: 'confirm_page' })
@@ -224,58 +224,78 @@ describe('approveAndExecute — stale diff write-back (final whole-branch review
   // so a subsequent store.get() (what app_get_changeset_view does) sees it.
   it('on stale detection, the recomputed diff+version is written back to the store', async () => {
     const gw = shelfGateway({ is_active: true })
-    const { store, deps } = makeDeps(gw)
-    const rec = seedShelf(store, 'cs-stale-1')
+    const { store, deps } = await makeDeps(gw)
+    const rec = await seedShelf(store, 'cs-stale-1')
     // Live drifted after seeding (seed's placeholder diffVersion 'seed' never matches a real hash).
     const out = await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: 'stale-version-from-a-stale-page', channel: 'confirm_page' })
     expect(out.stale).toBe(true)
-    const stored = store.get('cs-stale-1')!
+    const stored = (await store.get('cs-stale-1'))!
     expect(stored.status).toBe('pending_approval')   // not consumed — still approvable
     expect(stored.diffVersion).not.toBe('seed')
     expect(stored.diffVersion).not.toBe('stale-version-from-a-stale-page')
     // The freshly-stored version is exactly what a live recompute produces right now — i.e. it
     // converges: approving AGAIN with this stored version must succeed (not stale a second time).
-    const version2 = await realShelfDiffVersion(store.get('cs-stale-1')!, gw)
+    const version2 = await realShelfDiffVersion((await store.get('cs-stale-1'))!, gw)
     expect(stored.diffVersion).toBe(version2)
-    const out2 = await approveAndExecute(deps, { rec: store.get('cs-stale-1')!, who: WHO, expectedDiffVersion: version2, channel: 'confirm_page' })
+    const out2 = await approveAndExecute(deps, { rec: (await store.get('cs-stale-1'))!, who: WHO, expectedDiffVersion: version2, channel: 'confirm_page' })
     expect(out2.stale).toBeUndefined()
     expect(out2.status).toBeDefined()
   })
 
   it('does NOT write back once the change-set has already left pending_approval (no resurrecting a decided change-set)', async () => {
     const gw = shelfGateway({ is_active: true })
-    const { store, deps } = makeDeps(gw)
-    seedShelf(store, 'cs-stale-2')
-    store.setStatus('cs-stale-2', 'rejected')
-    const rejectedRec = store.get('cs-stale-2')!
+    const { store, deps } = await makeDeps(gw)
+    await seedShelf(store, 'cs-stale-2')
+    await store.setStatus('cs-stale-2', 'rejected')
+    const rejectedRec = (await store.get('cs-stale-2'))!
     const out = await approveAndExecute(deps, { rec: rejectedRec, who: WHO, expectedDiffVersion: 'whatever', channel: 'confirm_page' })
     expect(out.stale).toBe(true)   // version mismatch still detected/reported...
-    expect(store.get('cs-stale-2')!.diffVersion).toBe(rejectedRec.diffVersion)   // ...but store.updateDiff no-ops: status is no longer pending_approval
+    expect((await store.get('cs-stale-2'))!.diffVersion).toBe(rejectedRec.diffVersion)   // ...but store.updateDiff no-ops: status is no longer pending_approval
   })
 })
 
 describe('approveAndExecute — audit clientInfo prefix (Task 11 Finding 3)', () => {
   it('confirm_page channel records the ORIGINAL pre-refactor "confirm-page:" (hyphen) prefix', async () => {
     const gw = shelfGateway()
-    const { store, deps, audit } = makeDeps(gw)
-    const rec = seedShelf(store, 'cs-audit-page')
+    const { store, deps, audit } = await makeDeps(gw)
+    const rec = await seedShelf(store, 'cs-audit-page')
     const version = await realShelfDiffVersion(rec, gw)
     await approveAndExecute(deps, {
       rec, who: WHO, expectedDiffVersion: version, channel: 'confirm_page',
       audit: { clientInfo: 'Mozilla/5.0 test-agent' },
     })
-    const row = audit.recent().find(r => r.tool === 'changeset.approve')!
+    const row = (await audit.recent()).find(r => r.tool === 'changeset.approve')!
     expect(row.clientInfo).toBe('confirm-page:Mozilla/5.0 test-agent')
+    expect(row.eventType).toBe('approval')
+    expect(row.severity).toBe('INFO')
+    expect(row.traceId).not.toBe('n/a')
   })
 
   it('panel channel records a "panel:" prefix', async () => {
     const gw = shelfGateway()
-    const { store, deps, audit } = makeDeps(gw)
-    const rec = seedShelf(store, 'cs-audit-panel')
+    const { store, deps, audit } = await makeDeps(gw)
+    const rec = await seedShelf(store, 'cs-audit-panel')
     const version = await realShelfDiffVersion(rec, gw)
     await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: ['p1'], channel: 'panel' })
-    const row = audit.recent().find(r => r.tool === 'changeset.approve')!
+    const row = (await audit.recent()).find(r => r.tool === 'changeset.approve')!
     expect(row.clientInfo).toBe('panel:')
+  })
+})
+
+describe('approveAndExecute — audit failure must not block business flow (F2, spec 98 行)', () => {
+  // spec 98 行：audit 失敗（DB 或 stdout）一律不擋業務請求。CAS 已把 pending_approval→approved
+  // 後，approve audit 若外拋 throw 會跳過 executeChangeSet，change-set 卡在 'approved' 永不執行。
+  const throwingAudit = { record: async () => { throw new Error('audit db down') } } as unknown as AuditLog
+  it('immediate approve：audit.record throw 仍執行到底且 final status=done、寫入確實發生', async () => {
+    const gw = shelfGateway()   // live is_active=true, target=false → 應寫成 false
+    const { store, deps } = await makeDeps(gw)
+    deps.audit = throwingAudit
+    const rec = await seedShelf(store, 'cs-f2-imm')
+    const version = await realShelfDiffVersion(rec, gw)
+    const out = await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, channel: 'confirm_page' })
+    expect(out.status).toBe('done')
+    expect((await store.get('cs-f2-imm'))!.status).toBe('done')
+    expect(gw.live.is_active).toBe(false)   // 業務寫入未被 audit 故障擋掉
   })
 })
 
@@ -286,22 +306,22 @@ describe('approveAndExecute — executor per-item audit clientInfo reflects the 
   // real channel through to executeChangeSet so the per-item rows match reality.
   it('panel approval -> changeset.execute audit rows record clientInfo "app-panel"', async () => {
     const gw = shelfGateway()
-    const { store, deps, audit } = makeDeps(gw)
-    const rec = seedShelf(store, 'cs-exec-panel')
+    const { store, deps, audit } = await makeDeps(gw)
+    const rec = await seedShelf(store, 'cs-exec-panel')
     const version = await realShelfDiffVersion(rec, gw)
     await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, confirmedKeys: ['p1'], channel: 'panel' })
-    const rows = audit.recent().filter(r => r.tool === 'changeset.execute')
+    const rows = (await audit.recent()).filter(r => r.tool === 'changeset.execute')
     expect(rows.length).toBeGreaterThan(0)
     for (const row of rows) expect(row.clientInfo).toBe('app-panel')
   })
 
   it('confirm_page approval -> changeset.execute audit rows record clientInfo "confirm-page" (unchanged default)', async () => {
     const gw = shelfGateway()
-    const { store, deps, audit } = makeDeps(gw)
-    const rec = seedShelf(store, 'cs-exec-page')
+    const { store, deps, audit } = await makeDeps(gw)
+    const rec = await seedShelf(store, 'cs-exec-page')
     const version = await realShelfDiffVersion(rec, gw)
     await approveAndExecute(deps, { rec, who: WHO, expectedDiffVersion: version, channel: 'confirm_page' })
-    const rows = audit.recent().filter(r => r.tool === 'changeset.execute')
+    const rows = (await audit.recent()).filter(r => r.tool === 'changeset.execute')
     expect(rows.length).toBeGreaterThan(0)
     for (const row of rows) expect(row.clientInfo).toBe('confirm-page')
   })

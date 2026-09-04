@@ -5,7 +5,7 @@ import { RateError } from '../src/errors.js'
 import { wrapAppTool, type AppPipelineDeps, type AppToolDef } from '../src/server/appPipeline.js'
 import { ApprovalNonceStore } from '../src/core/changeset/approvalNonce.js'
 import { ReadOidStore } from '../src/store/readOidStore.js'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import { requestContext } from '../src/server/requestContext.js'
 import { makeEnvelope } from '../src/tools/envelope.js'
 import { appGetChangesetViewTool } from '../src/tools/appTools.js'
@@ -55,7 +55,7 @@ function fakeAppDeps(over: Partial<AppPipelineDeps> = {}): AppPipelineDeps {
     rateBudget: { consume() {}, consumeChangeset() {} } as never,
     scheduleTz: 'Asia/Taipei',
     audit: { record() {} } as never,
-    gateway: {} as never,
+    gateway: { withTrace() { return this } } as never,
     changeSets: {
       get: (id: string) => id === 'cs1'
         ? { id: 'cs1', creatorLabel: 'alice', status: 'pending_approval', actionType: 'shelf_toggle_product', note: undefined, diff: [{ a: 1 }], diffVersion: 'v1' }
@@ -169,8 +169,8 @@ describe('wrapAppTool（runtime，透過真實 app tool 驅動三條分支）', 
 // dummy app tool，證明（a）ctx.readOids/ctx.rateBudget 是可用的真實實例、（b）wrapAppTool 比照
 // wrapTool/wrapL2Tool 泛用地把 envelope.read_oids 寫回同一個 store。
 describe('app tool 依賴接線（Task 5 前置整備：readOidStore + 全域 RateBudget）', () => {
-  function realDeps(over: Partial<AppPipelineDeps> = {}) {
-    const db = openDb(':memory:')
+  async function realDeps(over: Partial<AppPipelineDeps> = {}) {
+    const db = await openTestDb()
     const readOids = new ReadOidStore(db)
     const rateBudget = new RateBudget(db, { perSession: 2, perUserDay: 100 })
     const deps = fakeAppDeps({ readOids, rateBudget, ...over })
@@ -178,14 +178,14 @@ describe('app tool 依賴接線（Task 5 前置整備：readOidStore + 全域 Ra
   }
 
   it('ctx.readOids / ctx.rateBudget 是真實可用的實例（非硬 cast 出的 L2ToolContext）', async () => {
-    const { readOids, rateBudget, deps } = realDeps()
+    const { readOids, rateBudget, deps } = await realDeps()
     let sawHasBeforeRecord: boolean | undefined
     let consumeThrew = false
     const dummyTool: AppToolDef = {
       name: 'dummy_probe', description: 'probe', inputShape: {},
       async handler(_args, ctx) {
-        sawHasBeforeRecord = ctx.readOids.has(ctx.sessionId, 'probe-oid')
-        try { ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId) } catch { consumeThrew = true }
+        sawHasBeforeRecord = await ctx.readOids.has(ctx.sessionId, 'probe-oid')
+        try { await ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId) } catch { consumeThrew = true }
         return makeEnvelope([{ ok: true }], [], ['probe-oid'])
       },
     }
@@ -194,15 +194,15 @@ describe('app tool 依賴接線（Task 5 前置整備：readOidStore + 全域 Ra
     expect(out.isError).toBeUndefined()
     expect(sawHasBeforeRecord).toBe(false)   // 呼叫當下 store 尚是空的（handler 自己還沒 record）
     expect(consumeThrew).toBe(false)         // 真實 RateBudget，額度內不丟錯
-    expect(readOids.has('s-wire', 'probe-oid')).toBe(true) // wrapAppTool 事後泛用 record 生效
+    expect(await readOids.has('s-wire', 'probe-oid')).toBe(true) // wrapAppTool 事後泛用 record 生效
   })
 
   it('全域 RateBudget 與 AppRateBudget 是兩個獨立額度：前者可被 tool 顯式消耗到超額', async () => {
-    const { deps } = realDeps({ rateBudget: new RateBudget(openDb(':memory:'), { perSession: 1, perUserDay: 100 }) })
+    const { deps } = await realDeps({ rateBudget: new RateBudget(await openTestDb(), { perSession: 1, perUserDay: 100 }) })
     const dummyTool: AppToolDef = {
       name: 'dummy_probe2', description: 'probe2', inputShape: {},
       async handler(_args, ctx) {
-        ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId) // 每次呼叫顯式消耗一次讀取額度
+        await ctx.rateBudget.consume(ctx.userLabel, ctx.sessionId) // 每次呼叫顯式消耗一次讀取額度
         return makeEnvelope([{ ok: true }])
       },
     }

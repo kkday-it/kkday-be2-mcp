@@ -1,39 +1,46 @@
-import type Database from 'better-sqlite3'
+import type { Db } from '../../store/dbTypes.js'
 import type { AnyDiffItem, ChangeSetRecord, ChangeSetStatus, ItemResult, ExecutorRef } from './types.js'
 
 export class ChangeSetStore {
   private now: () => number
   private ttlMs: number
 
-  constructor(private db: Database.Database, opts: { now?: () => number; ttlMs?: number } = {}) {
+  constructor(private db: Db, opts: { now?: () => number; ttlMs?: number } = {}) {
     this.now = opts.now ?? Date.now
     this.ttlMs = opts.ttlMs ?? 24 * 3600_000
   }
 
-  create(rec: ChangeSetRecord): void {
-    this.db.prepare(`
-      INSERT INTO change_sets (id, creator_label, creator_bearer_hash, session_id, action_type, items_json, diff_json, diff_version, note, status, created_at, decided_at, execute_at_utc, schedule_wall, schedule_tz)
-      VALUES (@id,@creatorLabel,@creatorBearerHash,@sessionId,@actionType,@itemsJson,@diffJson,@diffVersion,@note,@status,@createdAt,@decidedAt,@executeAtUtc,@scheduleWall,@scheduleTz)
-    `).run({
-      ...rec,
-      note: rec.note ?? null,
-      decidedAt: rec.decidedAt ?? null,
-      itemsJson: JSON.stringify(rec.items),
-      diffJson: JSON.stringify(rec.diff),
-      executeAtUtc: rec.schedule?.executeAtUtc ?? null,
-      scheduleWall: rec.schedule?.wall ?? null,
-      scheduleTz: rec.schedule?.tz ?? null,
-    })
+  async create(rec: ChangeSetRecord): Promise<void> {
+    await this.db.query(
+      `INSERT INTO change_sets (id, creator_label, creator_bearer_hash, session_id, action_type, items_json, diff_json, diff_version, note, status, created_at, decided_at, execute_at_utc, schedule_wall, schedule_tz)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      [
+        rec.id,
+        rec.creatorLabel,
+        rec.creatorBearerHash,
+        rec.sessionId,
+        rec.actionType,
+        JSON.stringify(rec.items),
+        JSON.stringify(rec.diff),
+        rec.diffVersion,
+        rec.note ?? null,
+        rec.status,
+        rec.createdAt,
+        rec.decidedAt ?? null,
+        rec.schedule?.executeAtUtc ?? null,
+        rec.schedule?.wall ?? null,
+        rec.schedule?.tz ?? null,
+      ])
   }
 
-  get(id: string): ChangeSetRecord | undefined {
-    const r = this.db.prepare('SELECT * FROM change_sets WHERE id = ?').get(id) as Record<string, unknown> | undefined
+  // lazy expiry：原 read-then-write（get 後判斷再 UPDATE）在 async 下有交錯窗口 →
+  // 改單條條件式 UPDATE 先行，再 SELECT（spec §3.3）。UPDATE 冪等、輸掉 race 也無害。
+  async get(id: string): Promise<ChangeSetRecord | undefined> {
+    await this.db.query(
+      `UPDATE change_sets SET status = 'expired' WHERE id = $1 AND status = 'pending_approval' AND created_at + $2 < $3`,
+      [id, this.ttlMs, this.now()])
+    const r = (await this.db.query(`SELECT * FROM change_sets WHERE id = $1`, [id])).rows[0] as Record<string, unknown> | undefined
     if (!r) return undefined
-    let status = r.status as ChangeSetStatus
-    if (status === 'pending_approval' && (r.created_at as number) + this.ttlMs < this.now()) {
-      this.db.prepare('UPDATE change_sets SET status = ? WHERE id = ?').run('expired', id)
-      status = 'expired'
-    }
     return {
       id: r.id as string,
       creatorLabel: r.creator_label as string,
@@ -44,28 +51,29 @@ export class ChangeSetStore {
       diff: JSON.parse(r.diff_json as string),
       diffVersion: r.diff_version as string,
       note: (r.note as string) ?? undefined,
-      status,
+      status: r.status as ChangeSetStatus,
       createdAt: r.created_at as number,
       decidedAt: (r.decided_at as number) ?? undefined,
       schedule: r.execute_at_utc != null ? { executeAtUtc: r.execute_at_utc as number, wall: r.schedule_wall as string, tz: r.schedule_tz as string } : undefined,
-      executorRef: r.executor_identity_id != null ? { identityId: r.executor_identity_id as string, userLabel: r.executor_label as string, modifyUser: r.executor_modify_user as string, sessionId: r.executor_session_id as string } : undefined,
+      executorRef: r.executor_identity_id != null ? { identityId: r.executor_identity_id as string, userLabel: r.executor_label as string, modifyUser: r.executor_modify_user as string, sessionId: r.executor_session_id as string, traceId: (r.executor_trace_id as string) ?? undefined } : undefined,
       scheduleClaimedAt: r.schedule_claimed_at != null ? (r.schedule_claimed_at as number) : undefined,
     }
   }
 
-  setStatus(id: string, status: ChangeSetStatus, decidedAt?: number): void {
-    this.db.prepare('UPDATE change_sets SET status = ?, decided_at = COALESCE(?, decided_at) WHERE id = ?')
-      .run(status, decidedAt ?? null, id)
+  async setStatus(id: string, status: ChangeSetStatus, decidedAt?: number): Promise<void> {
+    await this.db.query('UPDATE change_sets SET status = $1, decided_at = COALESCE($2, decided_at) WHERE id = $3',
+      [status, decidedAt ?? null, id])
   }
 
   // Atomic compare-and-swap: only transitions `from` -> `to` if the row is STILL `from` at the
   // moment of the UPDATE (single statement, no read-then-write race window). Returns true iff this
   // call won the transition. This is the primitive that makes approve/reject execute-exactly-once
   // safe under concurrent requests (double-click, client retry) — see confirmRoutes.ts.
-  casStatus(id: string, from: ChangeSetStatus, to: ChangeSetStatus, decidedAt?: number): boolean {
-    const result = this.db.prepare('UPDATE change_sets SET status = ?, decided_at = COALESCE(?, decided_at) WHERE id = ? AND status = ?')
-      .run(to, decidedAt ?? null, id, from)
-    return result.changes === 1
+  async casStatus(id: string, from: ChangeSetStatus, to: ChangeSetStatus, decidedAt?: number): Promise<boolean> {
+    const r = await this.db.query(
+      `UPDATE change_sets SET status = $1, decided_at = COALESCE($2, decided_at) WHERE id = $3 AND status = $4`,
+      [to, decidedAt ?? null, id, from])
+    return r.rowCount === 1
   }
 
   // Final whole-branch review Important 2: the panel path (app_get_changeset_view) reads
@@ -79,35 +87,30 @@ export class ChangeSetStore {
   // resurrect/overwrite a change-set that has already left pending_approval. Returns whether the
   // write happened (false is not currently acted upon by any caller, but mirrors casStatus's
   // signature for consistency and so a future caller can detect the race without a separate read).
-  updateDiff(id: string, diff: AnyDiffItem[], diffVersion: string): boolean {
-    const result = this.db.prepare('UPDATE change_sets SET diff_json = ?, diff_version = ? WHERE id = ? AND status = ?')
-      .run(JSON.stringify(diff), diffVersion, id, 'pending_approval')
-    return result.changes === 1
+  async updateDiff(id: string, diff: AnyDiffItem[], diffVersion: string): Promise<boolean> {
+    const r = await this.db.query(
+      `UPDATE change_sets SET diff_json = $1, diff_version = $2 WHERE id = $3 AND status = $4`,
+      [JSON.stringify(diff), diffVersion, id, 'pending_approval'])
+    return r.rowCount === 1
   }
 
-  recordResults(id: string, results: ItemResult[]): void {
-    const ins = this.db.prepare(`
-      INSERT OR REPLACE INTO change_set_results (changeset_id, item_key, status, before_json, after_json, error_code, error_message, trace_id)
-      VALUES (?,?,?,?,?,?,?,?)`)
-    const tx = this.db.transaction((rs: ItemResult[]) => {
-      for (const r of rs) {
-        ins.run(
-          id,
-          r.item_key,
-          r.status,
+  async recordResults(id: string, results: ItemResult[]): Promise<void> {
+    const SQL = `INSERT INTO change_set_results (changeset_id, item_key, status, before_json, after_json, error_code, error_message, trace_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+      ON CONFLICT (changeset_id, item_key) DO UPDATE SET status=EXCLUDED.status, before_json=EXCLUDED.before_json,
+      after_json=EXCLUDED.after_json, error_code=EXCLUDED.error_code, error_message=EXCLUDED.error_message, trace_id=EXCLUDED.trace_id`
+    await this.db.transaction(async (tx) => {
+      for (const r of results) {
+        await tx.query(SQL, [id, r.item_key, r.status,
           r.before === undefined ? null : JSON.stringify(r.before),
           r.after === undefined ? null : JSON.stringify(r.after),
-          r.error_code ?? null,
-          r.error_message ?? null,
-          r.trace_id
-        )
+          r.error_code ?? null, r.error_message ?? null, r.trace_id])
       }
     })
-    tx(results)
   }
 
-  getResults(id: string): ItemResult[] {
-    const rows = this.db.prepare('SELECT * FROM change_set_results WHERE changeset_id = ? ORDER BY item_key').all(id) as Array<Record<string, unknown>>
+  async getResults(id: string): Promise<ItemResult[]> {
+    const rows = (await this.db.query('SELECT * FROM change_set_results WHERE changeset_id = $1 ORDER BY item_key', [id])).rows as Array<Record<string, unknown>>
     return rows.map(r => ({
       item_key: r.item_key as string,
       status: r.status as ItemResult['status'],
@@ -119,48 +122,62 @@ export class ChangeSetStore {
     }))
   }
 
-  setScheduled(id: string, executor: ExecutorRef, decidedAt: number): boolean {
-    const r = this.db.prepare(`UPDATE change_sets SET status='scheduled', decided_at=?,
-      executor_identity_id=?, executor_label=?, executor_modify_user=?, executor_session_id=?
-      WHERE id=? AND status='pending_approval'`)
-      .run(decidedAt, executor.identityId, executor.userLabel, executor.modifyUser, executor.sessionId, id)
-    return r.changes === 1
+  async setScheduled(id: string, executor: ExecutorRef, decidedAt: number): Promise<boolean> {
+    const r = await this.db.query(
+      `UPDATE change_sets SET status='scheduled', decided_at=$1,
+       executor_identity_id=$2, executor_label=$3, executor_modify_user=$4, executor_session_id=$5, executor_trace_id=$6
+       WHERE id=$7 AND status='pending_approval'`,
+      [decidedAt, executor.identityId, executor.userLabel, executor.modifyUser, executor.sessionId, executor.traceId ?? null, id])
+    return r.rowCount === 1
   }
 
-  listDueScheduled(nowMs: number): string[] {
-    return (this.db.prepare(`SELECT id FROM change_sets WHERE status='scheduled' AND execute_at_utc <= ? ORDER BY execute_at_utc`)
-      .all(nowMs) as Array<{ id: string }>).map(r => r.id)
+  async listDueScheduled(nowMs: number): Promise<string[]> {
+    const rows = (await this.db.query(
+      `SELECT id FROM change_sets WHERE status='scheduled' AND execute_at_utc <= $1 ORDER BY execute_at_utc`,
+      [nowMs])).rows as Array<{ id: string }>
+    return rows.map(r => r.id)
   }
 
-  claimScheduled(id: string, nowMs: number): boolean {
-    return this.db.prepare(`UPDATE change_sets SET status='approved', schedule_claimed_at=? WHERE id=? AND status='scheduled'`)
-      .run(nowMs, id).changes === 1
+  async claimScheduled(id: string, nowMs: number): Promise<boolean> {
+    const r = await this.db.query(
+      `UPDATE change_sets SET status='approved', schedule_claimed_at=$1 WHERE id=$2 AND status='scheduled'`,
+      [nowMs, id])
+    return r.rowCount === 1
   }
 
-  releaseClaim(id: string): boolean {
-    return this.db.prepare(`UPDATE change_sets SET status='scheduled' WHERE id=? AND status='approved'`).run(id).changes === 1
+  async releaseClaim(id: string): Promise<boolean> {
+    const r = await this.db.query(`UPDATE change_sets SET status='scheduled' WHERE id=$1 AND status='approved'`, [id])
+    return r.rowCount === 1
   }
 
-  listStrandedApproved(nowMs: number, staleClaimMs: number): string[] {
-    return (this.db.prepare(`SELECT id FROM change_sets WHERE status='approved' AND execute_at_utc IS NOT NULL
-      AND schedule_claimed_at IS NOT NULL AND schedule_claimed_at < ?`).all(nowMs - staleClaimMs) as Array<{ id: string }>).map(r => r.id)
+  async listStrandedApproved(nowMs: number, staleClaimMs: number): Promise<string[]> {
+    const rows = (await this.db.query(
+      `SELECT id FROM change_sets WHERE status='approved' AND execute_at_utc IS NOT NULL
+       AND schedule_claimed_at IS NOT NULL AND schedule_claimed_at < $1`,
+      [nowMs - staleClaimMs])).rows as Array<{ id: string }>
+    return rows.map(r => r.id)
   }
 
-  listScheduledIdentityIds(): string[] {
-    return (this.db.prepare(`SELECT DISTINCT executor_identity_id AS iid FROM change_sets
-      WHERE status='scheduled' AND executor_identity_id IS NOT NULL`).all() as Array<{ iid: string }>).map(r => r.iid)
+  async listScheduledIdentityIds(): Promise<string[]> {
+    const rows = (await this.db.query(
+      `SELECT DISTINCT executor_identity_id AS iid FROM change_sets
+       WHERE status='scheduled' AND executor_identity_id IS NOT NULL`)).rows as Array<{ iid: string }>
+    return rows.map(r => r.iid)
   }
 
-  listScheduledIdsByIdentity(identityId: string): string[] {
-    return (this.db.prepare(`SELECT id FROM change_sets WHERE status='scheduled' AND executor_identity_id = ?`)
-      .all(identityId) as Array<{ id: string }>).map(r => r.id)
+  async listScheduledIdsByIdentity(identityId: string): Promise<string[]> {
+    const rows = (await this.db.query(
+      `SELECT id FROM change_sets WHERE status='scheduled' AND executor_identity_id = $1`,
+      [identityId])).rows as Array<{ id: string }>
+    return rows.map(r => r.id)
   }
 
   // spec §7：啟動時對 stranded executing 記 audit 警示。`executing` + execute_at_utc 非 null 代表
   // 上次 process 掛掉時，這件排程件正在寫入途中——可能已部分寫入，無法自動判斷/復原，只能留給
   // 人工複核（見 scheduler.ts auditStranded）。
-  listExecutingScheduled(): string[] {
-    return (this.db.prepare(`SELECT id FROM change_sets WHERE status='executing' AND execute_at_utc IS NOT NULL`)
-      .all() as Array<{ id: string }>).map(r => r.id)
+  async listExecutingScheduled(): Promise<string[]> {
+    const rows = (await this.db.query(
+      `SELECT id FROM change_sets WHERE status='executing' AND execute_at_utc IS NOT NULL`)).rows as Array<{ id: string }>
+    return rows.map(r => r.id)
   }
 }

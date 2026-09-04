@@ -1,6 +1,6 @@
-import type Database from 'better-sqlite3'
-import { loadConfig } from '../src/config.js'
-import { openDb } from '../src/store/db.js'
+import type { Db } from '../src/store/dbTypes.js'
+import { createPgDb } from '../src/store/pgDb.js'
+import { resolveDbConnection } from '../src/config.js'
 
 // Task 11：OAuth token 生命週期治理 —— 仿 dev-tools 的 `oauth:purge` CronJob（見
 // docs/be2-mcp/reference-dev-tools-architecture.md）。硬刪三類「過期/孤兒」資料，
@@ -26,10 +26,16 @@ export interface OAuthPurgeResult {
   ghostIdentities: number
 }
 
-export function runOAuthPurge(db: Database.Database, now: number): OAuthPurgeResult {
-  const codeRes = db.prepare('DELETE FROM oauth_auth_codes WHERE exp < ?').run(now)
-  const refreshRes = db.prepare('DELETE FROM oauth_refresh WHERE exp < ?').run(now)
-  const ghostRes = db.prepare(`
+// Task 7: converted to the async Db interface (pg.Pool / PGlite, spec §3.1) — the exported
+// business logic (three DELETEs) is small and self-contained, and leaving it stranded on the
+// deleted legacy SQLite Database type would make it untestable (tests/oauthPurge.test.ts already
+// exercises it against the shared PGlite-backed test harness, tests/support/testDb.ts). Only the
+// CLI entrypoint below (which needs real config.db/createPgDb wiring) is left as a stub for
+// Task 9 — this function itself needed no further conversion.
+export async function runOAuthPurge(db: Db, now: number): Promise<OAuthPurgeResult> {
+  const codeRes = await db.query('DELETE FROM oauth_auth_codes WHERE exp < $1', [now])
+  const refreshRes = await db.query('DELETE FROM oauth_refresh WHERE exp < $1', [now])
+  const ghostRes = await db.query(`
     DELETE FROM be2_identities
     WHERE identity_id NOT IN (SELECT DISTINCT identity_id FROM credentials)
     -- spec §6 purge 保護：排程件被 claim 後短暫處於 approved(execute_at_utc 非 null)，此窗內
@@ -39,20 +45,27 @@ export function runOAuthPurge(db: Database.Database, now: number): OAuthPurgeRes
       WHERE executor_identity_id IS NOT NULL
         AND (status='scheduled' OR (status='approved' AND execute_at_utc IS NOT NULL))
     )
-  `).run()
+  `)
   return {
-    expiredAuthCodes: codeRes.changes,
-    expiredRefresh: refreshRes.changes,
-    ghostIdentities: ghostRes.changes,
+    expiredAuthCodes: codeRes.rowCount,
+    expiredRefresh: refreshRes.rowCount,
+    ghostIdentities: ghostRes.rowCount,
   }
 }
 
 // 薄殼：只在直接執行本檔時跑（`npm run oauth-purge`），被 import 測試時不會誤觸發。
 // 用 argv[1] 比對而非 import.meta.main（此 TS 版本/Node 目標尚未穩定支援後者）。
+async function main(): Promise<void> {
+  const db = createPgDb(resolveDbConnection(process.env))
+  try {
+    const result = await runOAuthPurge(db, Date.now())
+    console.log(`oauth-purge done: expiredAuthCodes=${result.expiredAuthCodes} expiredRefresh=${result.expiredRefresh} ghostIdentities=${result.ghostIdentities}`)
+  } finally {
+    await db.close()
+  }
+}
+
 const isMainModule = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
 if (isMainModule) {
-  const cfg = loadConfig()
-  const db = openDb(cfg.dbPath)
-  const result = runOAuthPurge(db, Date.now())
-  console.log(`oauth-purge done: expiredAuthCodes=${result.expiredAuthCodes} expiredRefresh=${result.expiredRefresh} ghostIdentities=${result.ghostIdentities}`)
+  main().catch(e => { console.error('oauth-purge FAILED:', (e as Error).message); process.exit(1) })
 }

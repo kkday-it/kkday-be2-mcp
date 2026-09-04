@@ -1,18 +1,18 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import { buildApp } from '../src/server/app.js'
-import { openDb } from '../src/store/db.js'
+import { openTestDb } from './support/testDb.js'
 import type { Config } from '../src/config.js'
-import type Database from 'better-sqlite3'
+import type { Db } from '../src/store/dbTypes.js'
 
 const config: Config = {
   authsvcUrl: 'https://auth.invalid', gatewayUrl: 'https://gw.invalid',
-  serviceKey: 'sk', port: 0, dbPath: ':memory:', otelMode: 'off', scheduleTz: 'Asia/Taipei',
+  serviceKey: 'sk', port: 0, db: { host: 'localhost', ssl: false }, schedulerMode: 'poller', auditStdout: false, otelMode: 'off', scheduleTz: 'Asia/Taipei',
   bindHost: '127.0.0.1', publicBaseUrl: 'http://127.0.0.1:0',
 }
-let http: Server, base: string, db: Database.Database
+let http: Server, base: string, db: Db
 beforeAll(async () => {
-  db = openDb(':memory:')
+  db = await openTestDb()
   http = createServer(buildApp({ config, db }))
   await new Promise<void>(r => http.listen(0, () => r()))
   base = `http://127.0.0.1:${(http.address() as { port: number }).port}`
@@ -30,7 +30,7 @@ describe('GET /readyz', () => {
     expect(r.status).toBe(200)
   })
   it('returns 503 not-ready when the DB is closed', async () => {
-    db.close()
+    await db.close()
     const r = await fetch(`${base}/readyz`)
     expect(r.status).toBe(503)
     expect(await r.json()).toEqual({ status: 'not-ready' })

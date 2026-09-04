@@ -123,6 +123,6 @@ export async function executeShelfSchedule(ctx: ExecCtx, rec: ChangeSetRecord): 
     })
   }).catch(e => (rec.items as ShelfScheduleItem[]).map(it => ({
     item_key: `${it.prod_oid}:${it.pkg_oid}`, status: 'failed' as const,
-    error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: 'n/a',
+    error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: ctx.traceId,
   })))
 }
