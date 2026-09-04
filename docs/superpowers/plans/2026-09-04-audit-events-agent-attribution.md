@@ -297,7 +297,7 @@ git commit -m "feat(audit): stdout JSON lines 雙寫（G9 近程，APP_AUDIT_STD
 | `confirmRoutes.ts:179`（reject） | `'rejection'` | `'INFO'` |
 | `ssoRoutes.ts:170`（revoke-all 連線頁） | `'security.token_revoked'` | `'CRITICAL'` |
 | `revokeRoutes.ts:52`（RFC 7009） | `'security.token_revoked'` | `'CRITICAL'` |
-| `scheduler.ts` 全部 8 點 | `'governance.scheduler'` | `status==='error' 的點 'ERROR'，其餘 'INFO'` |
+| `scheduler.ts` 全部 7 點 | `'governance.scheduler'` | `status==='error' 的點 'ERROR'，其餘 'INFO'` |
 
 - [ ] **Step 1: 寫 conformance 失敗測試** — `tests/auditEventTypeConformance.test.ts`：
 
@@ -914,3 +914,5 @@ git commit -m "docs: audit P0 + agent 可識別性收尾——gap 表標落地�
 - **Spec coverage**：G6→Task 1+3、G9→Task 2、G2→Task 4、G3→Task 5、#3→Task 6、spec §6 文件影響→Task 7。spec §3.4 `APP_TRUST_PROXY`→Task 5；§3.5-4 建構順序→Task 4；§4 span 洩漏修復→Task 6 的 pipeline 改動中同步處理（`audit.record` 移入 try/catch 或 `span.end()` 移內層 finally——實作時以「audit throw 後 span.end 仍執行」的測試把關，追加於 `tests/toolPipeline.test.ts`：mock audit.record throw → span processor 收到 end）。
 - **Type consistency**：`traceId: string` 必填欄位靠 `tsc` 全量把關（Task 6 Step 5 註記）；`eventType` 靠 conformance 測試（Task 3）。
 - **Placeholder scan**：無 TBD/TODO；Task 4 測試對 `IdentityStore.upsert` 簽章有明確的「以實檔為準」修正指引（非 placeholder，是防簽章漂移的護欄）。
+
+<!-- agy-peer-reviewed: 2026-09-04T00:26:13Z rounds=1 verdict=approved -->
