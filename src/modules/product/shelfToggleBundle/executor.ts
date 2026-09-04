@@ -67,7 +67,7 @@ export async function executeBundleToggle(ctx: ExecCtx, rec: ChangeSetRecord): P
     } catch (e) {
       results.push(...items.map(it => ({
         item_key: itemKey(it), status: 'failed' as const, error_code: 'EXEC_ERROR',
-        error_message: (e as Error).message, trace_id: 'n/a',
+        error_message: (e as Error).message, trace_id: ctx.traceId,
       })))
     }
   }

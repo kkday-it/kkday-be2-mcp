@@ -8,6 +8,7 @@ import { OAuthStore } from '../src/oauth/oauthStore.js'
 import { CredentialStore } from '../src/store/credentialStore.js'
 import type { Config } from '../src/config.js'
 import type { Db } from '../src/store/dbTypes.js'
+import { AuditLog } from '../src/audit/auditLog.js'
 
 // Task 10：POST /oauth/token 是 OAuth 外殼的認證核心——PKCE 驗證、code 一次性、refresh
 // rotation + reuse-detection family revoke。這是「認證繞過」影響面最大的一支端點，測試需
@@ -212,6 +213,14 @@ describe('POST /oauth/token', () => {
     const reused = await post('/oauth/token', { grant_type: 'refresh_token', refresh_token: refresh1, client_id: CLIENT_ID })
     expect(reused.status).toBe(400)
     expect(reused.body.error).toBe('invalid_grant')
+
+    // final review Important 2：family revoke 必留 security.token_revoked 稽核（token 遭竊訊號），
+    // 只記 hash 前 8 碼、不落 refresh 明文
+    const revokedRow = (await new AuditLog(db).recent()).find(r => r.tool === 'oauth_refresh_reuse')
+    expect(revokedRow).toBeDefined()
+    expect(revokedRow!.eventType).toBe('security.token_revoked')
+    expect(revokedRow!.severity).toBe('CRITICAL')
+    expect(JSON.stringify(revokedRow!.params)).not.toContain(refresh1)
 
     // family revoke：access2（本應仍合法的新 access）也立即失效
     expect((await mcpInitialize(access2)).status).toBe(401)

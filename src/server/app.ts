@@ -298,7 +298,7 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   // Task 10：token——authorize 鑄的 code 換不透明 access+refresh 的地方（PKCE S256 驗證、
   // code 一次性、refresh rotation + reuse-detection family revoke）。公開端點（OAuth 2.1
   // public client 用 PKCE 取代 client secret 作身分驗證，不掛 bearer middleware）。
-  app.use(buildTokenRouter({ oauthStore, credentials, identities, now: Date.now }))
+  app.use(buildTokenRouter({ oauthStore, credentials, identities, audit, now: Date.now }))
   // A2:RFC 7009 revocation——公開端點,與 token endpoint 同姿態(public client 持有 token 即授權)。
   app.use(buildRevokeRouter({ oauthStore, credentials, identities, audit }))
   // CRITICAL route order (agy T4 finding): buildSsoRouter registers GET /confirm/login (+ POST

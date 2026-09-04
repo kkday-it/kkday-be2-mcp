@@ -115,11 +115,15 @@ export function buildSsoRouter(deps: SsoDeps): express.Router {
       expiresAt: null, updatedAt: deps.now(),
     })
     await deps.webSessions.create(sessionId, identity.identityId)
-    await deps.audit.record({
-      userLabel: identity.userLabel, sessionId: '-', clientInfo: 'confirm-sso',
-      tool: 'sso.login', params: {}, status: 'ok',
-      eventType: 'authn.login', severity: 'INFO', traceId: randomTraceId(), durationMs: 0,
-    })
+    // audit 失敗不擋登入（spec §4）：session/credential 已建，audit throw 若外拋會讓成功登入
+    // 變 500 且 Set-Cookie 不送——使用者卡死、憑證卻已落庫。
+    try {
+      await deps.audit.record({
+        userLabel: identity.userLabel, sessionId: '-', clientInfo: 'confirm-sso',
+        tool: 'sso.login', params: {}, status: 'ok',
+        eventType: 'authn.login', severity: 'INFO', traceId: randomTraceId(), durationMs: 0,
+      })
+    } catch (err) { console.error('sso.login audit failed:', err) }
     res.setHeader('Set-Cookie', serializeSetCookie('be2mcp_sid', sessionId, { httpOnly: true, sameSite: 'Lax', path: '/confirm' }))
     res.status(200).json({ ok: true })
   }))

@@ -70,6 +70,6 @@ export async function executeInventoryPlatform(ctx: ExecCtx, rec: ChangeSetRecor
     })
   }).catch(e => (rec.items as InventoryPlatformItem[]).map(it => ({
     item_key: `${it.item_oid}:${it.supplier_oid}`, status: 'failed' as const,
-    error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: 'n/a',
+    error_code: 'EXEC_ERROR', error_message: (e as Error).message, trace_id: ctx.traceId,
   })))
 }

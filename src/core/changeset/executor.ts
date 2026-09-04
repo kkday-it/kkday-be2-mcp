@@ -50,8 +50,12 @@ export async function executeChangeSet(deps: ExecutorDeps, changesetId: string, 
   const ctx: ExecCtx = {
     gateway: deps.gateway.withTrace(execTraceId), traceId: execTraceId, accessToken: who.accessToken, modifyUser: who.modifyUser,
     userLabel: who.userLabel, sessionId: who.sessionId, channel: who.channel, now: deps.now,
+    // span callback 傳 execTraceId（非 span 自己的 traceId）：per-item ItemResult.trace_id 必須
+    // 與 changeset.approve audit、gateway request-uuid header 同值，三方 join 才不斷鏈（spec §3.5）。
+    // OTel off 時 raw span traceId 是全零；即使 OTel on，此處常是新 root trace、也對不上。
+    // span 本身仍照常開關，OTel 計時不受影響。
     span: (name, fn) => tracer.startActiveSpan(name, async span => {
-      try { return await fn(span.spanContext().traceId) } finally { span.end() }
+      try { return await fn(execTraceId) } finally { span.end() }
     }),
   }
   let results: ItemResult[]

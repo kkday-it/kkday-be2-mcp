@@ -55,7 +55,7 @@ export async function executeAnnouncement(ctx: ExecCtx, rec: ChangeSetRecord): P
     return (rec.items as AnnouncementCreateItem[]).map(it => ({
       item_key: itemKey(it),
       status: 'failed' as const,
-      trace_id: '',
+      trace_id: ctx.traceId,
       error_code: (ge?.code as string) ?? 'ANNOUNCE_CLIENT_UNAVAILABLE',
       error_message: (e as Error)?.message ?? 'announcement client unavailable',
     }))

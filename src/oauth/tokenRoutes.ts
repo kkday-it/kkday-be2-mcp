@@ -3,6 +3,8 @@ import { createHash, randomBytes } from 'node:crypto'
 import type { OAuthStore } from './oauthStore.js'
 import { CredentialStore } from '../store/credentialStore.js'
 import type { IdentityStore } from '../store/identityStore.js'
+import type { AuditLog } from '../audit/auditLog.js'
+import { randomTraceId } from '../otel.js'
 
 // Task 10：OAuth 2.1 外殼的認證核心——`POST /oauth/token`。這是整條 be2-mcp 認證鏈裡，
 // 「auth bypass」影響面最大的一支端點：PKCE 驗證錯了 = 任何人都能用攔截到的 authz code 換
@@ -19,6 +21,7 @@ export interface TokenDeps {
   oauthStore: OAuthStore
   credentials: CredentialStore
   identities: IdentityStore
+  audit: AuditLog
   now: () => number
   genToken?: () => string
   accessTtlSeconds?: number
@@ -118,6 +121,18 @@ export function buildTokenRouter(deps: TokenDeps): express.Router {
           // token — the attacker may already hold the current rotated pair too.
           await deps.oauthStore.deleteRefreshByIdentity(row.identityId)
           await deps.credentials.deleteByIdentityAndKind(row.identityId, 'oauth_access')
+          // spec §3.3：reuse-detection family revoke = token 遭竊訊號，SIEM 價值最高的一筆
+          // security 事件。audit 失敗不擋 revoke 本身（invalidGrant 照回）。
+          try {
+            await deps.audit.record({
+              userLabel: (await deps.identities.get(row.identityId))?.userLabel ?? 'unknown',
+              sessionId: '-', clientInfo: 'oauth-token', tool: 'oauth_refresh_reuse',
+              params: { identity_id: row.identityId, refresh_hash_prefix: refreshHash.slice(0, 8) },
+              status: 'error', errorMessage: 'refresh reuse detected — whole family revoked (RFC 9700 fail-closed)',
+              eventType: 'security.token_revoked', severity: 'CRITICAL',
+              traceId: randomTraceId(), durationMs: 0,
+            })
+          } catch (err) { console.error('refresh-reuse audit failed:', err) }
           invalidGrant(res)
           return
         }
