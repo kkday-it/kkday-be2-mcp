@@ -23,6 +23,7 @@ const EnvSchema = z.object({
   DB_NAME: z.string().optional(),
   CRON_SECRET: z.string().optional(),
   SCHEDULER_MODE: z.enum(['poller', 'http']).default('poller'),
+  APP_TRUST_PROXY: z.string().optional(),
 })
 
 export interface DbConnection {
@@ -59,6 +60,7 @@ export interface Config {
   publicBaseUrl: string
   auditStdout: boolean
   appEnv?: 'sit' | 'stage' | 'prod'
+  trustProxy?: string
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -93,5 +95,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     publicBaseUrl,
     auditStdout: e.APP_AUDIT_STDOUT === 'true',
     appEnv: e.APP_ENV,
+    trustProxy: e.APP_TRUST_PROXY,
   }
 }

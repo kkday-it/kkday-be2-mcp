@@ -12,7 +12,8 @@ import { TokenManager } from '../auth/tokenManager.js'
 import { AuthServiceClient } from '../auth/authServiceClient.js'
 import { GatewayClient } from '../gateway/client.js'
 import { AuditLog } from '../audit/auditLog.js'
-import { buildOnReauthRequired } from '../auth/reauthAudit.js'
+import { buildOnReauthRequired, randomTraceId } from '../auth/reauthAudit.js'
+import { UnauthThrottle } from './unauthThrottle.js'
 import { RateBudget } from '../limits/rateBudget.js'
 import { AppRateBudget } from '../limits/appRateBudget.js'
 import { ChangeSetStore } from '../core/changeset/store.js'
@@ -84,6 +85,7 @@ export function modifyUserFromToken(accessToken: string): string {
 }
 
 export function buildApp({ config, db }: ServerDeps): express.Express {
+  const unauthThrottle = new UnauthThrottle()
   // Task 5：identities/credentials 直接對映 db 兩張表（無內部狀態的薄包裝），不再經
   // TokenStore 扁平相容 adapter——該 adapter 已隨 Task 1-4 的呼叫端遷移完畢，此任務刪除。
   const identities = new IdentityStore(db)
@@ -246,6 +248,10 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
   }
 
   const app = express()
+  // spec §3.4：EKS ingress/ALB 後方 req.ip 需取信任邊界外第一 IP。不用 `true`（盲信 XFF 可偽造）。
+  if (config.trustProxy !== undefined) {
+    app.set('trust proxy', /^\d+$/.test(config.trustProxy) ? Number(config.trustProxy) : config.trustProxy)
+  }
   app.use(express.json())
   app.get('/healthz', (_req, res) => { res.status(200).send('ok') })
   app.get('/readyz', (_req, res) => {
@@ -323,6 +329,17 @@ export function buildApp({ config, db }: ServerDeps): express.Express {
       const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : ''
       const cred = bearer ? await credentials.getBySecret(bearer) : undefined
       if (!cred) {
+        const verdict = unauthThrottle.admit(req.ip ?? 'unknown')
+        if (verdict.admit) {
+          // fire-and-forget：audit 失敗不得影響 401 回應（spec §3.4）
+          void audit.record({
+            userLabel: 'unknown', sessionId: '-', clientInfo: (req.header('user-agent') ?? '-').slice(0, 80),
+            tool: 'mcp.gate', params: { ip: req.ip, bearer_hash_prefix: bearer ? CredentialStore.hash(bearer).slice(0, 8) : undefined },
+            status: 'denied_auth', errorMessage: verdict.note,
+            eventType: 'authn.unauthorized_attempt', severity: 'WARN',
+            traceId: randomTraceId(), durationMs: 0,
+          }).catch(() => {})
+        }
         // Task 10: RFC 9728 — an unauthenticated/unknown-bearer request to a protected resource
         // should point the client at protected-resource discovery so an OAuth-aware client (the
         // whole point of the Task 6-10 shell) can find /oauth/authorize and /oauth/token on its
