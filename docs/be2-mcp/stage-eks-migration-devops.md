@@ -81,6 +81,8 @@ be2 MCP 是一支 **Node.js / Express Streamable-HTTP** 服務，讓 KKday 員�
 | `OTEL_MODE=otlp` | 開 OTel trace 匯出 | 否 | 建議 ✅ |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector（標準 OTel env） | 否 | 視 §6 |
 | `API_ANNOUNCE_KEY` | 公告功能 svc-b2c api key | **是** | 視是否啟用公告功能 |
+| `APP_AUDIT_STDOUT` | audit stdout JSON lines 雙寫（Kibana/SIEM 導出軌）。EKS 部署設 `true`，由 Filebeat/Fluent-bit 收 stdout 進 ES（建議 index `new-kklog-be2-mcp-*` 或依 Infra 常規） | 否（預設 false） | 部署必開 |
+| `APP_TRUST_PROXY` | Express trust proxy：未設=off（本地）；數字=信任跳數（ALB 後方設 `1`）；CIDR 字串直傳。影響 401 throttle 分桶與 audit 來源 IP | 否 | EKS 需設 |
 | `APP_TZ` | 排程時區（預設 `Asia/Taipei`） | 否 | 選用 |
 | `APP_DEV_PANEL` | `=1` 開 dev 面板 | 否 | ❌ **務必不要設** |
 
