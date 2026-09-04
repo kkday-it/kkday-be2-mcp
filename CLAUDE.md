@@ -50,6 +50,7 @@
 - `oauth-purge` — 硬刪過期 `oauth_auth_codes`/`oauth_refresh` + 無 credential 引用的 ghost `be2_identities`（見 `docs/be2-mcp/oauth-runbook.md`「Token 生命週期治理」）。建議排程每日跑一次。
 - `probe-sit` — 手動打 SIT `be2-220` 抓真實 endpoint 回應形狀，寫成 sanitized fixtures（絕不寫入 token）。
 - `probe-sit-write` — 手動、可逆地打 SIT `be2-220` 的 write endpoint（`scripts/probe-sit-write.ts`），解 `modify_user` 來源、merge-vs-replace、必填欄位；結果見 `docs/be2-mcp/sit-write-contracts.md`。**永不進 CI**，且需可寫帳號才能跑到底（目前 `.env` 帳號在寫入端點回 403，見該文件 blocker）。
+- `probe-sit-bm` — 手動打 blueMountain 工單讀取 API（經 gateway `/bluemountain`，`scripts/probe-sit-bluemountain.ts`），驗 endpoint 形狀／授權／PII；`discover` 模式可在該環境撈任一工單。搭配 `./scripts/env-for.sh <stage|prod> <cmd…>` 可切環境（憑證一律讀 `.env`、不印值）。結果見 `docs/be2-mcp/sit-bluemountain-contract.md`。**永不進 CI。**
 
 ## Module 結構與擴展指引
 
